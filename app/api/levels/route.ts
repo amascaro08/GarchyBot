@@ -36,7 +36,10 @@ export async function POST(request: NextRequest) {
       // Calculate from daily candles (default behavior)
       const dailyAsc = daily.slice().reverse(); // Ensure ascending order
       const dailyCloses = dailyAsc.map(c => c.close);
-      kPct = estimateKPercent(dailyCloses, { clampPct: [1, 10] }); // Clamps internally 1–10%
+      const rawKPct = estimateKPercent(dailyCloses, { clampPct: [1, 10] }); // Clamps internally 1–10%
+      
+      // Final safety clamp to prevent extreme values
+      kPct = Math.max(0.1, Math.min(10, rawKPct));
     }
 
     const intradayAsc = intraday.slice().reverse(); // Ensure ascending order

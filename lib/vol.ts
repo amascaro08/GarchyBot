@@ -75,12 +75,23 @@ const calibrationCache = new CalibrationCache();
 
 /**
  * Calculate log returns from price series
+ * Validates inputs and filters out invalid values
  */
 function logReturns(prices: number[]): number[] {
   const returns: number[] = [];
   for (let i = 1; i < prices.length; i++) {
-    if (prices[i - 1] > 0 && prices[i] > 0) {
-      returns.push(Math.log(prices[i] / prices[i - 1]));
+    const prevPrice = prices[i - 1];
+    const currPrice = prices[i];
+    
+    // Validate prices: must be positive and finite
+    if (prevPrice > 0 && currPrice > 0 && isFinite(prevPrice) && isFinite(currPrice)) {
+      const logReturn = Math.log(currPrice / prevPrice);
+      
+      // Filter out extreme returns (>50% or <-50% daily move is suspicious)
+      // This prevents outliers from skewing the volatility calculation
+      if (isFinite(logReturn) && Math.abs(logReturn) < 0.693) { // ln(2) ≈ 0.693 for 100% move
+        returns.push(logReturn);
+      }
     }
   }
   return returns;
@@ -159,7 +170,11 @@ export function garch11FromReturns(
   }
 
   const vol = Math.sqrt(sigma2);
-  const kPct = Math.max(clampPct[0], Math.min(clampPct[1], vol * 100));
+  
+  // Convert to percentage and clamp
+  // Add additional safeguard: if vol is extremely large, cap it before conversion
+  const volCapped = Math.min(vol, 0.1); // Cap at 10% daily volatility (100% annualized)
+  const kPct = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
 
   return { vol, var: sigma2, kPct };
 }
@@ -280,16 +295,31 @@ export function estimateKPercent(
 ): number {
   const { useCalibration = false, clampPct = [1, 10], symbol, timeframe, day } = opts;
 
-  if (prices.length < 2) {
+  // Validate input
+  if (!Array.isArray(prices) || prices.length < 2) {
     return clampPct[0];
   }
 
-  const returns = logReturns(prices);
+  // Filter out invalid prices (non-positive, NaN, Infinity)
+  const validPrices = prices.filter(p => p > 0 && isFinite(p));
+  
+  if (validPrices.length < 2) {
+    return clampPct[0];
+  }
+
+  const returns = logReturns(validPrices);
+  
+  // If no valid returns after filtering, return minimum
+  if (returns.length === 0) {
+    return clampPct[0];
+  }
 
   // Use EWMA fallback if insufficient data
   if (returns.length < 30) {
     const vol = ewmaVolatility(returns);
-    return Math.max(clampPct[0], Math.min(clampPct[1], vol * 100));
+    // Add safeguard: cap volatility before conversion
+    const volCapped = Math.min(vol, 0.1); // Cap at 10% daily volatility
+    return Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
   }
 
   let params: { alpha0: number; alpha1: number; beta1: number } | undefined;
@@ -322,7 +352,12 @@ export function estimateKPercent(
 export function garch11Legacy(closes: number[], multiplier: number = 1.0): number {
   const returns = logReturns(closes);
   const result = garch11FromReturns(returns, { clampPct: [1, 10] });
-  return result.kPct * multiplier;
+  
+  // Validate multiplier and apply with final clamp
+  const safeMultiplier = Math.max(0.1, Math.min(10, multiplier));
+  const finalResult = result.kPct * safeMultiplier;
+  
+  return Math.max(1, Math.min(20, finalResult));
 }
 
 /**
@@ -339,5 +374,14 @@ export function garch11Old(closes: number[], multiplier: number = 1.0): number {
  * @deprecated Use estimateKPercent instead
  */
 export function garch11(closes: number[], multiplier: number = 1.0): number {
-  return estimateKPercent(closes, { clampPct: [1, 10] }) * multiplier;
+  // Validate multiplier to prevent extreme values
+  const safeMultiplier = Math.max(0.1, Math.min(10, multiplier)); // Clamp multiplier between 0.1 and 10
+  
+  const kPct = estimateKPercent(closes, { clampPct: [1, 10] });
+  
+  // Apply multiplier but ensure result stays within reasonable bounds
+  const result = kPct * safeMultiplier;
+  
+  // Final clamp to prevent values > 10% (or allow up to 20% if multiplier is used, but cap at 20%)
+  return Math.max(1, Math.min(20, result));
 }

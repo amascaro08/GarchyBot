@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { garch11FromReturns, estimateKPercent, calibrateGarch11, Garch11Options } from '../lib/vol';
+import { garch11FromReturns, estimateKPercent, calibrateGarch11, Garch11Options, garch11 } from '../lib/vol';
 
 describe('GARCH(1,1) Volatility', () => {
   /**
@@ -221,5 +221,39 @@ describe('GARCH(1,1) Volatility', () => {
     expect(result.vol).toBeLessThan(0.05);
     expect(result.kPct).toBeGreaterThanOrEqual(1);
     expect(result.kPct).toBeLessThanOrEqual(10);
+  });
+
+  it('should clamp extreme volatility values to prevent 100%+ results', () => {
+    // Test with extreme price movements that could cause high volatility
+    const extremePrices = [100, 150, 50, 200, 25, 300, 10, 500]; // Extreme volatility
+    
+    const kPct = estimateKPercent(extremePrices);
+    
+    // Should be clamped to max 10% (or filtered if returns are too extreme)
+    expect(kPct).toBeLessThanOrEqual(10);
+    expect(kPct).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should handle invalid prices gracefully', () => {
+    // Test with invalid prices (negative, zero, NaN, Infinity)
+    const invalidPrices = [100, -50, 0, NaN, Infinity, 200];
+    
+    const kPct = estimateKPercent(invalidPrices);
+    
+    // Should return minimum clamp value
+    expect(kPct).toBeGreaterThanOrEqual(1);
+    expect(kPct).toBeLessThanOrEqual(10);
+  });
+
+  it('should prevent multiplier from bypassing clamp', () => {
+    const prices = [100, 101, 99, 102, 100, 103];
+    
+    // Test with large multiplier - should still be clamped
+    const kPct1 = garch11(prices, 1.0);
+    const kPct10 = garch11(prices, 10.0); // Large multiplier
+    
+    expect(kPct1).toBeLessThanOrEqual(20); // Max 20% with multiplier
+    expect(kPct10).toBeLessThanOrEqual(20); // Should be clamped even with multiplier
+    expect(kPct10).toBeGreaterThanOrEqual(1);
   });
 });
