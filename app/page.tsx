@@ -67,6 +67,13 @@ export default function Home() {
   const [activityLogs, setActivityLogs] = useState<LogEntry[]>([]);
   const [garchMode, setGarchMode] = useState<'auto' | 'custom'>('auto');
   const [customKPct, setCustomKPct] = useState<number>(0.03); // Default 3% (0.03 as decimal)
+  const [token, setToken] = useState<string | null>(() => {
+    // Load token from localStorage on mount
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('garchy-bot-token');
+    }
+    return null;
+  });
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Helper function to add log entries (memoized to avoid dependency warnings)
@@ -79,6 +86,106 @@ export default function Home() {
     };
     setActivityLogs((prev) => [...prev, logEntry].slice(-100)); // Keep last 100 logs
   }, []);
+
+  // Save bot state to Edge Config
+  const saveBotState = useCallback(async () => {
+    if (!token) return;
+
+    try {
+      const state = {
+        botRunning,
+        symbol,
+        candleInterval,
+        maxTrades,
+        leverage,
+        capital,
+        riskAmount,
+        riskType,
+        dailyTargetType,
+        dailyTargetAmount,
+        dailyStopType,
+        dailyStopAmount,
+        dailyPnL,
+        dailyStartDate,
+        sessionPnL,
+        trades,
+        garchMode,
+        customKPct,
+        useOrderBookConfirm,
+      };
+
+      const response = await fetch('/api/bot/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, state }),
+      });
+
+      if (!response.ok) {
+        console.error('Failed to save bot state');
+      }
+    } catch (error) {
+      console.error('Error saving bot state:', error);
+    }
+  }, [
+    token,
+    botRunning,
+    symbol,
+    candleInterval,
+    maxTrades,
+    leverage,
+    capital,
+    riskAmount,
+    riskType,
+    dailyTargetType,
+    dailyTargetAmount,
+    dailyStopType,
+    dailyStopAmount,
+    dailyPnL,
+    dailyStartDate,
+    sessionPnL,
+    trades,
+    garchMode,
+    customKPct,
+    useOrderBookConfirm,
+  ]);
+
+  // Load bot state from Edge Config
+  const loadBotState = useCallback(async () => {
+    if (!token) return;
+
+    try {
+      const response = await fetch(`/api/bot/state?token=${token}`);
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (data.success && data.state) {
+        const state = data.state;
+        if (state.botRunning !== undefined) setBotRunning(state.botRunning);
+        if (state.symbol) setSymbol(state.symbol);
+        if (state.candleInterval) setCandleInterval(state.candleInterval);
+        if (state.maxTrades !== undefined) setMaxTrades(state.maxTrades);
+        if (state.leverage !== undefined) setLeverage(state.leverage);
+        if (state.capital !== undefined) setCapital(state.capital);
+        if (state.riskAmount !== undefined) setRiskAmount(state.riskAmount);
+        if (state.riskType) setRiskType(state.riskType);
+        if (state.dailyTargetType) setDailyTargetType(state.dailyTargetType);
+        if (state.dailyTargetAmount !== undefined) setDailyTargetAmount(state.dailyTargetAmount);
+        if (state.dailyStopType) setDailyStopType(state.dailyStopType);
+        if (state.dailyStopAmount !== undefined) setDailyStopAmount(state.dailyStopAmount);
+        if (state.dailyPnL !== undefined) setDailyPnL(state.dailyPnL);
+        if (state.dailyStartDate) setDailyStartDate(state.dailyStartDate);
+        if (state.sessionPnL !== undefined) setSessionPnL(state.sessionPnL);
+        if (state.trades) setTrades(state.trades);
+        if (state.garchMode) setGarchMode(state.garchMode);
+        if (state.customKPct !== undefined) setCustomKPct(state.customKPct);
+        if (state.useOrderBookConfirm !== undefined) setUseOrderBookConfirm(state.useOrderBookConfirm);
+        
+        addLog('info', 'Bot state loaded from Edge Config');
+      }
+    } catch (error) {
+      console.error('Error loading bot state:', error);
+    }
+  }, [token, addLog]);
 
   // Calculate daily limits
   const dailyTargetValue = useMemo(() => {
@@ -118,6 +225,47 @@ export default function Home() {
       addLog('warning', `Bot auto-stopped: ${reason}`);
     }
   }, [botRunning, canTrade, isDailyTargetHit, addLog]);
+
+  // Load bot state on mount
+  useEffect(() => {
+    if (token) {
+      loadBotState();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]); // Only run on mount or token change
+
+  // Save bot state when it changes (debounced)
+  useEffect(() => {
+    if (!token) return;
+    
+    const timeoutId = setTimeout(() => {
+      saveBotState();
+    }, 1000); // Debounce by 1 second
+
+    return () => clearTimeout(timeoutId);
+  }, [
+    botRunning,
+    symbol,
+    candleInterval,
+    maxTrades,
+    leverage,
+    capital,
+    riskAmount,
+    riskType,
+    dailyTargetType,
+    dailyTargetAmount,
+    dailyStopType,
+    dailyStopAmount,
+    dailyPnL,
+    dailyStartDate,
+    sessionPnL,
+    trades,
+    garchMode,
+    customKPct,
+    useOrderBookConfirm,
+    token,
+    saveBotState,
+  ]);
 
   // Check if we need to reset daily P&L (new UTC day)
   useEffect(() => {
@@ -626,7 +774,7 @@ export default function Home() {
   // Get current price
   const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
 
-  const handleStartBot = () => {
+  const handleStartBot = async () => {
     if (!canTrade) {
       const errorMsg = isDailyTargetHit 
         ? `Daily target reached (${dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}). Reset to continue.`
@@ -638,16 +786,52 @@ export default function Home() {
     setBotRunning(true);
     setError(null);
     addLog('success', `Bot started for ${symbol}`);
+    await saveBotState();
   };
 
-  const handleStopBot = () => {
+  const handleStopBot = async () => {
     setBotRunning(false);
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
     addLog('warning', 'Bot stopped');
+    await saveBotState();
   };
+
+  // Initialize token if not set
+  useEffect(() => {
+    if (!token && typeof window !== 'undefined') {
+      // Try to get token from URL params or prompt user
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlToken = urlParams.get('token');
+      
+      if (urlToken) {
+        localStorage.setItem('garchy-bot-token', urlToken);
+        setToken(urlToken);
+        addLog('info', 'Token loaded from URL');
+      } else {
+        // Create a new token automatically
+        fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success && data.token) {
+              localStorage.setItem('garchy-bot-token', data.token);
+              setToken(data.token);
+              addLog('success', 'New authentication token created');
+            }
+          })
+          .catch(err => {
+            console.error('Failed to create token:', err);
+            addLog('error', 'Failed to create authentication token. Bot state will not persist.');
+          });
+      }
+    }
+  }, [token, addLog]);
 
   return (
     <div className="min-h-screen text-white flex">
