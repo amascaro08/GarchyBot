@@ -155,7 +155,8 @@ export default function Home() {
       const signalData = await calculateSignal(candlesData, kPct);
 
       // Check for new signal and add to trade log
-      if (signalData && signalData.signal && signalData.touchedLevel) {
+      // Only enter trades if bot is running AND we have valid signal
+      if (botRunning && signalData && signalData.signal && signalData.touchedLevel) {
         // Check max trades limit
         const openTradesCount = trades.filter((t) => t.status === 'open').length;
         if (openTradesCount >= maxTrades) {
@@ -168,7 +169,8 @@ export default function Home() {
         const isNewSignal =
           !lastTrade ||
           lastTrade.time !== new Date().toISOString() ||
-          lastTrade.entry !== signalData.touchedLevel;
+          lastTrade.entry !== signalData.touchedLevel ||
+          lastTrade.symbol !== symbol; // Also check if symbol changed
 
         if (isNewSignal) {
           const newTrade: Trade = {
@@ -238,6 +240,11 @@ export default function Home() {
 
   // Initial load and polling
   useEffect(() => {
+    // Reset levels and signal when symbol or interval changes to force refresh
+    setLevels(null);
+    setSignal(null);
+    setCandles([]);
+
     if (botRunning) {
       pollData();
       const intervalId = setInterval(pollData, POLL_INTERVAL);

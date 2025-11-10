@@ -236,7 +236,7 @@ export default function Chart({
       candlestickSeries.createPriceLine({
         price: trade.entry,
         color: trade.side === 'LONG' ? '#3b82f6' : '#f59e0b',
-        lineWidth: 1.5,
+        lineWidth: 2,
         lineStyle: 1, // Dotted
         axisLabelVisible: true,
         title: `Entry ${trade.side} ${idx + 1}`,
