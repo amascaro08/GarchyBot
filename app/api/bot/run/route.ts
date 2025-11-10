@@ -239,12 +239,18 @@ export async function GET(request: NextRequest) {
     // Check for new signal
     const openTrades = updatedTrades.filter((t: any) => t.status === 'open');
     if (canTrade && signal.side && signal.entry !== null && signal.tp !== null && signal.sl !== null && openTrades.length < maxTrades) {
+      // Extract signal values to ensure type narrowing
+      const signalEntry = signal.entry;
+      const signalTp = signal.tp;
+      const signalSl = signal.sl;
+      const signalSide = signal.side;
+      
       // Check for duplicate trade
       const duplicateTrade = openTrades.find(
         (t: any) =>
           t.symbol === symbol &&
-          t.side === signal.side &&
-          Math.abs(t.entry - signal.entry) < 0.01
+          t.side === signalSide &&
+          Math.abs(t.entry - signalEntry) < 0.01
       );
 
       if (!duplicateTrade) {
@@ -252,17 +258,17 @@ export async function GET(request: NextRequest) {
         const riskPerTrade = riskType === 'percent' 
           ? (capital * riskAmount) / 100 
           : riskAmount;
-        const stopLossDistance = Math.abs(signal.entry - signal.sl);
+        const stopLossDistance = Math.abs(signalEntry - signalSl);
         const positionSize = stopLossDistance > 0 
           ? riskPerTrade / stopLossDistance 
           : 0;
 
         const newTrade = {
           time: new Date().toISOString(),
-          side: signal.side,
-          entry: signal.entry,
-          tp: signal.tp,
-          sl: signal.sl,
+          side: signalSide,
+          entry: signalEntry,
+          tp: signalTp,
+          sl: signalSl,
           reason: signal.reason,
           status: 'open',
           symbol: symbol,
