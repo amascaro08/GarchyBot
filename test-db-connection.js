@@ -1,4 +1,7 @@
 // Test database connection with Vercel's @vercel/postgres
+// Load .env.local file (Next.js convention)
+require('dotenv').config({ path: '.env.local' });
+
 // Copy STORAGE_POSTGRES_URL to POSTGRES_URL if needed
 if (!process.env.POSTGRES_URL && process.env.STORAGE_POSTGRES_URL) {
   process.env.POSTGRES_URL = process.env.STORAGE_POSTGRES_URL;
