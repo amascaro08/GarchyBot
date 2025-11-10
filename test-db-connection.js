@@ -1,10 +1,16 @@
 // Test database connection with Vercel's @vercel/postgres
+// Copy STORAGE_POSTGRES_URL to POSTGRES_URL if needed
+if (!process.env.POSTGRES_URL && process.env.STORAGE_POSTGRES_URL) {
+  process.env.POSTGRES_URL = process.env.STORAGE_POSTGRES_URL;
+  console.log('✓ Using STORAGE_POSTGRES_URL');
+}
+
 const { sql } = require('@vercel/postgres');
 
 async function testConnection() {
   try {
     console.log('Testing database connection...');
-    console.log('Using env var:', process.env.POSTGRES_URL ? 'POSTGRES_URL' : 'Not found');
+    console.log('Using env var:', process.env.POSTGRES_URL ? 'POSTGRES_URL (or STORAGE_POSTGRES_URL)' : 'Not found');
     
     const result = await sql`SELECT NOW() as current_time`;
     console.log('✅ Connected successfully!');
