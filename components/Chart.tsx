@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, LineData, Time } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time } from 'lightweight-charts';
 import type { Candle } from '@/lib/types';
 
 interface ChartProps {
@@ -40,7 +40,7 @@ export default function Chart({
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -65,29 +65,35 @@ export default function Chart({
 
     chartRef.current = chart;
 
-    // Add close price line series
-    const lineSeries = chart.addLineSeries({
-      color: '#3b82f6',
-      lineWidth: 2,
+    // Add candlestick series
+    const candlestickSeries = chart.addCandlestickSeries({
+      upColor: '#10b981',
+      downColor: '#ef4444',
+      borderVisible: false,
+      wickUpColor: '#10b981',
+      wickDownColor: '#ef4444',
       priceFormat: {
         type: 'price',
         precision: 2,
         minMove: 0.01,
       },
     });
-    seriesRef.current = lineSeries;
+    seriesRef.current = candlestickSeries;
 
-    // Prepare data (convert candles to line data)
-    const lineData: LineData<Time>[] = candles.map((candle) => ({
+    // Prepare candlestick data
+    const candlestickData: CandlestickData<Time>[] = candles.map((candle) => ({
       time: (candle.ts / 1000) as Time,
-      value: candle.close,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
     }));
 
-    lineSeries.setData(lineData);
+    candlestickSeries.setData(candlestickData);
 
     // Add upper and lower bounds (prominent lines)
     if (upper !== null) {
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: upper,
         color: '#10b981',
         lineWidth: 2,
@@ -98,7 +104,7 @@ export default function Chart({
     }
 
     if (lower !== null) {
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: lower,
         color: '#ef4444',
         lineWidth: 2,
@@ -114,7 +120,7 @@ export default function Chart({
       const zoneSize = range / 4;
       
       // Zone 1: Lower to Lower + zoneSize (red zone)
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: lower + zoneSize,
         color: '#ef4444',
         lineWidth: 1,
@@ -125,7 +131,7 @@ export default function Chart({
       
       // Zone 2: Lower + zoneSize to dOpen (orange zone)
       if (lower + zoneSize < dOpen) {
-        lineSeries.createPriceLine({
+        candlestickSeries.createPriceLine({
           price: lower + zoneSize * 2,
           color: '#f97316',
           lineWidth: 1,
@@ -137,7 +143,7 @@ export default function Chart({
       
       // Zone 3: dOpen to Upper - zoneSize (blue zone)
       if (dOpen < upper - zoneSize) {
-        lineSeries.createPriceLine({
+        candlestickSeries.createPriceLine({
           price: upper - zoneSize * 2,
           color: '#3b82f6',
           lineWidth: 1,
@@ -148,7 +154,7 @@ export default function Chart({
       }
       
       // Zone 4: Upper - zoneSize to Upper (green zone)
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: upper - zoneSize,
         color: '#10b981',
         lineWidth: 1,
@@ -160,7 +166,7 @@ export default function Chart({
 
     // Add horizontal lines for dOpen
     if (dOpen !== null) {
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: dOpen,
         color: '#fbbf24',
         lineWidth: 2,
@@ -172,7 +178,7 @@ export default function Chart({
 
     // Add horizontal line for VWAP
     if (vwap !== null) {
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: vwap,
         color: '#10b981',
         lineWidth: 2,
@@ -184,7 +190,7 @@ export default function Chart({
 
     // Add upper levels (teal, faint)
     upLevels.forEach((level, idx) => {
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: level,
         color: '#14b8a6',
         lineWidth: 1,
@@ -195,7 +201,7 @@ export default function Chart({
 
     // Add lower levels (orange, faint)
     dnLevels.forEach((level, idx) => {
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: level,
         color: '#f97316',
         lineWidth: 1,
@@ -207,7 +213,7 @@ export default function Chart({
     // Add TP/SL levels for open trades
     openTrades.forEach((trade, idx) => {
       // TP level (green)
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: trade.tp,
         color: '#10b981',
         lineWidth: 2,
@@ -217,7 +223,7 @@ export default function Chart({
       });
 
       // SL level (red)
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: trade.sl,
         color: '#ef4444',
         lineWidth: 2,
@@ -227,7 +233,7 @@ export default function Chart({
       });
 
       // Entry level (blue/yellow)
-      lineSeries.createPriceLine({
+      candlestickSeries.createPriceLine({
         price: trade.entry,
         color: trade.side === 'LONG' ? '#3b82f6' : '#f59e0b',
         lineWidth: 1.5,
@@ -246,9 +252,9 @@ export default function Chart({
         shape: m.shape as 'circle' | 'arrowUp' | 'arrowDown',
         text: m.text,
       }));
-      lineSeries.setMarkers(chartMarkers);
+      candlestickSeries.setMarkers(chartMarkers);
     } else if (seriesRef.current) {
-      lineSeries.setMarkers([]);
+      candlestickSeries.setMarkers([]);
     }
 
     // Handle resize

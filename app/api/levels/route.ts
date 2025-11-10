@@ -9,8 +9,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const validated = LevelsRequestSchema.parse(body);
 
-    // Fetch recent 5m klines (288 = 24 hours)
-    const candles = await getKlines(validated.symbol, '5', 288, true);
+    // Fetch recent klines using the interval from request (default to 5m if not provided)
+    const interval = (body.interval as string) || '5';
+    const candles = await getKlines(validated.symbol, interval as any, 288, true);
 
     // Calculate daily open, VWAP, and grid levels
     const dOpen = dailyOpenUTC(candles);

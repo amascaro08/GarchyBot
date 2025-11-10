@@ -14,6 +14,16 @@ const SUBDIVISIONS = 5;
 const NO_TRADE_BAND_PCT = 0.001;
 const DEFAULT_MAX_TRADES = 3;
 const DEFAULT_LEVERAGE = 1;
+const INTERVALS = [
+  { value: '1', label: '1m' },
+  { value: '3', label: '3m' },
+  { value: '5', label: '5m' },
+  { value: '15', label: '15m' },
+  { value: '60', label: '1h' },
+  { value: '120', label: '2h' },
+  { value: '240', label: '4h' },
+];
+const DEFAULT_INTERVAL = '5';
 
 export default function Home() {
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
@@ -27,13 +37,14 @@ export default function Home() {
   const [botRunning, setBotRunning] = useState<boolean>(false);
   const [maxTrades, setMaxTrades] = useState<number>(DEFAULT_MAX_TRADES);
   const [leverage, setLeverage] = useState<number>(DEFAULT_LEVERAGE);
+  const [interval, setInterval] = useState<string>(DEFAULT_INTERVAL);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch klines
   const fetchKlines = async () => {
     try {
       // Use mainnet by default (more reliable for public data)
-      const res = await fetch(`/api/klines?symbol=${symbol}&interval=5&limit=200&testnet=false`);
+      const res = await fetch(`/api/klines?symbol=${symbol}&interval=${interval}&limit=200&testnet=false`);
       
       let data;
       try {
@@ -84,7 +95,7 @@ export default function Home() {
       const res = await fetch('/api/levels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, kPct, subdivisions: SUBDIVISIONS }),
+        body: JSON.stringify({ symbol, kPct, subdivisions: SUBDIVISIONS, interval }),
       });
       if (!res.ok) throw new Error('Failed to fetch levels');
       const data = await res.json();
@@ -229,8 +240,8 @@ export default function Home() {
   useEffect(() => {
     if (botRunning) {
       pollData();
-      const interval = setInterval(pollData, POLL_INTERVAL);
-      pollingIntervalRef.current = interval;
+      const intervalId = setInterval(pollData, POLL_INTERVAL);
+      pollingIntervalRef.current = intervalId;
       return () => {
         if (pollingIntervalRef.current) {
           clearInterval(pollingIntervalRef.current);
@@ -242,7 +253,7 @@ export default function Home() {
       pollData().catch(console.error);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, botRunning]);
+  }, [symbol, interval, botRunning]);
 
   // Prepare chart markers from signals
   const chartMarkers =
@@ -298,7 +309,7 @@ export default function Home() {
         {/* Symbol selector and Bot controls */}
         <div className="mb-6 space-y-4">
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-            <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
                 <select
@@ -309,6 +320,21 @@ export default function Home() {
                   {SYMBOLS.map((s) => (
                     <option key={s} value={s} className="bg-slate-800">
                       {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Interval</label>
+                <select
+                  value={interval}
+                  onChange={(e) => setInterval(e.target.value)}
+                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
+                >
+                  {INTERVALS.map((int) => (
+                    <option key={int.value} value={int.value} className="bg-slate-800">
+                      {int.label}
                     </option>
                   ))}
                 </select>
@@ -376,6 +402,8 @@ export default function Home() {
             <span>Open Trades: {trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
             <span>•</span>
             <span>Leverage: {leverage}x</span>
+            <span>•</span>
+            <span>Interval: {INTERVALS.find(i => i.value === interval)?.label || interval}</span>
           </div>
         </div>
 
