@@ -408,7 +408,7 @@ export default function Home() {
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl sm:text-5xl font-bold mb-2 bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-            VWAP + GARCH Grid Trading Dashboard
+            Garchy Bot
           </h1>
           <p className="text-gray-400 text-sm sm:text-base">Real-time trading signals powered by volatility analysis</p>
         </div>
