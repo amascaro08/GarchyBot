@@ -16,6 +16,7 @@ export type Candle = z.infer<typeof CandleSchema>;
 export const LevelsRequestSchema = z.object({
   symbol: z.string(),
   kPct: z.number().min(0.01).max(0.1).optional(), // Optional - will be calculated from daily candles if not provided
+  customKPct: z.number().min(0.01).max(0.1).optional(), // Custom kPct value set by user (as decimal, e.g., 0.025 for 2.5%)
   subdivisions: z.number().int().min(1).max(50),
 });
 

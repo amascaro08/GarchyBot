@@ -39,6 +39,10 @@ interface SidebarProps {
   onStopBot: () => void;
   symbols: string[];
   intervals: Array<{ value: string; label: string }>;
+  garchMode: 'auto' | 'custom';
+  setGarchMode: (m: 'auto' | 'custom') => void;
+  customKPct: number;
+  setCustomKPct: (n: number) => void;
 }
 
 export default function Sidebar({
@@ -77,6 +81,10 @@ export default function Sidebar({
   onStopBot,
   symbols,
   intervals,
+  garchMode,
+  setGarchMode,
+  customKPct,
+  setCustomKPct,
 }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -222,6 +230,62 @@ export default function Sidebar({
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* GARCH Settings */}
+          <div className="glass-effect rounded-xl p-5 border-2 border-yellow-500/20 bg-gradient-to-br from-yellow-500/5 to-orange-500/5 backdrop-blur-xl">
+            <h3 className="text-sm font-bold text-yellow-300 mb-4 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              GARCH Volatility
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold mb-2 text-yellow-300 uppercase tracking-wider">GARCH Mode</label>
+                <select
+                  value={garchMode}
+                  onChange={(e) => setGarchMode(e.target.value as 'auto' | 'custom')}
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold cursor-pointer transition-all duration-300 hover:border-yellow-500/50 hover:shadow-lg hover:shadow-yellow-500/20 focus:outline-none focus:ring-2 focus:ring-yellow-500/50 w-full bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+                >
+                  <option value="auto" className="bg-slate-900">Auto (Daily Open)</option>
+                  <option value="custom" className="bg-slate-900">Custom Range</option>
+                </select>
+              </div>
+              
+              {garchMode === 'custom' && (
+                <div>
+                  <label className="block text-xs font-bold mb-2 text-yellow-300 uppercase tracking-wider">
+                    Custom kPct (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="0.1"
+                    value={(customKPct * 100).toFixed(1)}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 1;
+                      const clampedVal = Math.max(1, Math.min(10, val));
+                      setCustomKPct(clampedVal / 100); // Convert percentage to decimal
+                    }}
+                    className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-yellow-500/50 hover:shadow-lg hover:shadow-yellow-500/20 focus:outline-none focus:ring-2 focus:ring-yellow-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Expected daily move percentage (1-10%)
+                  </p>
+                </div>
+              )}
+              
+              {garchMode === 'auto' && (
+                <div className="glass-effect rounded-xl px-5 py-3 border-2 border-yellow-500/40 bg-gradient-to-br from-yellow-500/10 to-orange-500/10 backdrop-blur-xl">
+                  <div className="text-xs text-yellow-300 mb-1 font-bold uppercase tracking-wider">Current Mode</div>
+                  <div className="text-sm text-yellow-200">
+                    GARCH calculated from daily candles (60 days)
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
