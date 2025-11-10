@@ -47,6 +47,7 @@ export default function Home() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [botRunning, setBotRunning] = useState<boolean>(false);
+  const [loadingBotStatus, setLoadingBotStatus] = useState<boolean>(true);
   const [maxTrades, setMaxTrades] = useState<number>(DEFAULT_MAX_TRADES);
   const [leverage, setLeverage] = useState<number>(DEFAULT_LEVERAGE);
   const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
@@ -437,6 +438,70 @@ export default function Home() {
     }
   };
 
+  // Load bot status from database on mount
+  useEffect(() => {
+    const loadBotStatus = async () => {
+      try {
+        setLoadingBotStatus(true);
+        const res = await fetch('/api/bot/status');
+        
+        if (res.ok) {
+          const data = await res.json();
+          // Set bot running state from database
+          setBotRunning(data.botConfig?.is_running || false);
+          
+          // Load trades from database if any
+          if (data.allTrades && data.allTrades.length > 0) {
+            const dbTrades = data.allTrades.map((t: any) => ({
+              time: t.entry_time,
+              side: t.side,
+              entry: Number(t.entry_price),
+              tp: Number(t.tp_price),
+              sl: Number(t.current_sl),
+              reason: t.reason || '',
+              status: t.status,
+              symbol: t.symbol,
+              leverage: t.leverage,
+              positionSize: Number(t.position_size),
+              exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
+            }));
+            setTrades(dbTrades);
+          }
+          
+          // Load daily P&L
+          if (data.botConfig) {
+            setDailyPnL(Number(data.botConfig.daily_pnl || 0));
+          }
+          
+          // Load session P&L
+          if (data.sessionPnL !== undefined) {
+            setSessionPnL(Number(data.sessionPnL));
+          }
+          
+          // Load activity logs
+          if (data.activityLogs && data.activityLogs.length > 0) {
+            const dbLogs = data.activityLogs.map((log: any) => ({
+              id: log.id,
+              timestamp: new Date(log.created_at),
+              level: log.level,
+              message: log.message,
+            }));
+            setActivityLogs(dbLogs);
+          }
+          
+          addLog('success', 'Bot status loaded from database');
+        }
+      } catch (err) {
+        console.error('Failed to load bot status:', err);
+        addLog('warning', 'Could not load previous bot status');
+      } finally {
+        setLoadingBotStatus(false);
+      }
+    };
+    
+    loadBotStatus();
+  }, [addLog]);
+
   // Start/stop order book on symbol change
   useEffect(() => {
     addLog('info', `Connecting to order book for ${symbol}...`);
@@ -626,7 +691,7 @@ export default function Home() {
   // Get current price
   const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
 
-  const handleStartBot = () => {
+  const handleStartBot = async () => {
     if (!canTrade) {
       const errorMsg = isDailyTargetHit 
         ? `Daily target reached (${dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}). Reset to continue.`
@@ -635,18 +700,45 @@ export default function Home() {
       addLog('error', `Cannot start bot: ${errorMsg}`);
       return;
     }
-    setBotRunning(true);
-    setError(null);
-    addLog('success', `Bot started for ${symbol}`);
+    
+    try {
+      const res = await fetch('/api/bot/start', { method: 'POST' });
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to start bot');
+      }
+      
+      setBotRunning(true);
+      setError(null);
+      addLog('success', `Bot started for ${symbol} - running in background`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to start bot';
+      setError(errorMsg);
+      addLog('error', errorMsg);
+    }
   };
 
-  const handleStopBot = () => {
-    setBotRunning(false);
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
+  const handleStopBot = async () => {
+    try {
+      const res = await fetch('/api/bot/stop', { method: 'POST' });
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to stop bot');
+      }
+      
+      setBotRunning(false);
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      addLog('warning', 'Bot stopped');
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to stop bot';
+      setError(errorMsg);
+      addLog('error', errorMsg);
     }
-    addLog('warning', 'Bot stopped');
   };
 
   return (
@@ -753,7 +845,19 @@ export default function Home() {
           </div>
         )}
 
-        {loading && (
+        {loadingBotStatus && (
+          <div className="text-center py-12">
+            <div className="inline-flex items-center gap-3 text-cyan-300">
+              <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span className="font-bold text-lg">Loading bot status from database...</span>
+            </div>
+          </div>
+        )}
+
+        {loading && !loadingBotStatus && (
           <div className="text-center py-12">
             <div className="inline-flex items-center gap-3 text-cyan-300">
               <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
