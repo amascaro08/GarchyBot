@@ -1,6 +1,7 @@
 'use client';
 
 import { Trade } from './TradeLog';
+import { formatCurrencyNoSymbol } from '@/lib/format';
 
 interface TradesTableProps {
   trades: Trade[];
@@ -8,7 +9,6 @@ interface TradesTableProps {
 }
 
 export default function TradesTable({ trades, currentPrice }: TradesTableProps) {
-  const formatPrice = (val: number) => val.toFixed(2);
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
     return date.toLocaleString('en-US', {
@@ -124,19 +124,19 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
                     </span>
                   </td>
                   <td className="py-3 px-4 text-sm text-white text-right font-mono">
-                    {formatPrice(trade.entry)}
+                    {formatCurrencyNoSymbol(trade.entry)}
                   </td>
                   <td className="py-3 px-4 text-sm text-gray-300 text-right font-mono">
-                    {trade.positionSize ? `$${trade.positionSize.toFixed(2)}` : '—'}
+                    {trade.positionSize ? formatCurrencyNoSymbol(trade.positionSize) : '—'}
                   </td>
                   <td className="py-3 px-4 text-sm text-green-400 text-right font-mono">
-                    {formatPrice(trade.tp)}
+                    {formatCurrencyNoSymbol(trade.tp)}
                   </td>
                   <td className="py-3 px-4 text-sm text-red-400 text-right font-mono">
-                    {formatPrice(trade.sl)}
+                    {formatCurrencyNoSymbol(trade.sl)}
                   </td>
                   <td className="py-3 px-4 text-sm text-gray-300 text-right font-mono">
-                    {trade.exitPrice ? formatPrice(trade.exitPrice) : '—'}
+                    {trade.exitPrice ? formatCurrencyNoSymbol(trade.exitPrice) : '—'}
                   </td>
                   <td className="py-3 px-4 text-center">
                     <span className={`text-sm font-semibold ${getOutcomeColor(outcome)}`}>
@@ -151,7 +151,7 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
                         }`}
                       >
                         {realizedPnL >= 0 ? '+' : ''}
-                        {formatPrice(realizedPnL)}
+                        {formatCurrencyNoSymbol(realizedPnL)}
                       </span>
                     ) : (
                       <span className="text-sm text-gray-500">—</span>
@@ -165,7 +165,7 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
                         }`}
                       >
                         {unrealizedPnL >= 0 ? '+' : ''}
-                        {formatPrice(unrealizedPnL)}
+                        {formatCurrencyNoSymbol(unrealizedPnL)}
                       </span>
                     ) : (
                       <span className="text-sm text-gray-500">—</span>

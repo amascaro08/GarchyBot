@@ -9,29 +9,44 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const validated = LevelsRequestSchema.parse(body);
+    const testnet = body.testnet !== undefined ? body.testnet : true; // Default to testnet
 
-    // Always use daily candles (interval 'D' = 1 day) for calculating daily open and levels
-    // The user's selected interval is only for display, not for level calculation
-    const candles = await getKlines(validated.symbol, 'D', 30, body.testnet !== undefined ? body.testnet : false);
+    // For price data, prefer mainnet for accuracy, but allow testnet fallback
+    let daily, intraday;
+    let usedMainnet = false;
+    
+    try {
+      // Try mainnet first for accurate prices
+      daily = await getKlines(validated.symbol, 'D', 60, false);
+      intraday = await getKlines(validated.symbol, '5', 288, false);
+      usedMainnet = true;
+    } catch (mainnetError) {
+      // Fallback to testnet if mainnet fails
+      console.warn(`Mainnet failed for ${validated.symbol}, using testnet:`, mainnetError);
+      daily = await getKlines(validated.symbol, 'D', 60, testnet);
+      intraday = await getKlines(validated.symbol, '5', 288, testnet);
+    }
 
-    // Calculate volatility from daily closes (not from user's selected interval)
-    // Use provided kPct if available, otherwise calculate from daily candles
-    const dailyCloses = candles.map(c => c.close);
-    const kPct = validated.kPct || garch11(dailyCloses);
+    const dailyAsc = daily.slice().reverse(); // Ensure ascending order
+    const dailyCloses = dailyAsc.map(c => c.close);
+    const kPct = garch11(dailyCloses); // Clamps internally 1–10%
 
-    // Calculate daily open, VWAP, and grid levels using the daily-calculated volatility
-    const dOpen = dailyOpenUTC(candles);
-    const vwap = vwapFromOHLCV(candles);
+    const intradayAsc = intraday.slice().reverse(); // Ensure ascending order
+
+    const dOpen = dailyOpenUTC(intradayAsc);
+    const vwap = vwapFromOHLCV(intradayAsc);
     const { upper, lower, upLevels, dnLevels } = gridLevels(dOpen, kPct, validated.subdivisions);
 
     return NextResponse.json({
       symbol: validated.symbol,
+      kPct, // Expose kPct here
       dOpen,
+      vwap,
       upper,
       lower,
       upLevels,
       dnLevels,
-      vwap,
+      dataSource: usedMainnet ? 'mainnet' : 'testnet', // For debugging
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

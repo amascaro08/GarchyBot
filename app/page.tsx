@@ -1,11 +1,16 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
 import TradeLog, { Trade } from '@/components/TradeLog';
 import TradesTable from '@/components/TradesTable';
+import Sidebar from '@/components/Sidebar';
+import OrderBook from '@/components/OrderBook';
+import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
+import { applyBreakeven } from '@/lib/strategy';
+import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = 'BTCUSDT';
@@ -17,6 +22,10 @@ const DEFAULT_LEVERAGE = 1;
 const DEFAULT_CAPITAL = 10000;
 const DEFAULT_RISK_AMOUNT = 100;
 const DEFAULT_RISK_TYPE = 'fixed'; // 'fixed' or 'percent'
+const DEFAULT_DAILY_TARGET_TYPE = 'percent'; // 'fixed' or 'percent'
+const DEFAULT_DAILY_TARGET_AMOUNT = 5; // 5% or $500
+const DEFAULT_DAILY_STOP_TYPE = 'percent'; // 'fixed' or 'percent'
+const DEFAULT_DAILY_STOP_AMOUNT = 3; // 3% or $300
 const INTERVALS = [
   { value: '1', label: '1m' },
   { value: '3', label: '3m' },
@@ -44,19 +53,103 @@ export default function Home() {
   const [capital, setCapital] = useState<number>(DEFAULT_CAPITAL);
   const [riskAmount, setRiskAmount] = useState<number>(DEFAULT_RISK_AMOUNT);
   const [riskType, setRiskType] = useState<'fixed' | 'percent'>(DEFAULT_RISK_TYPE);
+  const [useOrderBookConfirm, setUseOrderBookConfirm] = useState<boolean>(true);
+  const [kPct, setKPct] = useState<number>(3); // Will be filled by /levels
+  const [dailyPnL, setDailyPnL] = useState<number>(0);
+  const [dailyTargetType, setDailyTargetType] = useState<'fixed' | 'percent'>(DEFAULT_DAILY_TARGET_TYPE);
+  const [dailyTargetAmount, setDailyTargetAmount] = useState<number>(DEFAULT_DAILY_TARGET_AMOUNT);
+  const [dailyStopType, setDailyStopType] = useState<'fixed' | 'percent'>(DEFAULT_DAILY_STOP_TYPE);
+  const [dailyStopAmount, setDailyStopAmount] = useState<number>(DEFAULT_DAILY_STOP_AMOUNT);
+  const [dailyStartDate, setDailyStartDate] = useState<string>(() => {
+    // Get current UTC date string (YYYY-MM-DD)
+    return new Date().toISOString().split('T')[0];
+  });
+  const [activityLogs, setActivityLogs] = useState<LogEntry[]>([]);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Helper function to add log entries (memoized to avoid dependency warnings)
+  const addLog = useCallback((level: LogLevel, message: string) => {
+    const logEntry: LogEntry = {
+      id: `${Date.now()}-${Math.random()}`,
+      timestamp: new Date(),
+      level,
+      message,
+    };
+    setActivityLogs((prev) => [...prev, logEntry].slice(-100)); // Keep last 100 logs
+  }, []);
 
-  // Fetch klines
+  // Calculate daily limits
+  const dailyTargetValue = useMemo(() => {
+    return dailyTargetType === 'percent' 
+      ? (capital * dailyTargetAmount) / 100 
+      : dailyTargetAmount;
+  }, [dailyTargetType, dailyTargetAmount, capital]);
+
+  const dailyStopValue = useMemo(() => {
+    return dailyStopType === 'percent' 
+      ? (capital * dailyStopAmount) / 100 
+      : dailyStopAmount;
+  }, [dailyStopType, dailyStopAmount, capital]);
+
+  // Check if daily limits are hit
+  const isDailyTargetHit = useMemo(() => {
+    return dailyPnL >= dailyTargetValue && dailyTargetValue > 0;
+  }, [dailyPnL, dailyTargetValue]);
+
+  const isDailyStopHit = useMemo(() => {
+    return dailyPnL <= -dailyStopValue && dailyStopValue > 0;
+  }, [dailyPnL, dailyStopValue]);
+
+  const canTrade = useMemo(() => {
+    return !isDailyTargetHit && !isDailyStopHit;
+  }, [isDailyTargetHit, isDailyStopHit]);
+
+  // Auto-stop bot when daily limits are hit
+  useEffect(() => {
+    if (botRunning && !canTrade) {
+      setBotRunning(false);
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      const reason = isDailyTargetHit ? 'Daily target reached' : 'Daily stop loss hit';
+      addLog('warning', `Bot auto-stopped: ${reason}`);
+    }
+  }, [botRunning, canTrade, isDailyTargetHit, addLog]);
+
+  // Check if we need to reset daily P&L (new UTC day)
+  useEffect(() => {
+    const checkDailyReset = () => {
+      const today = new Date().toISOString().split('T')[0];
+      if (today !== dailyStartDate) {
+        setDailyStartDate(today);
+        setDailyPnL(0);
+        setSessionPnL(0);
+        setTrades([]);
+      }
+    };
+    
+    // Check immediately and then every minute
+    checkDailyReset();
+    const interval = setInterval(checkDailyReset, 60000);
+    return () => clearInterval(interval);
+  }, [dailyStartDate]);
+
+  // Fetch klines - prefer mainnet for accurate prices
   const fetchKlines = async () => {
     try {
-      // Use mainnet by default (more reliable for public data)
-      const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+      // Try mainnet first for accurate prices
+      let res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+      
+      // If mainnet fails, fallback to testnet
+      if (!res.ok) {
+        res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+      }
       
       let data;
       try {
         data = await res.json();
       } catch (parseError) {
-        // If JSON parsing fails, throw with status
         throw new Error(`Failed to parse response: HTTP ${res.status} ${res.statusText}`);
       }
       
@@ -78,24 +171,7 @@ export default function Home() {
     }
   };
 
-  // Calculate volatility
-  const calculateVol = async (closes: number[]) => {
-    try {
-      const res = await fetch('/api/vol', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, closes }),
-      });
-      if (!res.ok) throw new Error('Failed to calculate volatility');
-      const data = await res.json();
-      return data.k_pct;
-    } catch (err) {
-      console.error('Vol calculation error:', err);
-      return 0.02; // Default 2%
-    }
-  };
-
-  // Fetch levels - volatility is calculated internally from daily candles
+  // Fetch levels - volatility (kPct) is calculated internally from daily candles
   const fetchLevels = async () => {
     try {
       const res = await fetch('/api/levels', {
@@ -103,9 +179,8 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           symbol, 
-          subdivisions: SUBDIVISIONS, 
-          // Note: kPct and interval are not needed - levels always use daily candles
-          testnet: false, // Match the testnet setting used for klines
+          subdivisions: SUBDIVISIONS,
+          testnet: true, // Default to testnet
         }),
       });
       if (!res.ok) {
@@ -114,10 +189,13 @@ export default function Home() {
       }
       const data = await res.json();
       setLevels(data);
+      setKPct(data.kPct); // Store kPct from levels
+      addLog('info', `Levels updated: k% = ${(data.kPct * 100).toFixed(2)}%`);
       return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch levels';
       setError(errorMsg);
+      addLog('error', `Failed to fetch levels: ${errorMsg}`);
       console.error('fetchLevels error:', err);
       throw err;
     }
@@ -158,8 +236,24 @@ export default function Home() {
       setError(null);
 
       // Fetch klines
-      const candlesData = await fetchKlines();
-      if (candlesData.length === 0) {
+      // Use mainnet for accurate prices, fallback to testnet
+      let candlesData;
+      try {
+        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+        if (res.ok) {
+          candlesData = await res.json();
+        } else {
+          // Fallback to testnet
+          const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+          candlesData = await testnetRes.json();
+        }
+      } catch (err) {
+        // Final fallback to testnet
+        const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+        candlesData = await testnetRes.json();
+      }
+      
+      if (!candlesData || !Array.isArray(candlesData) || candlesData.length === 0) {
         setLoading(false);
         return;
       }
@@ -171,67 +265,116 @@ export default function Home() {
         return;
       }
 
-      // Levels are fetched separately when symbol changes - they don't change during polling
-      // Calculate volatility from selected interval candles for signal calculation
-      // Signal uses selected interval to check if price touches the fixed levels
-      const closes = candlesData.map((c: Candle) => c.close);
-      const kPct = await calculateVol(closes);
+      // Get levels (includes kPct) - refresh to ensure we have latest VWAP
+      addLog('info', `Monitoring levels for ${symbol}...`);
+      const lv = await fetchLevels();
+      const lastClose = candlesData.length > 0 ? candlesData[candlesData.length - 1].close : NaN;
+      addLog('info', `VWAP: $${lv.vwap.toFixed(2)}, Price: $${lastClose.toFixed(2)}`);
 
-      // Calculate signal
-      const signalData = await calculateSignal(candlesData, kPct);
+      // Apply breakeven to open trades (if any)
+      setTrades((prev) =>
+        prev.map((t) => {
+          if (t.status !== 'open') return t;
+          const newSL = applyBreakeven(t.side, t.entry, t.sl, lastClose, lv.vwap);
+          if (newSL !== t.sl) {
+            addLog('success', `Breakeven applied: ${t.side} @ $${t.entry.toFixed(2)}, SL → $${newSL.toFixed(2)}`);
+          }
+          return newSL !== t.sl ? { ...t, sl: newSL } : t;
+        })
+      );
+
+      // Calculate signal using THE SAME kPct from levels
+      const signalData = await calculateSignal(candlesData, lv.kPct);
 
       // Check for new signal and add to trade log
-      // Only enter trades if bot is running AND we have valid signal
-      if (botRunning && signalData && signalData.signal && signalData.touchedLevel) {
-        // Use functional update to get current trades state
-        setTrades((prevTrades) => {
-          // Check max trades limit with current state
-          const openTrades = prevTrades.filter((t) => t.status === 'open');
-          if (openTrades.length >= maxTrades) {
-            console.log(`Max trades limit reached (${maxTrades}). Skipping new signal.`);
-            return prevTrades;
+      // Only enter trades if bot is running AND we have valid signal AND daily limits not hit
+      if (botRunning && canTrade && signalData && signalData.signal && signalData.touchedLevel) {
+        addLog('info', `Signal detected: ${signalData.signal} @ $${signalData.touchedLevel.toFixed(2)} (${signalData.reason})`);
+        
+        // Optional order-book confirmation
+        let approved = true;
+        if (useOrderBookConfirm) {
+          addLog('info', 'Checking order book confirmation...');
+          try {
+            approved = await confirmLevelTouch({
+              symbol,
+              level: signalData.touchedLevel,
+              side: signalData.signal,
+              windowMs: 8000,
+              minNotional: 50_000, // tune
+              proximityBps: 5, // 5 bps proximity to level
+            });
+            if (approved) {
+              addLog('success', 'Order book confirmation: Liquidity wall detected');
+            } else {
+              addLog('warning', 'Order book confirmation: No significant liquidity wall');
+            }
+          } catch (err) {
+            console.error('Order-book confirmation error:', err);
+            addLog('error', 'Order book confirmation failed');
+            approved = false; // Fail-safe: reject if confirmation fails
           }
+        }
 
-          // Check if there's already an open trade at this exact level/symbol/side
-          // This prevents duplicate entries on small price fluctuations
-          const duplicateTrade = openTrades.find(
-            (t) =>
-              t.symbol === symbol &&
-              t.side === signalData.signal &&
-              Math.abs(t.entry - signalData.touchedLevel!) < 0.01 // Allow small tolerance for floating point
-          );
+        if (approved) {
+          // Use functional update to get current trades state
+          setTrades((prevTrades) => {
+            // Check max trades limit with current state
+            const openTrades = prevTrades.filter((t) => t.status === 'open');
+            if (openTrades.length >= maxTrades) {
+              addLog('warning', `Max trades limit reached (${maxTrades}). Skipping signal.`);
+              return prevTrades;
+            }
 
-          if (duplicateTrade) {
-            console.log(`Duplicate trade detected at level ${signalData.touchedLevel}. Skipping.`);
-            return prevTrades;
-          }
+            // Check if there's already an open trade at this exact level/symbol/side
+            // This prevents duplicate entries on small price fluctuations
+            const duplicateTrade = openTrades.find(
+              (t) =>
+                t.symbol === symbol &&
+                t.side === signalData.signal &&
+                Math.abs(t.entry - signalData.touchedLevel!) < 0.01 // Allow small tolerance for floating point
+            );
 
-          // Calculate position size based on risk management
-          const riskPerTrade = riskType === 'percent' 
-            ? (capital * riskAmount) / 100 
-            : riskAmount;
-          
-          // Calculate position size: risk amount / (entry - stop loss)
-          const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
-          const positionSize = stopLossDistance > 0 
-            ? riskPerTrade / stopLossDistance 
-            : 0;
+            if (duplicateTrade) {
+              addLog('warning', `Duplicate trade detected at $${signalData.touchedLevel!.toFixed(2)}. Skipping.`);
+              return prevTrades;
+            }
 
-          const newTrade: Trade = {
-            time: new Date().toISOString(),
-            side: signalData.signal,
-            entry: signalData.touchedLevel!,
-            tp: signalData.tp!,
-            sl: signalData.sl!,
-            reason: signalData.reason,
-            status: 'open',
-            symbol: symbol,
-            leverage: leverage,
-            positionSize: positionSize,
-          };
-          
-          return [...prevTrades, newTrade];
-        });
+            // Calculate position size based on risk management
+            const riskPerTrade = riskType === 'percent' 
+              ? (capital * riskAmount) / 100 
+              : riskAmount;
+            
+            // Calculate position size: risk amount / (entry - stop loss)
+            // Note: Position size is in base units, not leveraged
+            const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
+            const positionSize = stopLossDistance > 0 
+              ? riskPerTrade / stopLossDistance 
+              : 0;
+
+            const newTrade: Trade = {
+              time: new Date().toISOString(),
+              side: signalData.signal,
+              entry: signalData.touchedLevel!,
+              tp: signalData.tp!,
+              sl: signalData.sl!,
+              reason: signalData.reason,
+              status: 'open',
+              symbol: symbol,
+              leverage: leverage,
+              positionSize: positionSize,
+            };
+            
+            addLog('success', `Trade opened: ${signalData.signal} @ $${signalData.touchedLevel!.toFixed(2)}, TP: $${signalData.tp!.toFixed(2)}, SL: $${signalData.sl!.toFixed(2)}`);
+            return [...prevTrades, newTrade];
+          });
+        } else {
+          addLog('warning', `Signal rejected: ${signalData.reason}`);
+        }
+      } else if (botRunning && !canTrade) {
+        addLog('warning', 'Trading paused: Daily limit reached');
+      } else if (!botRunning && signalData && signalData.signal) {
+        addLog('info', `Signal detected but bot is stopped: ${signalData.signal} @ $${signalData.touchedLevel!.toFixed(2)}`);
       }
 
       // Simulate TP/SL checks for open trades
@@ -248,17 +391,21 @@ export default function Home() {
               if (lastCandle.high >= trade.tp) {
                 newStatus = 'tp';
                 exitPrice = trade.tp;
+                addLog('success', `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               } else if (lastCandle.low <= trade.sl) {
                 newStatus = 'sl';
                 exitPrice = trade.sl;
+                addLog('error', `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               }
             } else {
               if (lastCandle.low <= trade.tp) {
                 newStatus = 'tp';
                 exitPrice = trade.tp;
+                addLog('success', `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               } else if (lastCandle.high >= trade.sl) {
                 newStatus = 'sl';
                 exitPrice = trade.sl;
+                addLog('error', `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               }
             }
 
@@ -270,6 +417,9 @@ export default function Home() {
                   ? (exitPrice - trade.entry) * positionSize
                   : (trade.entry - exitPrice) * positionSize;
               setSessionPnL((prev) => prev + pnl);
+              setDailyPnL((prev) => prev + pnl);
+              const pnlFormatted = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+              addLog(newStatus === 'tp' ? 'success' : 'error', `P&L: ${pnlFormatted}`);
             }
 
             return { ...trade, status: newStatus, exitPrice };
@@ -284,32 +434,56 @@ export default function Home() {
     }
   };
 
+  // Start/stop order book on symbol change
+  useEffect(() => {
+    addLog('info', `Connecting to order book for ${symbol}...`);
+    startOrderBook(symbol);
+    return () => {
+      stopOrderBook(symbol);
+      addLog('info', `Disconnected order book for ${symbol}`);
+    };
+  }, [symbol, addLog]);
+
   // Fetch levels when symbol changes (levels are based on daily candles, independent of interval)
   useEffect(() => {
     const loadLevels = async () => {
       try {
+        // Reset levels first to ensure UI updates
+        setLevels(null);
+        addLog('info', `Loading levels for ${symbol}...`);
+        
         const levelsRes = await fetch('/api/levels', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             symbol, 
-            subdivisions: SUBDIVISIONS, 
-            // kPct is calculated internally from daily candles
-            testnet: false,
+            subdivisions: SUBDIVISIONS,
+            testnet: true, // Default to testnet
           }),
         });
+        
+        if (!levelsRes.ok) {
+          throw new Error('Failed to fetch levels');
+        }
+        
         const levelsData = await levelsRes.json();
         
+        // Only update if symbol hasn't changed during fetch
         if (levelsData.symbol === symbol) {
           setLevels(levelsData);
+          setKPct(levelsData.kPct); // Store kPct from levels
+          addLog('success', `Levels loaded for ${symbol}: k% = ${(levelsData.kPct * 100).toFixed(2)}%`);
         }
       } catch (err) {
         console.error('Failed to load levels:', err);
+        const errorMsg = err instanceof Error ? err.message : 'Failed to load levels';
+        setError(errorMsg);
+        addLog('error', `Failed to load levels for ${symbol}: ${errorMsg}`);
       }
     };
 
     loadLevels();
-  }, [symbol]); // Only refetch levels when symbol changes
+  }, [symbol, addLog]); // Only refetch levels when symbol changes
 
   // Initial load and polling - handles candles, signals, and interval changes
   useEffect(() => {
@@ -324,42 +498,71 @@ export default function Home() {
         setError(null);
 
         // Fetch klines with current symbol and interval (for display only)
-        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
-        const klinesData = await res.json();
+        // Use mainnet for accurate prices, fallback to testnet
+        let klinesData;
+        try {
+          const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+          if (res.ok) {
+            klinesData = await res.json();
+          } else {
+            // Fallback to testnet
+            const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+            klinesData = await testnetRes.json();
+          }
+        } catch (err) {
+          // Final fallback to testnet
+          const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+          klinesData = await testnetRes.json();
+        }
         
-        if (!res.ok || !klinesData || !Array.isArray(klinesData) || klinesData.length === 0) {
+        if (!klinesData || !Array.isArray(klinesData) || klinesData.length === 0) {
           setLoading(false);
           return;
         }
 
         setCandles(klinesData);
 
-        // Calculate volatility from selected interval candles for signal calculation only
-        // Signal uses selected interval to check if price touches the fixed levels
-        const closes = klinesData.map((c: Candle) => c.close);
-        const volRes = await fetch('/api/vol', {
+        // Fetch levels for this symbol (may already be loading from symbol change useEffect)
+        // This ensures we have levels even if symbol change useEffect hasn't completed
+        const levelsRes = await fetch('/api/levels', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol, closes }),
-        });
-        const volData = await volRes.json();
-        const kPct = volData.k_pct || 0.02;
-
-        // Calculate signal
-        const signalRes = await fetch('/api/signal', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            symbol,
-            kPct,
+          body: JSON.stringify({ 
+            symbol, 
             subdivisions: SUBDIVISIONS,
-            noTradeBandPct: NO_TRADE_BAND_PCT,
-            candles: klinesData,
+            testnet: true, // Default to testnet
           }),
         });
-        const signalData = await signalRes.json();
-        if (signalData.symbol === symbol) {
-          setSignal(signalData);
+        
+        if (levelsRes.ok) {
+          const levelsData = await levelsRes.json();
+          if (levelsData.symbol === symbol) {
+            setLevels(levelsData);
+            setKPct(levelsData.kPct);
+            addLog('success', `Levels loaded: k% = ${(levelsData.kPct * 100).toFixed(2)}%`);
+            
+            // Calculate signal using kPct from levels
+            const signalRes = await fetch('/api/signal', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                symbol,
+                kPct: levelsData.kPct,
+                subdivisions: SUBDIVISIONS,
+                noTradeBandPct: NO_TRADE_BAND_PCT,
+                candles: klinesData,
+              }),
+            });
+            if (signalRes.ok) {
+              const signalData = await signalRes.json();
+              if (signalData.symbol === symbol) {
+                setSignal(signalData);
+                if (signalData.signal) {
+                  addLog('info', `Initial signal: ${signalData.signal} @ $${signalData.touchedLevel?.toFixed(2) || 'N/A'}`);
+                }
+              }
+            }
+          }
         }
 
         setLoading(false);
@@ -419,8 +622,17 @@ export default function Home() {
   const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
 
   const handleStartBot = () => {
+    if (!canTrade) {
+      const errorMsg = isDailyTargetHit 
+        ? `Daily target reached (${dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}). Reset to continue.`
+        : `Daily stop loss hit (${dailyPnL.toFixed(2)}). Reset to continue.`;
+      setError(errorMsg);
+      addLog('error', `Cannot start bot: ${errorMsg}`);
+      return;
+    }
     setBotRunning(true);
     setError(null);
+    addLog('success', `Bot started for ${symbol}`);
   };
 
   const handleStopBot = () => {
@@ -429,243 +641,166 @@ export default function Home() {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
+    addLog('warning', 'Bot stopped');
   };
 
   return (
-    <div className="min-h-screen text-white p-4 sm:p-6 lg:p-8">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl sm:text-5xl font-bold mb-2 bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-            Garchy Bot
-          </h1>
-          <p className="text-gray-400 text-sm sm:text-base">Real-time trading signals powered by volatility analysis</p>
-        </div>
+    <div className="min-h-screen text-white flex">
+      {/* Sidebar - Desktop: fixed left, Mobile: slide-out */}
+      <Sidebar
+        symbol={symbol}
+        setSymbol={setSymbol}
+        candleInterval={candleInterval}
+        setCandleInterval={setCandleInterval}
+        maxTrades={maxTrades}
+        setMaxTrades={setMaxTrades}
+        leverage={leverage}
+        setLeverage={setLeverage}
+        capital={capital}
+        setCapital={setCapital}
+        riskAmount={riskAmount}
+        setRiskAmount={setRiskAmount}
+        riskType={riskType}
+        setRiskType={setRiskType}
+        dailyTargetType={dailyTargetType}
+        setDailyTargetType={setDailyTargetType}
+        dailyTargetAmount={dailyTargetAmount}
+        setDailyTargetAmount={setDailyTargetAmount}
+        dailyStopType={dailyStopType}
+        setDailyStopType={setDailyStopType}
+        dailyStopAmount={dailyStopAmount}
+        setDailyStopAmount={setDailyStopAmount}
+        useOrderBookConfirm={useOrderBookConfirm}
+        setUseOrderBookConfirm={setUseOrderBookConfirm}
+        dailyPnL={dailyPnL}
+        dailyTargetValue={dailyTargetValue}
+        dailyStopValue={dailyStopValue}
+        isDailyTargetHit={isDailyTargetHit}
+        isDailyStopHit={isDailyStopHit}
+        canTrade={canTrade}
+        botRunning={botRunning}
+        onStartBot={handleStartBot}
+        onStopBot={handleStopBot}
+        symbols={SYMBOLS}
+        intervals={INTERVALS}
+      />
 
-        {/* Symbol selector and Bot controls */}
-        <div className="mb-6 space-y-4">
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-            <div className="flex-1 grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
-                <select
-                  value={symbol}
-                  onChange={(e) => setSymbol(e.target.value)}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
-                >
-                  {SYMBOLS.map((s) => (
-                    <option key={s} value={s} className="bg-slate-800">
-                      {s}
-                    </option>
-                  ))}
-                </select>
+      {/* Main Content */}
+      <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
+        <div className="max-w-[1600px] mx-auto">
+          {/* Header */}
+          <div className="mb-6 lg:mb-8 relative">
+            <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 via-purple-500/20 to-pink-500/20 blur-3xl rounded-full"></div>
+            <div className="relative">
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black mb-2 lg:mb-3 text-gradient-animated">
+                GARCHY BOT
+              </h1>
+              <div className="flex items-center gap-2 lg:gap-3 flex-wrap">
+                <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-cyan-500 to-purple-500 rounded-full"></div>
+                <p className="text-gray-300 text-xs sm:text-sm lg:text-base font-medium tracking-wide">Real-time trading signals powered by volatility analysis</p>
+                <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"></div>
               </div>
-              
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Interval</label>
-                <select
-                  value={candleInterval}
-                  onChange={(e) => setCandleInterval(e.target.value)}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
-                >
-                  {INTERVALS.map((int) => (
-                    <option key={int.value} value={int.value} className="bg-slate-800">
-                      {int.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Max Trades</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={maxTrades}
-                  onChange={(e) => setMaxTrades(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Leverage</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  step="1"
-                  value={leverage}
-                  onChange={(e) => setLeverage(Math.max(1, Math.min(100, parseFloat(e.target.value) || 1)))}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                />
-              </div>
-            </div>
-            
-            <div className="flex gap-3 items-end">
-              {!botRunning ? (
-                <button
-                  onClick={handleStartBot}
-                  className="glass-effect rounded-lg px-6 py-2.5 bg-green-500/20 text-green-400 border border-green-500/30 font-semibold hover:bg-green-500/30 transition-all duration-200 flex items-center gap-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Start Bot
-                </button>
-              ) : (
-                <button
-                  onClick={handleStopBot}
-                  className="glass-effect rounded-lg px-6 py-2.5 bg-red-500/20 text-red-400 border border-red-500/30 font-semibold hover:bg-red-500/30 transition-all duration-200 flex items-center gap-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10h6v4H9z" />
-                  </svg>
-                  Stop Bot
-                </button>
-              )}
-              {botRunning && (
-                <div className="flex items-center gap-2 text-green-400">
-                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                  <span className="text-sm font-medium">Running</span>
-                </div>
-              )}
             </div>
           </div>
-          
-          {/* Risk Management Controls */}
-          <div className="glass-effect rounded-lg p-4 border border-slate-700/50">
-            <h3 className="text-sm font-semibold text-gray-300 mb-3">Risk Management</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-xs font-medium mb-2 text-gray-400">Capital ($)</label>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={capital}
-                  onChange={(e) => setCapital(Math.max(1, parseFloat(e.target.value) || 1))}
-                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                />
+
+          {/* Status badges */}
+          <div className="mb-6 flex flex-wrap gap-3 text-xs">
+            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+              <span className="text-gray-400 font-medium">Open:</span>
+              <span className="text-cyan-300 font-bold ml-1">{trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+              <span className="text-gray-400 font-medium">Leverage:</span>
+              <span className="text-purple-300 font-bold ml-1">{leverage}x</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+              <span className="text-gray-400 font-medium">Interval:</span>
+              <span className="text-pink-300 font-bold ml-1">{INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</span>
+            </div>
+            {levels && (
+              <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+                <span className="text-gray-400 font-medium">k%:</span>
+                <span className="text-cyan-300 font-bold ml-1">{(levels.kPct * 100).toFixed(2)}%</span>
               </div>
-              <div>
-                <label className="block text-xs font-medium mb-2 text-gray-400">Risk Type</label>
-                <select
-                  value={riskType}
-                  onChange={(e) => setRiskType(e.target.value as 'fixed' | 'percent')}
-                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
-                >
-                  <option value="fixed" className="bg-slate-800">Fixed $</option>
-                  <option value="percent" className="bg-slate-800">% of Capital</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium mb-2 text-gray-400">
-                  Risk {riskType === 'percent' ? '(%)' : '($)'}
-                </label>
-                <input
-                  type="number"
-                  min="0.01"
-                  step={riskType === 'percent' ? "0.1" : "1"}
-                  value={riskAmount}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value) || 0;
-                    if (riskType === 'percent') {
-                      setRiskAmount(Math.max(0.01, Math.min(100, val)));
-                    } else {
-                      setRiskAmount(Math.max(0.01, val));
-                    }
-                  }}
-                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                />
-              </div>
-              <div className="flex items-end">
-                <div className="glass-effect rounded-lg px-4 py-2 w-full border border-purple-500/30 bg-purple-500/10">
-                  <div className="text-xs text-gray-400 mb-1">Risk Per Trade</div>
-                  <div className="text-sm font-semibold text-purple-300">
-                    ${riskType === 'percent' 
-                      ? ((capital * riskAmount) / 100).toFixed(2)
-                      : riskAmount.toFixed(2)}
-                  </div>
+            )}
+            {botRunning && (
+              <div className="px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/30 backdrop-blur-sm">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-lg shadow-green-400/50"></div>
+                  <span className="text-green-400 font-bold">Running</span>
                 </div>
               </div>
-            </div>
+            )}
           </div>
-          
-          <div className="flex gap-2 text-xs text-gray-400">
-            <span>Open Trades: {trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
-            <span>•</span>
-            <span>Leverage: {leverage}x</span>
-            <span>•</span>
-            <span>Interval: {INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</span>
-          </div>
-        </div>
 
         {error && (
-          <div className="glass-effect border-red-500/50 rounded-lg p-4 mb-6 text-red-400 shadow-lg shadow-red-500/10 animate-pulse">
-            <div className="flex items-center gap-2">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+          <div className="glass-effect border-2 border-red-500/50 rounded-xl p-4 mb-6 text-red-300 shadow-2xl shadow-red-500/20 backdrop-blur-xl bg-red-500/5 animate-pulse">
+            <div className="flex items-center gap-3">
+              <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
               </svg>
-              <span className="font-medium">Error: {error}</span>
+              <span className="font-bold">Error: {error}</span>
             </div>
           </div>
         )}
 
         {loading && (
           <div className="text-center py-12">
-            <div className="inline-flex items-center gap-3 text-gray-400">
-              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <div className="inline-flex items-center gap-3 text-cyan-300">
+              <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
-              <span className="font-medium">Loading market data...</span>
+              <span className="font-bold text-lg">Loading market data...</span>
             </div>
           </div>
         )}
 
-        {/* Main layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Chart - takes 2 columns */}
-          <div className="lg:col-span-2">
-            <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl card-hover">
-              <div className="mb-4">
-                <h2 className="text-xl font-semibold text-gray-200">Price Chart</h2>
-                <p className="text-sm text-gray-400">Real-time candlestick data with trading levels</p>
+          {/* Main layout */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* Chart - takes 2 columns */}
+            <div className="xl:col-span-2 space-y-6">
+              <div className="glass-effect rounded-2xl p-5 sm:p-7 shadow-2xl card-hover border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
+                <div className="mb-5">
+                  <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-2">Price Chart</h2>
+                  <p className="text-sm text-gray-300 font-medium">Real-time candlestick data with trading levels</p>
+                </div>
+                <Chart
+                  candles={candles}
+                  dOpen={levels?.dOpen ?? null}
+                  vwap={levels?.vwap ?? null}
+                  upLevels={levels?.upLevels ?? []}
+                  dnLevels={levels?.dnLevels ?? []}
+                  upper={levels?.upper ?? null}
+                  lower={levels?.lower ?? null}
+                  markers={chartMarkers}
+                  openTrades={openTrades}
+                />
               </div>
-              <Chart
-                candles={candles}
-                dOpen={levels?.dOpen ?? null}
+
+              {/* Order Book Visualization */}
+              <OrderBook symbol={symbol} currentPrice={currentPrice} />
+            </div>
+
+            {/* Right sidebar - Cards, Trade Log, and Activity Log */}
+            <div className="space-y-6">
+              <Cards
+                price={candles.length > 0 ? candles[candles.length - 1].close : null}
+                garchPct={levels?.kPct ?? null}
                 vwap={levels?.vwap ?? null}
-                upLevels={levels?.upLevels ?? []}
-                dnLevels={levels?.dnLevels ?? []}
+                dOpen={levels?.dOpen ?? null}
                 upper={levels?.upper ?? null}
                 lower={levels?.lower ?? null}
-                markers={chartMarkers}
-                openTrades={openTrades}
               />
+              <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} />
+              <ActivityLog logs={activityLogs} maxLogs={50} />
             </div>
           </div>
-
-          {/* Right sidebar - Cards and Trade Log */}
-          <div className="space-y-6">
-            <Cards
-              price={candles.length > 0 ? candles[candles.length - 1].close : null}
-              garchPct={levels ? (levels.upper - levels.lower) / (2 * levels.dOpen) : null}
-              vwap={levels?.vwap ?? null}
-              dOpen={levels?.dOpen ?? null}
-              upper={levels?.upper ?? null}
-              lower={levels?.lower ?? null}
-            />
-            <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} />
-          </div>
-        </div>
 
         {/* Trades Table */}
         <div className="mt-6">
           <TradesTable trades={trades} currentPrice={currentPrice} />
+        </div>
         </div>
       </div>
     </div>
