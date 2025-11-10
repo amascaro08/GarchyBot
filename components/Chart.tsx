@@ -10,6 +10,8 @@ interface ChartProps {
   vwap: number | null;
   upLevels: number[];
   dnLevels: number[];
+  upper: number | null;
+  lower: number | null;
   markers?: Array<{
     time: number;
     position: 'aboveBar' | 'belowBar';
@@ -17,9 +19,25 @@ interface ChartProps {
     shape: 'circle' | 'arrowUp' | 'arrowDown';
     text: string;
   }>;
+  openTrades?: Array<{
+    entry: number;
+    tp: number;
+    sl: number;
+    side: 'LONG' | 'SHORT';
+  }>;
 }
 
-export default function Chart({ candles, dOpen, vwap, upLevels, dnLevels, markers = [] }: ChartProps) {
+export default function Chart({ 
+  candles, 
+  dOpen, 
+  vwap, 
+  upLevels, 
+  dnLevels, 
+  upper,
+  lower,
+  markers = [],
+  openTrades = []
+}: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null);
@@ -67,6 +85,79 @@ export default function Chart({ candles, dOpen, vwap, upLevels, dnLevels, marker
 
     lineSeries.setData(lineData);
 
+    // Add upper and lower bounds (prominent lines)
+    if (upper !== null) {
+      lineSeries.createPriceLine({
+        price: upper,
+        color: '#10b981',
+        lineWidth: 2,
+        lineStyle: 0, // Solid
+        axisLabelVisible: true,
+        title: 'Upper Bound',
+      });
+    }
+
+    if (lower !== null) {
+      lineSeries.createPriceLine({
+        price: lower,
+        color: '#ef4444',
+        lineWidth: 2,
+        lineStyle: 0, // Solid
+        axisLabelVisible: true,
+        title: 'Lower Bound',
+      });
+    }
+
+    // Add zone visualization (4 equal zones)
+    if (upper !== null && lower !== null && dOpen !== null) {
+      const range = upper - lower;
+      const zoneSize = range / 4;
+      
+      // Zone 1: Lower to Lower + zoneSize (red zone)
+      lineSeries.createPriceLine({
+        price: lower + zoneSize,
+        color: '#ef4444',
+        lineWidth: 1,
+        lineStyle: 2, // Dashed
+        axisLabelVisible: true,
+        title: 'Zone 1/4',
+      });
+      
+      // Zone 2: Lower + zoneSize to dOpen (orange zone)
+      if (lower + zoneSize < dOpen) {
+        lineSeries.createPriceLine({
+          price: lower + zoneSize * 2,
+          color: '#f97316',
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: 'Zone 2/4',
+        });
+      }
+      
+      // Zone 3: dOpen to Upper - zoneSize (blue zone)
+      if (dOpen < upper - zoneSize) {
+        lineSeries.createPriceLine({
+          price: upper - zoneSize * 2,
+          color: '#3b82f6',
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: 'Zone 3/4',
+        });
+      }
+      
+      // Zone 4: Upper - zoneSize to Upper (green zone)
+      lineSeries.createPriceLine({
+        price: upper - zoneSize,
+        color: '#10b981',
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: 'Zone 4/4',
+      });
+    }
+
     // Add horizontal lines for dOpen
     if (dOpen !== null) {
       lineSeries.createPriceLine({
@@ -85,7 +176,7 @@ export default function Chart({ candles, dOpen, vwap, upLevels, dnLevels, marker
         price: vwap,
         color: '#10b981',
         lineWidth: 2,
-        lineStyle: 0,
+        lineStyle: 1, // Dotted
         axisLabelVisible: true,
         title: 'VWAP',
       });
@@ -110,6 +201,39 @@ export default function Chart({ candles, dOpen, vwap, upLevels, dnLevels, marker
         lineWidth: 1,
         lineStyle: 2, // Dashed
         axisLabelVisible: false,
+      });
+    });
+
+    // Add TP/SL levels for open trades
+    openTrades.forEach((trade, idx) => {
+      // TP level (green)
+      lineSeries.createPriceLine({
+        price: trade.tp,
+        color: '#10b981',
+        lineWidth: 2,
+        lineStyle: 0,
+        axisLabelVisible: true,
+        title: `TP ${trade.side} ${idx + 1}`,
+      });
+
+      // SL level (red)
+      lineSeries.createPriceLine({
+        price: trade.sl,
+        color: '#ef4444',
+        lineWidth: 2,
+        lineStyle: 0,
+        axisLabelVisible: true,
+        title: `SL ${trade.side} ${idx + 1}`,
+      });
+
+      // Entry level (blue/yellow)
+      lineSeries.createPriceLine({
+        price: trade.entry,
+        color: trade.side === 'LONG' ? '#3b82f6' : '#f59e0b',
+        lineWidth: 1.5,
+        lineStyle: 1, // Dotted
+        axisLabelVisible: true,
+        title: `Entry ${trade.side} ${idx + 1}`,
       });
     });
 
@@ -140,7 +264,7 @@ export default function Chart({ candles, dOpen, vwap, upLevels, dnLevels, marker
       window.removeEventListener('resize', handleResize);
       chart.remove();
     };
-  }, [candles, dOpen, vwap, upLevels, dnLevels, markers]);
+  }, [candles, dOpen, vwap, upLevels, dnLevels, upper, lower, markers, openTrades]);
 
   return <div ref={chartContainerRef} className="w-full h-[600px]" />;
 }

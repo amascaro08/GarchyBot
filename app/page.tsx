@@ -21,6 +21,8 @@ export default function Home() {
   const [sessionPnL, setSessionPnL] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [botRunning, setBotRunning] = useState<boolean>(false);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch klines
   const fetchKlines = async () => {
@@ -209,10 +211,22 @@ export default function Home() {
 
   // Initial load and polling
   useEffect(() => {
-    pollData();
-    const interval = setInterval(pollData, POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [symbol]);
+    if (botRunning) {
+      pollData();
+      const interval = setInterval(pollData, POLL_INTERVAL);
+      pollingIntervalRef.current = interval;
+      return () => {
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
+        }
+      };
+    } else {
+      // Load initial data even when bot is stopped
+      pollData().catch(console.error);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, botRunning]);
 
   // Prepare chart markers from signals
   const chartMarkers =
@@ -228,6 +242,32 @@ export default function Home() {
         ]
       : [];
 
+  // Get open trades for chart visualization
+  const openTrades = trades
+    .filter((t) => t.status === 'open')
+    .map((t) => ({
+      entry: t.entry,
+      tp: t.tp,
+      sl: t.sl,
+      side: t.side,
+    }));
+
+  // Get current price
+  const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
+
+  const handleStartBot = () => {
+    setBotRunning(true);
+    setError(null);
+  };
+
+  const handleStopBot = () => {
+    setBotRunning(false);
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  };
+
   return (
     <div className="min-h-screen text-white p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
@@ -239,20 +279,54 @@ export default function Home() {
           <p className="text-gray-400 text-sm sm:text-base">Real-time trading signals powered by volatility analysis</p>
         </div>
 
-        {/* Symbol selector */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
-          <select
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full sm:w-auto min-w-[200px]"
-          >
-            {SYMBOLS.map((s) => (
-              <option key={s} value={s} className="bg-slate-800">
-                {s}
-              </option>
-            ))}
-          </select>
+        {/* Symbol selector and Bot controls */}
+        <div className="mb-6 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+          <div className="flex-1">
+            <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
+            <select
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+              className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full sm:w-auto min-w-[200px]"
+            >
+              {SYMBOLS.map((s) => (
+                <option key={s} value={s} className="bg-slate-800">
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="flex gap-3 items-end">
+            {!botRunning ? (
+              <button
+                onClick={handleStartBot}
+                className="glass-effect rounded-lg px-6 py-2.5 bg-green-500/20 text-green-400 border border-green-500/30 font-semibold hover:bg-green-500/30 transition-all duration-200 flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Start Bot
+              </button>
+            ) : (
+              <button
+                onClick={handleStopBot}
+                className="glass-effect rounded-lg px-6 py-2.5 bg-red-500/20 text-red-400 border border-red-500/30 font-semibold hover:bg-red-500/30 transition-all duration-200 flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10h6v4H9z" />
+                </svg>
+                Stop Bot
+              </button>
+            )}
+            {botRunning && (
+              <div className="flex items-center gap-2 text-green-400">
+                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                <span className="text-sm font-medium">Running</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {error && (
@@ -293,7 +367,10 @@ export default function Home() {
                 vwap={levels?.vwap ?? null}
                 upLevels={levels?.upLevels ?? []}
                 dnLevels={levels?.dnLevels ?? []}
+                upper={levels?.upper ?? null}
+                lower={levels?.lower ?? null}
                 markers={chartMarkers}
+                openTrades={openTrades}
               />
             </div>
           </div>
@@ -308,7 +385,7 @@ export default function Home() {
               upper={levels?.upper ?? null}
               lower={levels?.lower ?? null}
             />
-            <TradeLog trades={trades} sessionPnL={sessionPnL} />
+            <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} />
           </div>
         </div>
       </div>
