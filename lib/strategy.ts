@@ -35,16 +35,34 @@ export function dailyOpenUTC(candles: Candle[]): number {
  * Calculate VWAP from OHLCV candles
  * VWAP = Σ((H+L+C)/3 * Volume) / Σ(Volume)
  * Uses typical price = (High + Low + Close) / 3
+ * Only includes candles from the start of the current day (UTC midnight)
  */
 export function vwapFromOHLCV(candles: Candle[]): number {
   if (candles.length === 0) {
     throw new Error('No candles provided');
   }
 
+  // Find the UTC midnight timestamp for the current day
+  const now = candles[candles.length - 1].ts;
+  const nowDate = new Date(now);
+  const utcMidnight = new Date(Date.UTC(
+    nowDate.getUTCFullYear(),
+    nowDate.getUTCMonth(),
+    nowDate.getUTCDate(),
+    0, 0, 0, 0
+  ));
+  const utcMidnightTs = utcMidnight.getTime();
+
+  // Filter candles to only include those from the start of the current day
+  const dailyCandles = candles.filter(candle => candle.ts >= utcMidnightTs);
+
+  // If no candles from today, fall back to all candles (shouldn't happen in practice)
+  const candlesToUse = dailyCandles.length > 0 ? dailyCandles : candles;
+
   let totalPriceVolume = 0;
   let totalVolume = 0;
 
-  for (const candle of candles) {
+  for (const candle of candlesToUse) {
     // FIX: use (H + L + C) / 3 — standard typical price
     const typicalPrice = (candle.high + candle.low + candle.close) / 3;
     totalPriceVolume += typicalPrice * candle.volume;
