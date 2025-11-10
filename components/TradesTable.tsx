@@ -2,13 +2,19 @@
 
 import { Trade } from './TradeLog';
 import { formatCurrencyNoSymbol } from '@/lib/format';
+import { useState } from 'react';
+import TradeDetailsModal from './TradeDetailsModal';
 
 interface TradesTableProps {
   trades: Trade[];
   currentPrice: number | null;
+  onCloseTrade?: (trade: Trade) => void;
 }
 
-export default function TradesTable({ trades, currentPrice }: TradesTableProps) {
+export default function TradesTable({ trades, currentPrice, onCloseTrade }: TradesTableProps) {
+  const [closingTrade, setClosingTrade] = useState<Trade | null>(null);
+  const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
     return date.toLocaleString('en-US', {
@@ -65,6 +71,28 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
     }
   };
 
+  const handleCloseTrade = async (trade: Trade) => {
+    if (!onCloseTrade) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to manually close this ${trade.side} trade at ${currentPrice?.toFixed(2) || 'current price'}?`
+    );
+
+    if (confirmed) {
+      setClosingTrade(trade);
+      try {
+        await onCloseTrade(trade);
+      } finally {
+        setClosingTrade(null);
+      }
+    }
+  };
+
+  const handleTradeClick = (trade: Trade) => {
+    setSelectedTrade(trade);
+    setShowDetailsModal(true);
+  };
+
   if (trades.length === 0) {
     return (
       <div className="glass-effect rounded-xl p-8 shadow-2xl border-slate-700/50 text-center">
@@ -91,6 +119,7 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
               <th className="text-center py-3 px-4 text-sm font-semibold text-gray-300">Outcome</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300">Realized P&L</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300">Unrealized P&L</th>
+              <th className="text-center py-3 px-4 text-sm font-semibold text-gray-300">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -107,7 +136,12 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
                   }`}
                 >
                   <td className="py-3 px-4 text-sm font-medium text-white">
-                    {trade.symbol || '—'}
+                    <button
+                      onClick={() => handleTradeClick(trade)}
+                      className="hover:text-cyan-400 transition-colors underline decoration-transparent hover:decoration-current"
+                    >
+                      {trade.symbol || '—'}
+                    </button>
                   </td>
                   <td className="py-3 px-4 text-sm text-gray-300 font-mono">
                     {formatTime(trade.time)}
@@ -171,12 +205,34 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
                       <span className="text-sm text-gray-500">—</span>
                     )}
                   </td>
+                  <td className="py-3 px-4 text-center">
+                    {trade.status === 'open' && (
+                      <button
+                        onClick={() => handleCloseTrade(trade)}
+                        disabled={closingTrade === trade}
+                        className="px-2 py-1 text-xs bg-red-500/20 text-red-400 border border-red-500/30 rounded hover:bg-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {closingTrade === trade ? 'Closing...' : 'Close'}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      {/* Trade Details Modal */}
+      <TradeDetailsModal
+        trade={selectedTrade}
+        isOpen={showDetailsModal}
+        onClose={() => {
+          setShowDetailsModal(false);
+          setSelectedTrade(null);
+        }}
+        currentPrice={currentPrice}
+      />
     </div>
   );
 }

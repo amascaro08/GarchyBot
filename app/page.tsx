@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import Link from 'next/link';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
 import TradeLog, { Trade } from '@/components/TradeLog';
@@ -498,7 +499,10 @@ export default function Home() {
               positionSize: Number(t.position_size),
               exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
             }));
-            setTrades(dbTrades);
+            // Only set trades if we don't already have them (avoid overwriting active trades)
+            if (trades.length === 0) {
+              setTrades(dbTrades);
+            }
           }
           
           // Load session P&L
@@ -809,6 +813,35 @@ export default function Home() {
     }
   };
 
+  const handleManualCloseTrade = async (trade: Trade) => {
+    try {
+      const exitPrice = currentPrice || trade.entry; // Use current price or entry if no current price
+
+      setTrades((prevTrades) =>
+        prevTrades.map((t) =>
+          t === trade
+            ? { ...t, status: 'breakeven', exitPrice, exitTime: new Date().toISOString() }
+            : t
+        )
+      );
+
+      // Calculate P&L
+      const positionSize = trade.positionSize || 0;
+      const pnl = trade.side === 'LONG'
+        ? (exitPrice - trade.entry) * positionSize
+        : (trade.entry - exitPrice) * positionSize;
+
+      setSessionPnL((prev) => prev + pnl);
+      setDailyPnL((prev) => prev + pnl);
+
+      addLog('warning', `Trade manually closed: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}, P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to close trade';
+      setError(errorMsg);
+      addLog('error', errorMsg);
+    }
+  };
+
   return (
     <div className="min-h-screen text-white flex">
       {/* Sidebar - Desktop: fixed left, Mobile: slide-out */}
@@ -982,7 +1015,13 @@ export default function Home() {
 
         {/* Trades Table */}
         <div className="mt-6">
-          <TradesTable trades={trades} currentPrice={currentPrice} />
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-white">Recent Trades</h2>
+            <Link href="/history" className="text-cyan-400 hover:text-cyan-300 transition-colors text-sm">
+              View Full History →
+            </Link>
+          </div>
+          <TradesTable trades={trades} currentPrice={currentPrice} onCloseTrade={handleManualCloseTrade} />
         </div>
         </div>
       </div>

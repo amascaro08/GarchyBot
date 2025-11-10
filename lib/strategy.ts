@@ -78,6 +78,8 @@ export function strictSignalWithDailyOpen(params: {
   dnLevels: number[];
   noTradeBandPct: number;
   useDailyOpenEntry?: boolean; // Enable/disable daily open entries (default: true)
+  kPct?: number; // Add kPct parameter
+  subdivisions?: number; // Add subdivisions parameter
 }): {
   side: 'LONG' | 'SHORT' | null;
   entry: number | null;
@@ -85,7 +87,7 @@ export function strictSignalWithDailyOpen(params: {
   sl: number | null;
   reason: string;
 } {
-  const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct, useDailyOpenEntry = true } = params;
+  const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct, useDailyOpenEntry = true, kPct = 0.03, subdivisions = 5 } = params;
 
   if (candles.length === 0) {
     return { side: null, entry: null, tp: null, sl: null, reason: 'No candles' };
@@ -132,9 +134,9 @@ export function strictSignalWithDailyOpen(params: {
     // Check if bar touches daily open first (entry at daily open, which is between daily open and U1)
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
-      // If long opens between daily open and U1 (at daily open): TP at U1, SL at D1
-      const tp = upLevels.length > 0 ? upLevels[0] : dOpen * 1.01; // U1
-      const sl = dnLevels.length > 0 ? dnLevels[0] : dOpen * 0.99; // D1
+      // If long opens at daily open: TP at U1, SL at D1
+      const tp = upLevels.length > 0 ? upLevels[0] : dOpen + (dOpen * kPct / subdivisions); // U1
+      const sl = dnLevels.length > 0 ? dnLevels[0] : dOpen - (dOpen * kPct / subdivisions); // D1
 
       return {
         side: 'LONG',
@@ -208,9 +210,9 @@ export function strictSignalWithDailyOpen(params: {
     // Check if bar touches daily open
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
-      // If short opens between daily open and D1: TP at D1, SL at U1
-      const tp = dnLevels.length > 0 ? dnLevels[0] : dOpen * 0.99; // D1
-      const sl = upLevels.length > 0 ? upLevels[0] : dOpen * 1.01; // U1
+      // If short opens at daily open: TP at D1, SL at U1
+      const tp = dnLevels.length > 0 ? dnLevels[0] : dOpen - (dOpen * kPct / subdivisions); // D1
+      const sl = upLevels.length > 0 ? upLevels[0] : dOpen + (dOpen * kPct / subdivisions); // U1
 
       return {
         side: 'SHORT',
