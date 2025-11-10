@@ -593,7 +593,7 @@ export default function Home() {
       />
 
       {/* Main Content */}
-      <div className="flex-1 lg:ml-0 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
+      <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
         <div className="max-w-[1600px] mx-auto">
           {/* Header */}
           <div className="mb-6 lg:mb-8 relative">

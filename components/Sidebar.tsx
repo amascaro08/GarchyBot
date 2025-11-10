@@ -82,10 +82,10 @@ export default function Sidebar({
 
   return (
     <>
-      {/* Mobile menu button */}
+      {/* Hamburger menu button - visible on all screen sizes */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="lg:hidden fixed top-4 right-4 z-50 glass-effect rounded-xl p-3 border-2 border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 to-purple-500/10 backdrop-blur-xl shadow-lg"
+        className="fixed top-4 right-4 z-50 glass-effect rounded-xl p-3 border-2 border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 to-purple-500/10 backdrop-blur-xl shadow-lg hover:shadow-xl hover:border-cyan-500/50 transition-all duration-300"
       >
         <svg className="w-6 h-6 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           {isOpen ? (
@@ -96,29 +96,29 @@ export default function Sidebar({
         </svg>
       </button>
 
-      {/* Overlay for mobile */}
+      {/* Overlay for mobile and desktop when sidebar is open */}
       {isOpen && (
         <div
-          className="lg:hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
           onClick={() => setIsOpen(false)}
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar - hidden by default on all screen sizes */}
       <aside
         className={`
-          fixed lg:sticky top-0 left-0 h-screen lg:h-auto
-          w-80 lg:w-full
-          z-40 lg:z-auto
+          fixed top-0 left-0 h-screen
+          w-80 lg:w-96
+          z-40
           transform transition-transform duration-300 ease-in-out
-          ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          ${isOpen ? 'translate-x-0' : '-translate-x-full'}
           overflow-y-auto custom-scrollbar
           glass-effect border-r-2 border-slate-700/50 bg-slate-900/95 backdrop-blur-xl
         `}
       >
         <div className="p-4 sm:p-6 space-y-6">
           {/* Header */}
-          <div className="flex items-center justify-between lg:hidden">
+          <div className="flex items-center justify-between">
             <h2 className="text-xl font-black text-gradient-animated">Settings</h2>
             <button
               onClick={() => setIsOpen(false)}
