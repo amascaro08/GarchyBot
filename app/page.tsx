@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
 import TradeLog, { Trade } from '@/components/TradeLog';
@@ -296,52 +296,86 @@ export default function Home() {
         </div>
 
         {/* Symbol selector and Bot controls */}
-        <div className="mb-6 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-          <div className="flex-1">
-            <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
-            <select
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-              className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full sm:w-auto min-w-[200px]"
-            >
-              {SYMBOLS.map((s) => (
-                <option key={s} value={s} className="bg-slate-800">
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-          
-          <div className="flex gap-3 items-end">
-            {!botRunning ? (
-              <button
-                onClick={handleStartBot}
-                className="glass-effect rounded-lg px-6 py-2.5 bg-green-500/20 text-green-400 border border-green-500/30 font-semibold hover:bg-green-500/30 transition-all duration-200 flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Start Bot
-              </button>
-            ) : (
-              <button
-                onClick={handleStopBot}
-                className="glass-effect rounded-lg px-6 py-2.5 bg-red-500/20 text-red-400 border border-red-500/30 font-semibold hover:bg-red-500/30 transition-all duration-200 flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10h6v4H9z" />
-                </svg>
-                Stop Bot
-              </button>
-            )}
-            {botRunning && (
-              <div className="flex items-center gap-2 text-green-400">
-                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                <span className="text-sm font-medium">Running</span>
+        <div className="mb-6 space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
+                <select
+                  value={symbol}
+                  onChange={(e) => setSymbol(e.target.value)}
+                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
+                >
+                  {SYMBOLS.map((s) => (
+                    <option key={s} value={s} className="bg-slate-800">
+                      {s}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
+              
+              <div>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Max Trades</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={maxTrades}
+                  onChange={(e) => setMaxTrades(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Leverage</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  value={leverage}
+                  onChange={(e) => setLeverage(Math.max(1, Math.min(100, parseFloat(e.target.value) || 1)))}
+                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+            </div>
+            
+            <div className="flex gap-3 items-end">
+              {!botRunning ? (
+                <button
+                  onClick={handleStartBot}
+                  className="glass-effect rounded-lg px-6 py-2.5 bg-green-500/20 text-green-400 border border-green-500/30 font-semibold hover:bg-green-500/30 transition-all duration-200 flex items-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Start Bot
+                </button>
+              ) : (
+                <button
+                  onClick={handleStopBot}
+                  className="glass-effect rounded-lg px-6 py-2.5 bg-red-500/20 text-red-400 border border-red-500/30 font-semibold hover:bg-red-500/30 transition-all duration-200 flex items-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10h6v4H9z" />
+                  </svg>
+                  Stop Bot
+                </button>
+              )}
+              {botRunning && (
+                <div className="flex items-center gap-2 text-green-400">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                  <span className="text-sm font-medium">Running</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2 text-xs text-gray-400">
+            <span>Open Trades: {trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
+            <span>•</span>
+            <span>Leverage: {leverage}x</span>
           </div>
         </div>
 
@@ -403,6 +437,11 @@ export default function Home() {
             />
             <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} />
           </div>
+        </div>
+
+        {/* Trades Table */}
+        <div className="mt-6">
+          <TradesTable trades={trades} currentPrice={currentPrice} />
         </div>
       </div>
     </div>
