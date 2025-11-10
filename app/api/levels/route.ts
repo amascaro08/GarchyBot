@@ -11,7 +11,8 @@ export async function POST(request: NextRequest) {
 
     // Fetch recent klines using the interval from request (default to 5m if not provided)
     const interval = (body.interval as string) || '5';
-    const candles = await getKlines(validated.symbol, interval as any, 288, true);
+    const testnet = body.testnet !== undefined ? body.testnet : false; // Use testnet from request, default to false
+    const candles = await getKlines(validated.symbol, interval as any, 288, testnet);
 
     // Calculate daily open, VWAP, and grid levels
     const dOpen = dailyOpenUTC(candles);

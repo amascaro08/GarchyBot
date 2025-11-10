@@ -95,14 +95,25 @@ export default function Home() {
       const res = await fetch('/api/levels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, kPct, subdivisions: SUBDIVISIONS, interval: candleInterval }),
+        body: JSON.stringify({ 
+          symbol, 
+          kPct, 
+          subdivisions: SUBDIVISIONS, 
+          interval: candleInterval,
+          testnet: false, // Match the testnet setting used for klines
+        }),
       });
-      if (!res.ok) throw new Error('Failed to fetch levels');
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to fetch levels');
+      }
       const data = await res.json();
       setLevels(data);
       return data;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch levels');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to fetch levels';
+      setError(errorMsg);
+      console.error('fetchLevels error:', err);
       throw err;
     }
   };
@@ -131,8 +142,12 @@ export default function Home() {
     }
   };
 
-  // Main polling function
+  // Main polling function - uses current symbol/interval from closure
   const pollData = async () => {
+    // Capture current values to ensure we use latest
+    const currentSymbol = symbol;
+    const currentInterval = candleInterval;
+    
     try {
       setLoading(true);
       setError(null);
@@ -144,12 +159,26 @@ export default function Home() {
         return;
       }
 
+      // Verify symbol hasn't changed during fetch
+      if (currentSymbol !== symbol) {
+        console.log('Symbol changed during fetch, aborting');
+        setLoading(false);
+        return;
+      }
+
       // Calculate volatility from daily closes (use last 30 days if available)
       const closes = candlesData.map((c: Candle) => c.close);
       const kPct = await calculateVol(closes);
 
-      // Fetch levels
+      // Fetch levels - ensure we use current symbol and interval
       const levelsData = await fetchLevels(kPct);
+      
+      // Verify levels match current symbol (double check)
+      if (levelsData.symbol !== symbol || symbol !== currentSymbol) {
+        console.warn('Levels symbol mismatch, skipping update');
+        setLoading(false);
+        return;
+      }
 
       // Calculate signal
       const signalData = await calculateSignal(candlesData, kPct);
@@ -245,9 +274,81 @@ export default function Home() {
     setSignal(null);
     setCandles([]);
 
+    // Create a function that uses current symbol/interval values
+    const loadData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // Fetch klines with current symbol and interval
+        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+        const klinesData = await res.json();
+        
+        if (!res.ok || !klinesData || !Array.isArray(klinesData) || klinesData.length === 0) {
+          setLoading(false);
+          return;
+        }
+
+        setCandles(klinesData);
+
+        // Calculate volatility
+        const closes = klinesData.map((c: Candle) => c.close);
+        const volRes = await fetch('/api/vol', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, closes }),
+        });
+        const volData = await volRes.json();
+        const kPct = volData.k_pct || 0.02;
+
+        // Fetch levels with current symbol and interval
+        const levelsRes = await fetch('/api/levels', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            symbol, 
+            kPct, 
+            subdivisions: SUBDIVISIONS, 
+            interval: candleInterval,
+            testnet: false,
+          }),
+        });
+        const levelsData = await levelsRes.json();
+        
+        // Only update if symbol still matches (prevent race conditions)
+        if (levelsData.symbol === symbol) {
+          setLevels(levelsData);
+        }
+
+        // Calculate signal
+        const signalRes = await fetch('/api/signal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            symbol,
+            kPct,
+            subdivisions: SUBDIVISIONS,
+            noTradeBandPct: NO_TRADE_BAND_PCT,
+            candles: klinesData,
+          }),
+        });
+        const signalData = await signalRes.json();
+        if (signalData.symbol === symbol) {
+          setSignal(signalData);
+        }
+
+        setLoading(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load data');
+        setLoading(false);
+      }
+    };
+
     if (botRunning) {
-      pollData();
-      const intervalId = setInterval(pollData, POLL_INTERVAL);
+      loadData();
+      const intervalId = setInterval(() => {
+        pollData();
+      }, POLL_INTERVAL);
       pollingIntervalRef.current = intervalId;
       return () => {
         if (pollingIntervalRef.current) {
@@ -257,9 +358,8 @@ export default function Home() {
       };
     } else {
       // Load initial data even when bot is stopped
-      pollData().catch(console.error);
+      loadData();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, candleInterval, botRunning]);
 
   // Prepare chart markers from signals
