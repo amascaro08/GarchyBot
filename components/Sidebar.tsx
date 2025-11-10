@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { formatCurrency } from '@/lib/format';
 
 interface SidebarProps {
   symbol: string;
@@ -278,9 +279,9 @@ export default function Sidebar({
               <div className="glass-effect rounded-xl px-5 py-3 border-2 border-purple-500/40 bg-gradient-to-br from-purple-500/10 to-pink-500/10 backdrop-blur-xl">
                 <div className="text-xs text-purple-300 mb-1 font-bold uppercase tracking-wider">Risk Per Trade</div>
                 <div className="text-lg font-black text-purple-200 bg-gradient-to-r from-purple-300 to-pink-300 bg-clip-text text-transparent">
-                  ${riskType === 'percent' 
-                    ? ((capital * riskAmount) / 100).toFixed(2)
-                    : riskAmount.toFixed(2)}
+                  {formatCurrency(riskType === 'percent' 
+                    ? (capital * riskAmount) / 100 
+                    : riskAmount)}
                 </div>
               </div>
             </div>
@@ -299,12 +300,12 @@ export default function Sidebar({
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-gray-400">Today's P&L</span>
                 <span className={`text-lg font-bold ${dailyPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}
+                  {dailyPnL >= 0 ? '+' : ''}{formatCurrency(dailyPnL).replace('$', '')}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">Target: ${dailyTargetValue.toFixed(2)}</span>
-                <span className="text-gray-500">Stop: -${dailyStopValue.toFixed(2)}</span>
+                <span className="text-gray-500">Target: {formatCurrency(dailyTargetValue).replace('$', '')}</span>
+                <span className="text-gray-500">Stop: -{formatCurrency(dailyStopValue).replace('$', '')}</span>
               </div>
             </div>
 

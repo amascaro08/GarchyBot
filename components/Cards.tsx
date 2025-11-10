@@ -1,5 +1,7 @@
 'use client';
 
+import { formatCurrency } from '@/lib/format';
+
 interface CardsProps {
   price: number | null;
   garchPct: number | null;
@@ -10,16 +12,16 @@ interface CardsProps {
 }
 
 export default function Cards({ price, garchPct, vwap, dOpen, upper, lower }: CardsProps) {
-  const formatPrice = (val: number | null) => (val !== null ? val.toFixed(2) : '—');
+  // Format percentage
   const formatPct = (val: number | null) => (val !== null ? `${(val * 100).toFixed(2)}%` : '—');
 
   const cardData = [
-    { label: 'Price', value: formatPrice(price), color: 'text-white', bgGradient: 'from-blue-500/20 to-blue-600/20', borderColor: 'border-blue-500/30' },
+    { label: 'Price', value: formatCurrency(price), color: 'text-white', bgGradient: 'from-blue-500/20 to-blue-600/20', borderColor: 'border-blue-500/30' },
     { label: 'GARCH %', value: formatPct(garchPct), color: 'text-blue-400', bgGradient: 'from-purple-500/20 to-purple-600/20', borderColor: 'border-purple-500/30' },
-    { label: 'VWAP', value: formatPrice(vwap), color: 'text-green-400', bgGradient: 'from-green-500/20 to-green-600/20', borderColor: 'border-green-500/30' },
-    { label: 'Daily Open', value: formatPrice(dOpen), color: 'text-yellow-400', bgGradient: 'from-yellow-500/20 to-yellow-600/20', borderColor: 'border-yellow-500/30' },
-    { label: 'Upper', value: formatPrice(upper), color: 'text-teal-400', bgGradient: 'from-teal-500/20 to-teal-600/20', borderColor: 'border-teal-500/30' },
-    { label: 'Lower', value: formatPrice(lower), color: 'text-orange-400', bgGradient: 'from-orange-500/20 to-orange-600/20', borderColor: 'border-orange-500/30' },
+    { label: 'VWAP', value: formatCurrency(vwap), color: 'text-green-400', bgGradient: 'from-green-500/20 to-green-600/20', borderColor: 'border-green-500/30' },
+    { label: 'Daily Open', value: formatCurrency(dOpen), color: 'text-yellow-400', bgGradient: 'from-yellow-500/20 to-yellow-600/20', borderColor: 'border-yellow-500/30' },
+    { label: 'Upper', value: formatCurrency(upper), color: 'text-teal-400', bgGradient: 'from-teal-500/20 to-teal-600/20', borderColor: 'border-teal-500/30' },
+    { label: 'Lower', value: formatCurrency(lower), color: 'text-orange-400', bgGradient: 'from-orange-500/20 to-orange-600/20', borderColor: 'border-orange-500/30' },
   ];
 
   return (

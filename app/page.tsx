@@ -693,7 +693,7 @@ export default function Home() {
             <div className="space-y-6">
               <Cards
                 price={candles.length > 0 ? candles[candles.length - 1].close : null}
-                garchPct={levels ? (levels.upper - levels.lower) / (2 * levels.dOpen) : null}
+                garchPct={levels?.kPct ?? null}
                 vwap={levels?.vwap ?? null}
                 dOpen={levels?.dOpen ?? null}
                 upper={levels?.upper ?? null}

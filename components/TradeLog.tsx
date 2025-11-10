@@ -1,5 +1,7 @@
 'use client';
 
+import { formatCurrency } from '@/lib/format';
+
 export interface Trade {
   time: string;
   side: 'LONG' | 'SHORT';
@@ -21,7 +23,6 @@ interface TradeLogProps {
 }
 
 export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogProps) {
-  const formatPrice = (val: number) => val.toFixed(2);
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -68,7 +69,7 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
               ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
               : 'bg-red-500/20 text-red-400 border border-red-500/30'
           }`}>
-            {sessionPnL >= 0 ? '+' : ''}{sessionPnL.toFixed(2)}
+            {sessionPnL >= 0 ? '+' : ''}{formatCurrency(sessionPnL).replace('$', '')}
           </div>
           {totalUnrealizedPnL !== 0 && (
             <div className={`text-sm font-semibold px-3 py-1 rounded ${
@@ -76,7 +77,7 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
                 ? 'bg-green-500/10 text-green-300 border border-green-500/20' 
                 : 'bg-red-500/10 text-red-300 border border-red-500/20'
             }`}>
-              Unrealized: {totalUnrealizedPnL >= 0 ? '+' : ''}{totalUnrealizedPnL.toFixed(2)}
+              Unrealized: {totalUnrealizedPnL >= 0 ? '+' : ''}{formatCurrency(totalUnrealizedPnL).replace('$', '')}
             </div>
           )}
         </div>
@@ -87,7 +88,7 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
           <div className={`text-2xl font-bold ${
             totalUnrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
           }`}>
-            {totalUnrealizedPnL >= 0 ? '+' : ''}{totalUnrealizedPnL.toFixed(2)}
+            {totalUnrealizedPnL >= 0 ? '+' : ''}{formatCurrency(totalUnrealizedPnL).replace('$', '')}
           </div>
         </div>
         <div className="glass-effect rounded-lg p-4 border border-yellow-500/30 bg-yellow-500/10">

@@ -32,7 +32,8 @@ export function garch11(closes: number[], multiplier: number = 1.0): number {
   }
 
   // Convert to daily percentage move (1 standard deviation)
-  const dailyVol = Math.sqrt(variance) * Math.sqrt(252); // Annualize then convert to daily
+  // Variance is already in daily terms (from daily returns), so just take sqrt
+  const dailyVol = Math.sqrt(variance);
   const kPct = dailyVol * multiplier;
 
   // Clamp between 1% and 10%
@@ -62,7 +63,8 @@ export function ewmaVolatility(closes: number[], multiplier: number = 1.0, lambd
   }
 
   // Convert to daily percentage move
-  const dailyVol = Math.sqrt(ewmaVar) * Math.sqrt(252);
+  // Variance is already in daily terms (from daily returns), so just take sqrt
+  const dailyVol = Math.sqrt(ewmaVar);
   const kPct = dailyVol * multiplier;
 
   // Clamp between 1% and 10%
