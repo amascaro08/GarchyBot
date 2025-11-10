@@ -29,7 +29,8 @@ export const LevelsResponseSchema = z.object({
   lower: z.number(),
   upLevels: z.array(z.number()),
   dnLevels: z.array(z.number()),
-  vwap: z.number(),
+  vwap: z.number(), // Current VWAP (for backward compatibility)
+  vwapLine: z.array(z.number().nullable()), // Progressive VWAP values per candle
   dataSource: z.string().optional(), // For debugging
 });
 

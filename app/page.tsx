@@ -769,6 +769,7 @@ export default function Home() {
                   candles={candles}
                   dOpen={levels?.dOpen ?? null}
                   vwap={levels?.vwap ?? null}
+                  vwapLine={levels?.vwapLine}
                   upLevels={levels?.upLevels ?? []}
                   dnLevels={levels?.dnLevels ?? []}
                   upper={levels?.upper ?? null}

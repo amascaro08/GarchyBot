@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time, IPriceLine } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine } from 'lightweight-charts';
 import type { Candle } from '@/lib/types';
 
 interface ChartProps {
   candles: Candle[];
   dOpen: number | null;
-  vwap: number | null;
+  vwap: number | null; // Current VWAP (for backward compatibility)
+  vwapLine?: (number | null)[]; // Progressive VWAP values per candle
   upLevels: number[];
   dnLevels: number[];
   upper: number | null;
@@ -31,6 +32,7 @@ export default function Chart({
   candles, 
   dOpen, 
   vwap, 
+  vwapLine,
   upLevels, 
   dnLevels, 
   upper,
@@ -41,6 +43,7 @@ export default function Chart({
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastProcessedRef = useRef<string>('');
 
@@ -83,6 +86,19 @@ export default function Chart({
       });
       seriesRef.current = candlestickSeries;
 
+      // Add VWAP line series
+      const vwapLineSeries = chart.addLineSeries({
+        color: '#8b5cf6', // Purple to distinguish from other lines
+        lineWidth: 2,
+        priceFormat: {
+          type: 'price',
+          precision: 2,
+          minMove: 0.01,
+        },
+        title: 'VWAP',
+      });
+      vwapSeriesRef.current = vwapLineSeries;
+
       // Handle resize
       const handleResize = () => {
         if (chartContainerRef.current && chartRef.current) {
@@ -97,6 +113,7 @@ export default function Chart({
         chart.remove();
         chartRef.current = null;
         seriesRef.current = null;
+        vwapSeriesRef.current = null;
         priceLinesRef.current = [];
       };
     }
@@ -134,6 +151,7 @@ export default function Chart({
       upLevels: upLevels.slice().sort(),
       dnLevels: dnLevels.slice().sort(),
       openTrades: openTrades.map(t => `${t.entry}-${t.tp}-${t.sl}-${t.side}`).sort(),
+      vwapLineLength: vwapLine?.length,
     });
 
     // Only update price lines if the signature has changed
@@ -195,8 +213,9 @@ export default function Chart({
       priceLinesRef.current.push(line);
     }
 
-    // Add VWAP - make it more distinct (purple, thick line)
-    if (vwap !== null && !isNaN(vwap) && vwap > 0 && seriesRef.current) {
+    // VWAP is now displayed as a line series, not a price line
+    // Only show static VWAP price line if vwapLine is not available (fallback)
+    if ((!vwapLine || vwapLine.length === 0) && vwap !== null && !isNaN(vwap) && vwap > 0 && seriesRef.current) {
       const line = seriesRef.current.createPriceLine({
         price: vwap,
         color: '#8b5cf6', // Purple to distinguish from other green lines
@@ -292,7 +311,27 @@ export default function Chart({
         seriesRef.current.setMarkers([]);
       }
     }
-  }, [candles, dOpen, vwap, upLevels, dnLevels, upper, lower, markers, openTrades]);
+  }, [candles, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
+
+  // Update VWAP line independently whenever candles or vwapLine changes
+  useEffect(() => {
+    if (!vwapSeriesRef.current || !candles || candles.length === 0) {
+      return;
+    }
+
+    if (vwapLine && candles.length === vwapLine.length) {
+      const vwapData: LineData<Time>[] = candles
+        .map((candle, idx) => ({
+          time: (candle.ts / 1000) as Time,
+          value: vwapLine[idx],
+        }))
+        .filter((point): point is LineData<Time> => point.value !== null && !isNaN(point.value));
+      
+      if (vwapData.length > 0) {
+        vwapSeriesRef.current.setData(vwapData);
+      }
+    }
+  }, [candles, vwapLine]);
 
   return <div ref={chartContainerRef} className="w-full h-[600px]" />;
 }

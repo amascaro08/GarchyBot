@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { LevelsRequestSchema } from '@/lib/types';
 import { getKlines } from '@/lib/bybit';
-import { dailyOpenUTC, vwapFromOHLCV, gridLevels } from '@/lib/strategy';
+import { dailyOpenUTC, vwapFromOHLCV, vwapLineFromOHLCV, gridLevels } from '@/lib/strategy';
 import { garch11 } from '@/lib/vol';
 
 export async function POST(request: NextRequest) {
@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
 
     const dOpen = dailyOpenUTC(intradayAsc);
     const vwap = vwapFromOHLCV(intradayAsc);
+    const vwapLine = vwapLineFromOHLCV(intradayAsc);
     const { upper, lower, upLevels, dnLevels } = gridLevels(dOpen, kPct, validated.subdivisions);
 
     return NextResponse.json({
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest) {
       kPct, // Expose kPct here
       dOpen,
       vwap,
+      vwapLine,
       upper,
       lower,
       upLevels,

@@ -78,6 +78,60 @@ export function vwapFromOHLCV(candles: Candle[]): number {
 }
 
 /**
+ * Calculate progressive VWAP values for each candle
+ * Returns an array of VWAP values, one per candle
+ * VWAP is calculated from the start of the current day (UTC midnight) up to each candle
+ * Candles before midnight will have null VWAP values
+ */
+export function vwapLineFromOHLCV(candles: Candle[]): (number | null)[] {
+  if (candles.length === 0) {
+    return [];
+  }
+
+  // Find the UTC midnight timestamp for the current day
+  const now = candles[candles.length - 1].ts;
+  const nowDate = new Date(now);
+  const utcMidnight = new Date(Date.UTC(
+    nowDate.getUTCFullYear(),
+    nowDate.getUTCMonth(),
+    nowDate.getUTCDate(),
+    0, 0, 0, 0
+  ));
+  const utcMidnightTs = utcMidnight.getTime();
+
+  const vwapValues: (number | null)[] = [];
+  let cumulativePriceVolume = 0;
+  let cumulativeVolume = 0;
+
+  for (let i = 0; i < candles.length; i++) {
+    const candle = candles[i];
+
+    // If candle is before midnight, VWAP is null
+    if (candle.ts < utcMidnightTs) {
+      vwapValues.push(null);
+      continue;
+    }
+
+    // Calculate typical price for this candle
+    const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+
+    // Add this candle's contribution to cumulative totals
+    cumulativePriceVolume += typicalPrice * candle.volume;
+    cumulativeVolume += candle.volume;
+
+    // Calculate VWAP up to this point
+    if (cumulativeVolume === 0) {
+      // Fallback to close if no volume
+      vwapValues.push(candle.close);
+    } else {
+      vwapValues.push(cumulativePriceVolume / cumulativeVolume);
+    }
+  }
+
+  return vwapValues;
+}
+
+/**
  * Generate grid levels around daily open
  * Returns upper/lower bounds and arrays of levels
  */
