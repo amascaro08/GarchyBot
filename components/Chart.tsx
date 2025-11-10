@@ -238,10 +238,10 @@ export default function Chart({
     }
 
     // Add upper levels (U1-U5) - ensure they're visible
-    if (upLevels.length > 0) {
+    if (upLevels.length > 0 && seriesRef.current) {
       upLevels.forEach((level, idx) => {
         if (!isNaN(level) && level > 0) {
-          const line = seriesRef.current.createPriceLine({
+          const line = seriesRef.current!.createPriceLine({
             price: level,
             color: '#14b8a6',
             lineWidth: 2,
@@ -255,10 +255,10 @@ export default function Chart({
     }
 
     // Add lower levels (D1-D5) - ensure they're visible
-    if (dnLevels.length > 0) {
+    if (dnLevels.length > 0 && seriesRef.current) {
       dnLevels.forEach((level, idx) => {
         if (!isNaN(level) && level > 0) {
-          const line = seriesRef.current.createPriceLine({
+          const line = seriesRef.current!.createPriceLine({
             price: level,
             color: '#f97316',
             lineWidth: 2,
