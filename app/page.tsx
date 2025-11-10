@@ -65,6 +65,8 @@ export default function Home() {
     return new Date().toISOString().split('T')[0];
   });
   const [activityLogs, setActivityLogs] = useState<LogEntry[]>([]);
+  const [garchMode, setGarchMode] = useState<'auto' | 'custom'>('auto');
+  const [customKPct, setCustomKPct] = useState<number>(0.03); // Default 3% (0.03 as decimal)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Helper function to add log entries (memoized to avoid dependency warnings)
@@ -181,6 +183,7 @@ export default function Home() {
           symbol, 
           subdivisions: SUBDIVISIONS,
           testnet: true, // Default to testnet
+          ...(garchMode === 'custom' && { customKPct }),
         }),
       });
       if (!res.ok) {
@@ -459,6 +462,7 @@ export default function Home() {
             symbol, 
             subdivisions: SUBDIVISIONS,
             testnet: true, // Default to testnet
+            ...(garchMode === 'custom' && { customKPct }),
           }),
         });
         
@@ -483,7 +487,7 @@ export default function Home() {
     };
 
     loadLevels();
-  }, [symbol, addLog]); // Only refetch levels when symbol changes
+  }, [symbol, garchMode, customKPct, addLog]); // Refetch levels when symbol or GARCH settings change
 
   // Initial load and polling - handles candles, signals, and interval changes
   useEffect(() => {
@@ -531,6 +535,7 @@ export default function Home() {
             symbol, 
             subdivisions: SUBDIVISIONS,
             testnet: true, // Default to testnet
+            ...(garchMode === 'custom' && { customKPct }),
           }),
         });
         
@@ -683,6 +688,10 @@ export default function Home() {
         onStopBot={handleStopBot}
         symbols={SYMBOLS}
         intervals={INTERVALS}
+        garchMode={garchMode}
+        setGarchMode={setGarchMode}
+        customKPct={customKPct}
+        setCustomKPct={setCustomKPct}
       />
 
       {/* Main Content */}
@@ -769,6 +778,7 @@ export default function Home() {
                   candles={candles}
                   dOpen={levels?.dOpen ?? null}
                   vwap={levels?.vwap ?? null}
+                  vwapLine={levels?.vwapLine}
                   upLevels={levels?.upLevels ?? []}
                   dnLevels={levels?.dnLevels ?? []}
                   upper={levels?.upper ?? null}
