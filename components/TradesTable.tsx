@@ -23,22 +23,22 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
   const calculateUnrealizedPnL = (trade: Trade): number | null => {
     if (trade.status !== 'open' || currentPrice === null) return null;
     
-    const leverage = trade.leverage || 1;
+    const positionSize = trade.positionSize || 0;
     if (trade.side === 'LONG') {
-      return (currentPrice - trade.entry) * leverage;
+      return (currentPrice - trade.entry) * positionSize;
     } else {
-      return (trade.entry - currentPrice) * leverage;
+      return (trade.entry - currentPrice) * positionSize;
     }
   };
 
   const calculateRealizedPnL = (trade: Trade): number | null => {
     if (trade.status === 'open' || !trade.exitPrice) return null;
     
-    const leverage = trade.leverage || 1;
+    const positionSize = trade.positionSize || 0;
     if (trade.side === 'LONG') {
-      return (trade.exitPrice - trade.entry) * leverage;
+      return (trade.exitPrice - trade.entry) * positionSize;
     } else {
-      return (trade.entry - trade.exitPrice) * leverage;
+      return (trade.entry - trade.exitPrice) * positionSize;
     }
   };
 
@@ -84,6 +84,7 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300">Time</th>
               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300">Side</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300">Entry</th>
+              <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300">Position Size</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300">TP Level</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300">SL Level</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300">Exit</th>
@@ -124,6 +125,9 @@ export default function TradesTable({ trades, currentPrice }: TradesTableProps) 
                   </td>
                   <td className="py-3 px-4 text-sm text-white text-right font-mono">
                     {formatPrice(trade.entry)}
+                  </td>
+                  <td className="py-3 px-4 text-sm text-gray-300 text-right font-mono">
+                    {trade.positionSize ? `$${trade.positionSize.toFixed(2)}` : '—'}
                   </td>
                   <td className="py-3 px-4 text-sm text-green-400 text-right font-mono">
                     {formatPrice(trade.tp)}

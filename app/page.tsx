@@ -14,6 +14,9 @@ const SUBDIVISIONS = 5;
 const NO_TRADE_BAND_PCT = 0.001;
 const DEFAULT_MAX_TRADES = 3;
 const DEFAULT_LEVERAGE = 1;
+const DEFAULT_CAPITAL = 10000;
+const DEFAULT_RISK_AMOUNT = 100;
+const DEFAULT_RISK_TYPE = 'fixed'; // 'fixed' or 'percent'
 const INTERVALS = [
   { value: '1', label: '1m' },
   { value: '3', label: '3m' },
@@ -38,6 +41,9 @@ export default function Home() {
   const [maxTrades, setMaxTrades] = useState<number>(DEFAULT_MAX_TRADES);
   const [leverage, setLeverage] = useState<number>(DEFAULT_LEVERAGE);
   const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
+  const [capital, setCapital] = useState<number>(DEFAULT_CAPITAL);
+  const [riskAmount, setRiskAmount] = useState<number>(DEFAULT_RISK_AMOUNT);
+  const [riskType, setRiskType] = useState<'fixed' | 'percent'>(DEFAULT_RISK_TYPE);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch klines
@@ -186,22 +192,40 @@ export default function Home() {
       // Check for new signal and add to trade log
       // Only enter trades if bot is running AND we have valid signal
       if (botRunning && signalData && signalData.signal && signalData.touchedLevel) {
-        // Check max trades limit
-        const openTradesCount = trades.filter((t) => t.status === 'open').length;
-        if (openTradesCount >= maxTrades) {
-          console.log(`Max trades limit reached (${maxTrades}). Skipping new signal.`);
-          setLoading(false);
-          return;
-        }
+        // Use functional update to get current trades state
+        setTrades((prevTrades) => {
+          // Check max trades limit with current state
+          const openTrades = prevTrades.filter((t) => t.status === 'open');
+          if (openTrades.length >= maxTrades) {
+            console.log(`Max trades limit reached (${maxTrades}). Skipping new signal.`);
+            return prevTrades;
+          }
 
-        const lastTrade = trades[trades.length - 1];
-        const isNewSignal =
-          !lastTrade ||
-          lastTrade.time !== new Date().toISOString() ||
-          lastTrade.entry !== signalData.touchedLevel ||
-          lastTrade.symbol !== symbol; // Also check if symbol changed
+          // Check if there's already an open trade at this exact level/symbol/side
+          // This prevents duplicate entries on small price fluctuations
+          const duplicateTrade = openTrades.find(
+            (t) =>
+              t.symbol === symbol &&
+              t.side === signalData.signal &&
+              Math.abs(t.entry - signalData.touchedLevel!) < 0.01 // Allow small tolerance for floating point
+          );
 
-        if (isNewSignal) {
+          if (duplicateTrade) {
+            console.log(`Duplicate trade detected at level ${signalData.touchedLevel}. Skipping.`);
+            return prevTrades;
+          }
+
+          // Calculate position size based on risk management
+          const riskPerTrade = riskType === 'percent' 
+            ? (capital * riskAmount) / 100 
+            : riskAmount;
+          
+          // Calculate position size: risk amount / (entry - stop loss)
+          const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
+          const positionSize = stopLossDistance > 0 
+            ? riskPerTrade / stopLossDistance 
+            : 0;
+
           const newTrade: Trade = {
             time: new Date().toISOString(),
             side: signalData.signal,
@@ -212,9 +236,11 @@ export default function Home() {
             status: 'open',
             symbol: symbol,
             leverage: leverage,
+            positionSize: positionSize,
           };
-          setTrades((prev) => [...prev, newTrade]);
-        }
+          
+          return [...prevTrades, newTrade];
+        });
       }
 
       // Simulate TP/SL checks for open trades
@@ -245,13 +271,13 @@ export default function Home() {
               }
             }
 
-            // Update P&L (with leverage)
+            // Update P&L (with position size)
             if (newStatus !== 'open' && exitPrice) {
-              const tradeLeverage = trade.leverage || 1;
+              const positionSize = trade.positionSize || 0;
               const pnl =
                 trade.side === 'LONG'
-                  ? (exitPrice - trade.entry) * tradeLeverage
-                  : (trade.entry - exitPrice) * tradeLeverage;
+                  ? (exitPrice - trade.entry) * positionSize
+                  : (trade.entry - exitPrice) * positionSize;
               setSessionPnL((prev) => prev + pnl);
             }
 
@@ -505,6 +531,66 @@ export default function Home() {
               )}
             </div>
           </div>
+          
+          {/* Risk Management Controls */}
+          <div className="glass-effect rounded-lg p-4 border border-slate-700/50">
+            <h3 className="text-sm font-semibold text-gray-300 mb-3">Risk Management</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs font-medium mb-2 text-gray-400">Capital ($)</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={capital}
+                  onChange={(e) => setCapital(Math.max(1, parseFloat(e.target.value) || 1))}
+                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-2 text-gray-400">Risk Type</label>
+                <select
+                  value={riskType}
+                  onChange={(e) => setRiskType(e.target.value as 'fixed' | 'percent')}
+                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
+                >
+                  <option value="fixed" className="bg-slate-800">Fixed $</option>
+                  <option value="percent" className="bg-slate-800">% of Capital</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-2 text-gray-400">
+                  Risk {riskType === 'percent' ? '(%)' : '($)'}
+                </label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step={riskType === 'percent' ? "0.1" : "1"}
+                  value={riskAmount}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value) || 0;
+                    if (riskType === 'percent') {
+                      setRiskAmount(Math.max(0.01, Math.min(100, val)));
+                    } else {
+                      setRiskAmount(Math.max(0.01, val));
+                    }
+                  }}
+                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                />
+              </div>
+              <div className="flex items-end">
+                <div className="glass-effect rounded-lg px-4 py-2 w-full border border-purple-500/30 bg-purple-500/10">
+                  <div className="text-xs text-gray-400 mb-1">Risk Per Trade</div>
+                  <div className="text-sm font-semibold text-purple-300">
+                    ${riskType === 'percent' 
+                      ? ((capital * riskAmount) / 100).toFixed(2)
+                      : riskAmount.toFixed(2)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
           <div className="flex gap-2 text-xs text-gray-400">
             <span>Open Trades: {trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
             <span>•</span>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time, IPriceLine } from 'lightweight-charts';
 import type { Candle } from '@/lib/types';
 
 interface ChartProps {
@@ -41,7 +41,7 @@ export default function Chart({
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
-  const priceLinesRef = useRef<Array<{ remove: () => void }>>([]);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -111,7 +111,9 @@ export default function Chart({
     // Clear all existing price lines
     priceLinesRef.current.forEach(line => {
       try {
-        line.remove();
+        if (line && typeof (line as any).remove === 'function') {
+          (line as any).remove();
+        }
       } catch (e) {
         // Ignore errors if line was already removed
       }
