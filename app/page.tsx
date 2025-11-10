@@ -25,13 +25,17 @@ export default function Home() {
   // Fetch klines
   const fetchKlines = async () => {
     try {
-      const res = await fetch(`/api/klines?symbol=${symbol}&interval=5&limit=200&testnet=true`);
-      if (!res.ok) throw new Error('Failed to fetch klines');
+      const res = await fetch(`/api/klines?symbol=${symbol}&interval=5&limit=200&testnet=false`);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to fetch klines');
+      }
       const data = await res.json();
       setCandles(data);
       return data;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch klines');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to fetch klines';
+      setError(errorMsg);
       throw err;
     }
   };

@@ -50,18 +50,35 @@ export async function getKlines(
 
     clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      throw new BybitError(response.status, `HTTP ${response.status}`);
+    // Try to parse response body even if status is not ok
+    let data: BybitKlineResponse | BybitError;
+    try {
+      data = await response.json();
+    } catch (e) {
+      // If JSON parsing fails, throw with HTTP status
+      if (!response.ok) {
+        throw new BybitError(response.status, `HTTP ${response.status}: ${response.statusText}`);
+      }
+      throw new BybitError(-1, 'Failed to parse response');
     }
 
-    const data: BybitKlineResponse = await response.json();
+    // Check if it's an error response
+    if ('retCode' in data && data.retCode !== 0) {
+      throw new BybitError(data.retCode, data.retMsg || `HTTP ${response.status}`);
+    }
 
-    if (data.retCode !== 0) {
-      throw new BybitError(data.retCode, data.retMsg);
+    // If HTTP status is not ok but we got a response, check retCode
+    if (!response.ok) {
+      const errorData = data as BybitError;
+      throw new BybitError(
+        response.status,
+        errorData.retMsg || `HTTP ${response.status}: ${response.statusText}`
+      );
     }
 
     // Bybit returns newest first, so reverse to get oldest first
-    const reversed = [...(data.result.list || [])].reverse();
+    const klineData = data as BybitKlineResponse;
+    const reversed = [...(klineData.result.list || [])].reverse();
 
     return reversed.map((item) => ({
       ts: parseInt(item[0]),
