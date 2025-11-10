@@ -9,29 +9,31 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const validated = LevelsRequestSchema.parse(body);
+    const testnet = body.testnet !== undefined ? body.testnet : true; // Default to testnet
 
-    // Always use daily candles (interval 'D' = 1 day) for calculating daily open and levels
-    // The user's selected interval is only for display, not for level calculation
-    const candles = await getKlines(validated.symbol, 'D', 30, body.testnet !== undefined ? body.testnet : false);
+    // 1) Get DAILY closes (server-side) for kPct
+    const daily = await getKlines(validated.symbol, 'D', 60, testnet);
+    const dailyAsc = daily.slice().reverse(); // Ensure ascending order
+    const dailyCloses = dailyAsc.map(c => c.close);
+    const kPct = garch11(dailyCloses); // Clamps internally 1–10%
 
-    // Calculate volatility from daily closes (not from user's selected interval)
-    // Use provided kPct if available, otherwise calculate from daily candles
-    const dailyCloses = candles.map(c => c.close);
-    const kPct = validated.kPct || garch11(dailyCloses);
+    // 2) Get intraday for dOpen + vwap + levels
+    const intraday = await getKlines(validated.symbol, '5', 288, testnet);
+    const intradayAsc = intraday.slice().reverse(); // Ensure ascending order
 
-    // Calculate daily open, VWAP, and grid levels using the daily-calculated volatility
-    const dOpen = dailyOpenUTC(candles);
-    const vwap = vwapFromOHLCV(candles);
+    const dOpen = dailyOpenUTC(intradayAsc);
+    const vwap = vwapFromOHLCV(intradayAsc);
     const { upper, lower, upLevels, dnLevels } = gridLevels(dOpen, kPct, validated.subdivisions);
 
     return NextResponse.json({
       symbol: validated.symbol,
+      kPct, // Expose kPct here
       dOpen,
+      vwap,
       upper,
       lower,
       upLevels,
       dnLevels,
-      vwap,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

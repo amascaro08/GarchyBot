@@ -6,6 +6,8 @@ import Cards from '@/components/Cards';
 import TradeLog, { Trade } from '@/components/TradeLog';
 import TradesTable from '@/components/TradesTable';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
+import { applyBreakeven } from '@/lib/strategy';
+import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = 'BTCUSDT';
@@ -44,13 +46,15 @@ export default function Home() {
   const [capital, setCapital] = useState<number>(DEFAULT_CAPITAL);
   const [riskAmount, setRiskAmount] = useState<number>(DEFAULT_RISK_AMOUNT);
   const [riskType, setRiskType] = useState<'fixed' | 'percent'>(DEFAULT_RISK_TYPE);
+  const [useOrderBookConfirm, setUseOrderBookConfirm] = useState<boolean>(true);
+  const [kPct, setKPct] = useState<number>(3); // Will be filled by /levels
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch klines
   const fetchKlines = async () => {
     try {
-      // Use mainnet by default (more reliable for public data)
-      const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+      // Use testnet by default
+      const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
       
       let data;
       try {
@@ -78,24 +82,7 @@ export default function Home() {
     }
   };
 
-  // Calculate volatility
-  const calculateVol = async (closes: number[]) => {
-    try {
-      const res = await fetch('/api/vol', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, closes }),
-      });
-      if (!res.ok) throw new Error('Failed to calculate volatility');
-      const data = await res.json();
-      return data.k_pct;
-    } catch (err) {
-      console.error('Vol calculation error:', err);
-      return 0.02; // Default 2%
-    }
-  };
-
-  // Fetch levels - volatility is calculated internally from daily candles
+  // Fetch levels - volatility (kPct) is calculated internally from daily candles
   const fetchLevels = async () => {
     try {
       const res = await fetch('/api/levels', {
@@ -103,9 +90,8 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           symbol, 
-          subdivisions: SUBDIVISIONS, 
-          // Note: kPct and interval are not needed - levels always use daily candles
-          testnet: false, // Match the testnet setting used for klines
+          subdivisions: SUBDIVISIONS,
+          testnet: true, // Default to testnet
         }),
       });
       if (!res.ok) {
@@ -114,6 +100,7 @@ export default function Home() {
       }
       const data = await res.json();
       setLevels(data);
+      setKPct(data.kPct); // Store kPct from levels
       return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch levels';
@@ -171,67 +158,97 @@ export default function Home() {
         return;
       }
 
-      // Levels are fetched separately when symbol changes - they don't change during polling
-      // Calculate volatility from selected interval candles for signal calculation
-      // Signal uses selected interval to check if price touches the fixed levels
-      const closes = candlesData.map((c: Candle) => c.close);
-      const kPct = await calculateVol(closes);
+      // Get levels (includes kPct) - refresh to ensure we have latest VWAP
+      const lv = await fetchLevels();
+      const lastClose = candlesData.length > 0 ? candlesData[candlesData.length - 1].close : NaN;
 
-      // Calculate signal
-      const signalData = await calculateSignal(candlesData, kPct);
+      // Apply breakeven to open trades (if any)
+      setTrades((prev) =>
+        prev.map((t) => {
+          if (t.status !== 'open') return t;
+          const newSL = applyBreakeven(t.side, t.entry, t.sl, lastClose, lv.vwap);
+          return newSL !== t.sl ? { ...t, sl: newSL } : t;
+        })
+      );
+
+      // Calculate signal using THE SAME kPct from levels
+      const signalData = await calculateSignal(candlesData, lv.kPct);
 
       // Check for new signal and add to trade log
       // Only enter trades if bot is running AND we have valid signal
       if (botRunning && signalData && signalData.signal && signalData.touchedLevel) {
-        // Use functional update to get current trades state
-        setTrades((prevTrades) => {
-          // Check max trades limit with current state
-          const openTrades = prevTrades.filter((t) => t.status === 'open');
-          if (openTrades.length >= maxTrades) {
-            console.log(`Max trades limit reached (${maxTrades}). Skipping new signal.`);
-            return prevTrades;
+        // Optional order-book confirmation
+        let approved = true;
+        if (useOrderBookConfirm) {
+          try {
+            approved = await confirmLevelTouch({
+              symbol,
+              level: signalData.touchedLevel,
+              side: signalData.signal,
+              windowMs: 8000,
+              minNotional: 50_000, // tune
+              proximityBps: 5, // 5 bps proximity to level
+            });
+          } catch (err) {
+            console.error('Order-book confirmation error:', err);
+            approved = false; // Fail-safe: reject if confirmation fails
           }
+        }
 
-          // Check if there's already an open trade at this exact level/symbol/side
-          // This prevents duplicate entries on small price fluctuations
-          const duplicateTrade = openTrades.find(
-            (t) =>
-              t.symbol === symbol &&
-              t.side === signalData.signal &&
-              Math.abs(t.entry - signalData.touchedLevel!) < 0.01 // Allow small tolerance for floating point
-          );
+        if (approved) {
+          // Use functional update to get current trades state
+          setTrades((prevTrades) => {
+            // Check max trades limit with current state
+            const openTrades = prevTrades.filter((t) => t.status === 'open');
+            if (openTrades.length >= maxTrades) {
+              console.log(`Max trades limit reached (${maxTrades}). Skipping new signal.`);
+              return prevTrades;
+            }
 
-          if (duplicateTrade) {
-            console.log(`Duplicate trade detected at level ${signalData.touchedLevel}. Skipping.`);
-            return prevTrades;
-          }
+            // Check if there's already an open trade at this exact level/symbol/side
+            // This prevents duplicate entries on small price fluctuations
+            const duplicateTrade = openTrades.find(
+              (t) =>
+                t.symbol === symbol &&
+                t.side === signalData.signal &&
+                Math.abs(t.entry - signalData.touchedLevel!) < 0.01 // Allow small tolerance for floating point
+            );
 
-          // Calculate position size based on risk management
-          const riskPerTrade = riskType === 'percent' 
-            ? (capital * riskAmount) / 100 
-            : riskAmount;
-          
-          // Calculate position size: risk amount / (entry - stop loss)
-          const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
-          const positionSize = stopLossDistance > 0 
-            ? riskPerTrade / stopLossDistance 
-            : 0;
+            if (duplicateTrade) {
+              console.log(`Duplicate trade detected at level ${signalData.touchedLevel}. Skipping.`);
+              return prevTrades;
+            }
 
-          const newTrade: Trade = {
-            time: new Date().toISOString(),
-            side: signalData.signal,
-            entry: signalData.touchedLevel!,
-            tp: signalData.tp!,
-            sl: signalData.sl!,
-            reason: signalData.reason,
-            status: 'open',
-            symbol: symbol,
-            leverage: leverage,
-            positionSize: positionSize,
-          };
-          
-          return [...prevTrades, newTrade];
-        });
+            // Calculate position size based on risk management
+            const riskPerTrade = riskType === 'percent' 
+              ? (capital * riskAmount) / 100 
+              : riskAmount;
+            
+            // Calculate position size: risk amount / (entry - stop loss)
+            // Note: Position size is in base units, not leveraged
+            const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
+            const positionSize = stopLossDistance > 0 
+              ? riskPerTrade / stopLossDistance 
+              : 0;
+
+            const newTrade: Trade = {
+              time: new Date().toISOString(),
+              side: signalData.signal,
+              entry: signalData.touchedLevel!,
+              tp: signalData.tp!,
+              sl: signalData.sl!,
+              reason: signalData.reason,
+              status: 'open',
+              symbol: symbol,
+              leverage: leverage,
+              positionSize: positionSize,
+            };
+            
+            return [...prevTrades, newTrade];
+          });
+        } else {
+          console.log(`Signal rejected by order-book confirmation: ${signalData.reason}`);
+        }
       }
 
       // Simulate TP/SL checks for open trades
@@ -284,6 +301,12 @@ export default function Home() {
     }
   };
 
+  // Start/stop order book on symbol change
+  useEffect(() => {
+    startOrderBook(symbol);
+    return () => stopOrderBook(symbol);
+  }, [symbol]);
+
   // Fetch levels when symbol changes (levels are based on daily candles, independent of interval)
   useEffect(() => {
     const loadLevels = async () => {
@@ -293,15 +316,15 @@ export default function Home() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             symbol, 
-            subdivisions: SUBDIVISIONS, 
-            // kPct is calculated internally from daily candles
-            testnet: false,
+            subdivisions: SUBDIVISIONS,
+            testnet: true, // Default to testnet
           }),
         });
         const levelsData = await levelsRes.json();
         
         if (levelsData.symbol === symbol) {
           setLevels(levelsData);
+          setKPct(levelsData.kPct); // Store kPct from levels
         }
       } catch (err) {
         console.error('Failed to load levels:', err);
@@ -334,24 +357,29 @@ export default function Home() {
 
         setCandles(klinesData);
 
-        // Calculate volatility from selected interval candles for signal calculation only
-        // Signal uses selected interval to check if price touches the fixed levels
-        const closes = klinesData.map((c: Candle) => c.close);
-        const volRes = await fetch('/api/vol', {
+        // Get levels (includes kPct) - use the unified kPct from levels API
+        const levelsRes = await fetch('/api/levels', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol, closes }),
+          body: JSON.stringify({ 
+            symbol, 
+            subdivisions: SUBDIVISIONS,
+            testnet: true, // Default to testnet
+          }),
         });
-        const volData = await volRes.json();
-        const kPct = volData.k_pct || 0.02;
+        const levelsData = await levelsRes.json();
+        if (levelsData.symbol === symbol) {
+          setLevels(levelsData);
+          setKPct(levelsData.kPct);
+        }
 
-        // Calculate signal
+        // Calculate signal using kPct from levels
         const signalRes = await fetch('/api/signal', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             symbol,
-            kPct,
+            kPct: levelsData.kPct || kPct, // Use kPct from levels
             subdivisions: SUBDIVISIONS,
             noTradeBandPct: NO_TRADE_BAND_PCT,
             candles: klinesData,
@@ -594,12 +622,33 @@ export default function Home() {
             </div>
           </div>
           
+          {/* Order Book Confirmation Toggle */}
+          <div className="glass-effect rounded-lg p-4 border border-slate-700/50">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-300 mb-1">Order Book Confirmation</h3>
+                <p className="text-xs text-gray-400">Require order-book imbalance/wall before entering trades</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useOrderBookConfirm}
+                  onChange={(e) => setUseOrderBookConfirm(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+          </div>
+          
           <div className="flex gap-2 text-xs text-gray-400">
             <span>Open Trades: {trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
             <span>•</span>
             <span>Leverage: {leverage}x</span>
             <span>•</span>
             <span>Interval: {INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</span>
+            {levels && <span>•</span>}
+            {levels && <span>k%: {(levels.kPct * 100).toFixed(2)}%</span>}
           </div>
         </div>
 

@@ -33,7 +33,8 @@ export function dailyOpenUTC(candles: Candle[]): number {
 
 /**
  * Calculate VWAP from OHLCV candles
- * VWAP = Σ((O+H+C)/3 * Volume) / Σ(Volume)
+ * VWAP = Σ((H+L+C)/3 * Volume) / Σ(Volume)
+ * Uses typical price = (High + Low + Close) / 3
  */
 export function vwapFromOHLCV(candles: Candle[]): number {
   if (candles.length === 0) {
@@ -44,7 +45,8 @@ export function vwapFromOHLCV(candles: Candle[]): number {
   let totalVolume = 0;
 
   for (const candle of candles) {
-    const typicalPrice = (candle.open + candle.high + candle.low) / 3;
+    // FIX: use (H + L + C) / 3 — standard typical price
+    const typicalPrice = (candle.high + candle.low + candle.close) / 3;
     totalPriceVolume += typicalPrice * candle.volume;
     totalVolume += candle.volume;
   }
@@ -177,7 +179,36 @@ export function strictSignalWithDailyOpen(params: {
 }
 
 /**
+ * Returns true if PRICE (not VWAP) flipped against the trade direction relative to VWAP.
+ * LONG: price flipped if lastClose < vwap
+ * SHORT: price flipped if lastClose > vwap
+ */
+export function priceFlipAgainstVWAP(
+  lastClose: number,
+  vwap: number,
+  side: 'LONG' | 'SHORT'
+): boolean {
+  if (side === 'LONG') return lastClose < vwap;
+  if (side === 'SHORT') return lastClose > vwap;
+  return false;
+}
+
+/**
+ * If price flipped against VWAP, move SL to entry (breakeven). Otherwise keep original SL.
+ */
+export function applyBreakeven(
+  side: 'LONG' | 'SHORT',
+  entry: number,
+  sl: number,
+  lastClose: number,
+  vwap: number
+): number {
+  return priceFlipAgainstVWAP(lastClose, vwap, side) ? entry : sl;
+}
+
+/**
  * Breakeven stop logic: if VWAP flips against open trade, move stop to entry
+ * @deprecated Use applyBreakeven instead
  */
 export function breakevenStopOnVWAPFlip(
   currentVWAP: number,

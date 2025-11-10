@@ -23,6 +23,7 @@ export type LevelsRequest = z.infer<typeof LevelsRequestSchema>;
 
 export const LevelsResponseSchema = z.object({
   symbol: z.string(),
+  kPct: z.number(),
   dOpen: z.number(),
   upper: z.number(),
   lower: z.number(),
