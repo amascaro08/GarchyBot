@@ -37,14 +37,14 @@ export default function Home() {
   const [botRunning, setBotRunning] = useState<boolean>(false);
   const [maxTrades, setMaxTrades] = useState<number>(DEFAULT_MAX_TRADES);
   const [leverage, setLeverage] = useState<number>(DEFAULT_LEVERAGE);
-  const [interval, setInterval] = useState<string>(DEFAULT_INTERVAL);
+  const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch klines
   const fetchKlines = async () => {
     try {
       // Use mainnet by default (more reliable for public data)
-      const res = await fetch(`/api/klines?symbol=${symbol}&interval=${interval}&limit=200&testnet=false`);
+      const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
       
       let data;
       try {
@@ -95,7 +95,7 @@ export default function Home() {
       const res = await fetch('/api/levels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, kPct, subdivisions: SUBDIVISIONS, interval }),
+        body: JSON.stringify({ symbol, kPct, subdivisions: SUBDIVISIONS, interval: candleInterval }),
       });
       if (!res.ok) throw new Error('Failed to fetch levels');
       const data = await res.json();
@@ -253,7 +253,7 @@ export default function Home() {
       pollData().catch(console.error);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, interval, botRunning]);
+  }, [symbol, candleInterval, botRunning]);
 
   // Prepare chart markers from signals
   const chartMarkers =
@@ -328,8 +328,8 @@ export default function Home() {
               <div>
                 <label className="block text-sm font-medium mb-2 text-gray-300">Interval</label>
                 <select
-                  value={interval}
-                  onChange={(e) => setInterval(e.target.value)}
+                  value={candleInterval}
+                  onChange={(e) => setCandleInterval(e.target.value)}
                   className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
                 >
                   {INTERVALS.map((int) => (
@@ -403,7 +403,7 @@ export default function Home() {
             <span>•</span>
             <span>Leverage: {leverage}x</span>
             <span>•</span>
-            <span>Interval: {INTERVALS.find(i => i.value === interval)?.label || interval}</span>
+            <span>Interval: {INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</span>
           </div>
         </div>
 
