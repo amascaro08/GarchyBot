@@ -63,6 +63,32 @@ export default function Home() {
   });
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Calculate daily limits
+  const dailyTargetValue = useMemo(() => {
+    return dailyTargetType === 'percent' 
+      ? (capital * dailyTargetAmount) / 100 
+      : dailyTargetAmount;
+  }, [dailyTargetType, dailyTargetAmount, capital]);
+
+  const dailyStopValue = useMemo(() => {
+    return dailyStopType === 'percent' 
+      ? (capital * dailyStopAmount) / 100 
+      : dailyStopAmount;
+  }, [dailyStopType, dailyStopAmount, capital]);
+
+  // Check if daily limits are hit
+  const isDailyTargetHit = useMemo(() => {
+    return dailyPnL >= dailyTargetValue && dailyTargetValue > 0;
+  }, [dailyPnL, dailyTargetValue]);
+
+  const isDailyStopHit = useMemo(() => {
+    return dailyPnL <= -dailyStopValue && dailyStopValue > 0;
+  }, [dailyPnL, dailyStopValue]);
+
+  const canTrade = useMemo(() => {
+    return !isDailyTargetHit && !isDailyStopHit;
+  }, [isDailyTargetHit, isDailyStopHit]);
+
   // Auto-stop bot when daily limits are hit
   useEffect(() => {
     if (botRunning && !canTrade) {
@@ -91,32 +117,6 @@ export default function Home() {
     const interval = setInterval(checkDailyReset, 60000);
     return () => clearInterval(interval);
   }, [dailyStartDate]);
-
-  // Calculate daily limits
-  const dailyTargetValue = useMemo(() => {
-    return dailyTargetType === 'percent' 
-      ? (capital * dailyTargetAmount) / 100 
-      : dailyTargetAmount;
-  }, [dailyTargetType, dailyTargetAmount, capital]);
-
-  const dailyStopValue = useMemo(() => {
-    return dailyStopType === 'percent' 
-      ? (capital * dailyStopAmount) / 100 
-      : dailyStopAmount;
-  }, [dailyStopType, dailyStopAmount, capital]);
-
-  // Check if daily limits are hit
-  const isDailyTargetHit = useMemo(() => {
-    return dailyPnL >= dailyTargetValue && dailyTargetValue > 0;
-  }, [dailyPnL, dailyTargetValue]);
-
-  const isDailyStopHit = useMemo(() => {
-    return dailyPnL <= -dailyStopValue && dailyStopValue > 0;
-  }, [dailyPnL, dailyStopValue]);
-
-  const canTrade = useMemo(() => {
-    return !isDailyTargetHit && !isDailyStopHit;
-  }, [isDailyTargetHit, isDailyStopHit]);
 
   // Fetch klines
   const fetchKlines = async () => {
