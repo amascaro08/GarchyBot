@@ -9,6 +9,8 @@ export interface Trade {
   reason: string;
   status?: 'open' | 'tp' | 'sl' | 'breakeven';
   exitPrice?: number;
+  symbol?: string;
+  leverage?: number;
 }
 
 interface TradeLogProps {
@@ -27,10 +29,11 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
   const calculateUnrealizedPnL = (trade: Trade): number | null => {
     if (trade.status !== 'open' || currentPrice === null) return null;
     
+    const leverage = trade.leverage || 1;
     if (trade.side === 'LONG') {
-      return currentPrice - trade.entry;
+      return (currentPrice - trade.entry) * leverage;
     } else {
-      return trade.entry - currentPrice;
+      return (trade.entry - currentPrice) * leverage;
     }
   };
 

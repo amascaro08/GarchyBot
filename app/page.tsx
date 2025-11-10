@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
 import TradeLog, { Trade } from '@/components/TradeLog';
+import TradesTable from '@/components/TradesTable';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
@@ -11,6 +12,8 @@ const DEFAULT_SYMBOL = 'BTCUSDT';
 const POLL_INTERVAL = 12000; // 12 seconds
 const SUBDIVISIONS = 5;
 const NO_TRADE_BAND_PCT = 0.001;
+const DEFAULT_MAX_TRADES = 3;
+const DEFAULT_LEVERAGE = 1;
 
 export default function Home() {
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
@@ -22,6 +25,8 @@ export default function Home() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [botRunning, setBotRunning] = useState<boolean>(false);
+  const [maxTrades, setMaxTrades] = useState<number>(DEFAULT_MAX_TRADES);
+  const [leverage, setLeverage] = useState<number>(DEFAULT_LEVERAGE);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch klines
@@ -140,6 +145,14 @@ export default function Home() {
 
       // Check for new signal and add to trade log
       if (signalData && signalData.signal && signalData.touchedLevel) {
+        // Check max trades limit
+        const openTradesCount = trades.filter((t) => t.status === 'open').length;
+        if (openTradesCount >= maxTrades) {
+          console.log(`Max trades limit reached (${maxTrades}). Skipping new signal.`);
+          setLoading(false);
+          return;
+        }
+
         const lastTrade = trades[trades.length - 1];
         const isNewSignal =
           !lastTrade ||
@@ -155,6 +168,8 @@ export default function Home() {
             sl: signalData.sl!,
             reason: signalData.reason,
             status: 'open',
+            symbol: symbol,
+            leverage: leverage,
           };
           setTrades((prev) => [...prev, newTrade]);
         }
@@ -188,12 +203,13 @@ export default function Home() {
               }
             }
 
-            // Update P&L
+            // Update P&L (with leverage)
             if (newStatus !== 'open' && exitPrice) {
+              const tradeLeverage = trade.leverage || 1;
               const pnl =
                 trade.side === 'LONG'
-                  ? exitPrice - trade.entry
-                  : trade.entry - exitPrice;
+                  ? (exitPrice - trade.entry) * tradeLeverage
+                  : (trade.entry - exitPrice) * tradeLeverage;
               setSessionPnL((prev) => prev + pnl);
             }
 
