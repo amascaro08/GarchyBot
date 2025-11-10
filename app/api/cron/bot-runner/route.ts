@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
       runningBots.map(async (botConfig) => {
         try {
           console.log(`[CRON] Processing bot for user ${botConfig.user_id}, symbol ${botConfig.symbol}`);
-          console.log(`[CRON] Bot settings - GARCH mode: ${botConfig.garch_mode}, custom k%: ${botConfig.custom_k_pct}, subdivisions: ${botConfig.subdivisions}, risk: ${botConfig.risk_amount} (${botConfig.risk_type}), capital: ${botConfig.capital}`);
+          console.log(`[CRON] Bot settings - GARCH mode: ${botConfig.garch_mode}, custom k%: ${botConfig.custom_k_pct}, subdivisions: ${botConfig.subdivisions}, risk: ${botConfig.risk_amount} (${botConfig.risk_type}), capital: ${botConfig.capital}, daily open entries: ${botConfig.use_daily_open_entry ? 'ENABLED' : 'DISABLED'}`);
           
           // Check daily limits
           const dailyTargetValue = botConfig.daily_target_type === 'percent'
@@ -203,12 +203,23 @@ export async function POST(request: NextRequest) {
                 kPct: levels.kPct,
                 subdivisions: botConfig.subdivisions,
                 noTradeBandPct: botConfig.no_trade_band_pct,
+                useDailyOpenEntry: botConfig.use_daily_open_entry,
                 candles,
               }),
             }
           );
 
           const signal = await signalRes.json();
+
+          // Log if signal is detected
+          if (signal.signal) {
+            console.log(`[CRON] Signal detected - ${signal.signal} at ${signal.touchedLevel?.toFixed(2)}, Reason: ${signal.reason}`);
+            
+            // Check if this is a daily open entry
+            if (signal.reason && signal.reason.includes('daily open')) {
+              console.log(`[CRON] ✓ Daily open entry detected! Price touched ${signal.touchedLevel?.toFixed(2)}`);
+            }
+          }
 
           // Check for new trade signal
           if (signal.signal && signal.touchedLevel) {

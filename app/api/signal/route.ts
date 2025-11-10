@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
       upLevels,
       dnLevels,
       noTradeBandPct: validated.noTradeBandPct,
+      useDailyOpenEntry: body.useDailyOpenEntry ?? true, // Default to true if not specified
     });
 
     return NextResponse.json({
