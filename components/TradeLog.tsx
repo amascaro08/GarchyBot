@@ -9,68 +9,95 @@ export interface Trade {
   reason: string;
   status?: 'open' | 'tp' | 'sl' | 'breakeven';
   exitPrice?: number;
+  symbol?: string;
+  leverage?: number;
+  positionSize?: number;
 }
 
 interface TradeLogProps {
   trades: Trade[];
   sessionPnL: number;
+  currentPrice: number | null;
 }
 
-export default function TradeLog({ trades, sessionPnL }: TradeLogProps) {
+export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogProps) {
   const formatPrice = (val: number) => val.toFixed(2);
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
-    return date.toLocaleTimeString();
+    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
+  const calculateUnrealizedPnL = (trade: Trade): number | null => {
+    if (trade.status !== 'open' || currentPrice === null) return null;
+    
+    const positionSize = trade.positionSize || 0;
+    if (trade.side === 'LONG') {
+      return (currentPrice - trade.entry) * positionSize;
+    } else {
+      return (trade.entry - currentPrice) * positionSize;
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    const badges = {
+      open: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+      tp: 'bg-green-500/20 text-green-400 border-green-500/30',
+      sl: 'bg-red-500/20 text-red-400 border-red-500/30',
+      breakeven: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+    };
+    return badges[status as keyof typeof badges] || badges.open;
+  };
+
+  const openTrades = trades.filter(t => t.status === 'open');
+  const closedTrades = trades.filter(t => t.status !== 'open');
+  const totalUnrealizedPnL = openTrades.reduce((sum, trade) => {
+    const pnl = calculateUnrealizedPnL(trade);
+    return sum + (pnl || 0);
+  }, 0);
+
   return (
-    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold text-white">Trade Log</h3>
-        <div className={`text-lg font-bold ${sessionPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-          P&L: {sessionPnL >= 0 ? '+' : ''}{sessionPnL.toFixed(2)}
+    <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50">
+      <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-700/50">
+        <div>
+          <h3 className="text-xl font-bold text-white mb-1">Trade Summary</h3>
+          <p className="text-xs text-gray-400">Trading statistics</p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <div className={`text-xl sm:text-2xl font-bold px-4 py-2 rounded-lg ${
+            sessionPnL >= 0 
+              ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
+              : 'bg-red-500/20 text-red-400 border border-red-500/30'
+          }`}>
+            {sessionPnL >= 0 ? '+' : ''}{sessionPnL.toFixed(2)}
+          </div>
+          {totalUnrealizedPnL !== 0 && (
+            <div className={`text-sm font-semibold px-3 py-1 rounded ${
+              totalUnrealizedPnL >= 0 
+                ? 'bg-green-500/10 text-green-300 border border-green-500/20' 
+                : 'bg-red-500/10 text-red-300 border border-red-500/20'
+            }`}>
+              Unrealized: {totalUnrealizedPnL >= 0 ? '+' : ''}{totalUnrealizedPnL.toFixed(2)}
+            </div>
+          )}
         </div>
       </div>
-      <div className="space-y-2 max-h-96 overflow-y-auto">
-        {trades.length === 0 ? (
-          <div className="text-gray-400 text-center py-8">No trades yet</div>
-        ) : (
-          trades.map((trade, idx) => (
-            <div
-              key={idx}
-              className={`p-3 rounded border ${
-                trade.side === 'LONG'
-                  ? 'bg-blue-900/20 border-blue-700'
-                  : 'bg-red-900/20 border-red-700'
-              }`}
-            >
-              <div className="flex justify-between items-start mb-1">
-                <span className={`font-semibold ${trade.side === 'LONG' ? 'text-blue-400' : 'text-red-400'}`}>
-                  {trade.side}
-                </span>
-                <span className="text-gray-400 text-sm">{formatTime(trade.time)}</span>
-              </div>
-              <div className="text-sm text-gray-300 space-y-1">
-                <div>Entry: {formatPrice(trade.entry)}</div>
-                <div className="flex gap-4">
-                  <span className="text-green-400">TP: {formatPrice(trade.tp)}</span>
-                  <span className="text-red-400">SL: {formatPrice(trade.sl)}</span>
-                </div>
-                <div className="text-xs text-gray-400 mt-1">{trade.reason}</div>
-                {trade.status && (
-                  <div className={`text-xs font-semibold mt-1 ${
-                    trade.status === 'tp' ? 'text-green-400' :
-                    trade.status === 'sl' ? 'text-red-400' :
-                    'text-yellow-400'
-                  }`}>
-                    Status: {trade.status.toUpperCase()}
-                    {trade.exitPrice && ` @ ${formatPrice(trade.exitPrice)}`}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))
-        )}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="glass-effect rounded-lg p-4 border border-blue-500/30 bg-blue-500/10">
+          <div className="text-xs text-gray-400 mb-1">Unrealized P&L</div>
+          <div className={`text-2xl font-bold ${
+            totalUnrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
+          }`}>
+            {totalUnrealizedPnL >= 0 ? '+' : ''}{totalUnrealizedPnL.toFixed(2)}
+          </div>
+        </div>
+        <div className="glass-effect rounded-lg p-4 border border-yellow-500/30 bg-yellow-500/10">
+          <div className="text-xs text-gray-400 mb-1">Active Trades</div>
+          <div className="text-2xl font-bold text-yellow-400">{openTrades.length}</div>
+        </div>
+        <div className="glass-effect rounded-lg p-4 border border-gray-500/30 bg-gray-500/10">
+          <div className="text-xs text-gray-400 mb-1">Closed Trades</div>
+          <div className="text-2xl font-bold text-gray-300">{closedTrades.length}</div>
+        </div>
       </div>
     </div>
   );
