@@ -171,20 +171,11 @@ export default function Home() {
         return;
       }
 
-      // Fetch levels - volatility is calculated internally from daily candles
-      const levelsData = await fetchLevels();
-      
-      // Get kPct from levels response for signal calculation
-      // Note: Signal calculation still uses the selected interval candles for checking touches
+      // Levels are fetched separately when symbol changes - they don't change during polling
+      // Calculate volatility from selected interval candles for signal calculation
+      // Signal uses selected interval to check if price touches the fixed levels
       const closes = candlesData.map((c: Candle) => c.close);
       const kPct = await calculateVol(closes);
-      
-      // Verify levels match current symbol (double check)
-      if (levelsData.symbol !== symbol || symbol !== currentSymbol) {
-        console.warn('Levels symbol mismatch, skipping update');
-        setLoading(false);
-        return;
-      }
 
       // Calculate signal
       const signalData = await calculateSignal(candlesData, kPct);
@@ -293,10 +284,36 @@ export default function Home() {
     }
   };
 
-  // Initial load and polling
+  // Fetch levels when symbol changes (levels are based on daily candles, independent of interval)
   useEffect(() => {
-    // Reset levels and signal when symbol or interval changes to force refresh
-    setLevels(null);
+    const loadLevels = async () => {
+      try {
+        const levelsRes = await fetch('/api/levels', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            symbol, 
+            subdivisions: SUBDIVISIONS, 
+            // kPct is calculated internally from daily candles
+            testnet: false,
+          }),
+        });
+        const levelsData = await levelsRes.json();
+        
+        if (levelsData.symbol === symbol) {
+          setLevels(levelsData);
+        }
+      } catch (err) {
+        console.error('Failed to load levels:', err);
+      }
+    };
+
+    loadLevels();
+  }, [symbol]); // Only refetch levels when symbol changes
+
+  // Initial load and polling - handles candles, signals, and interval changes
+  useEffect(() => {
+    // Reset signal and candles when symbol or interval changes
     setSignal(null);
     setCandles([]);
 
@@ -306,7 +323,7 @@ export default function Home() {
         setLoading(true);
         setError(null);
 
-        // Fetch klines with current symbol and interval
+        // Fetch klines with current symbol and interval (for display only)
         const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
         const klinesData = await res.json();
         
@@ -317,7 +334,8 @@ export default function Home() {
 
         setCandles(klinesData);
 
-        // Calculate volatility
+        // Calculate volatility from selected interval candles for signal calculation only
+        // Signal uses selected interval to check if price touches the fixed levels
         const closes = klinesData.map((c: Candle) => c.close);
         const volRes = await fetch('/api/vol', {
           method: 'POST',
@@ -326,25 +344,6 @@ export default function Home() {
         });
         const volData = await volRes.json();
         const kPct = volData.k_pct || 0.02;
-
-        // Fetch levels - always uses daily candles regardless of display interval
-        const levelsRes = await fetch('/api/levels', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            symbol, 
-            kPct, 
-            subdivisions: SUBDIVISIONS, 
-            // Note: interval is not needed - levels always use daily candles
-            testnet: false,
-          }),
-        });
-        const levelsData = await levelsRes.json();
-        
-        // Only update if symbol still matches (prevent race conditions)
-        if (levelsData.symbol === symbol) {
-          setLevels(levelsData);
-        }
 
         // Calculate signal
         const signalRes = await fetch('/api/signal', {
@@ -386,7 +385,7 @@ export default function Home() {
       // Load initial data even when bot is stopped
       loadData();
     }
-  }, [symbol, candleInterval, botRunning]);
+  }, [symbol, candleInterval, botRunning]); // Candles and signals depend on interval, but levels don't
 
   // Prepare chart markers from signals - memoize to prevent unnecessary re-renders
   const chartMarkers = useMemo(() => {
