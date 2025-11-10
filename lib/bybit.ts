@@ -358,17 +358,18 @@ export async function getKlines(
 
 /**
  * Place order on Bybit (Testnet or Mainnet)
- * Requires BYBIT_API_KEY and BYBIT_API_SECRET env vars
+ * Can use provided credentials or fall back to env vars
  */
 export async function placeOrder(
   symbol: string,
   side: 'Buy' | 'Sell',
   qty: number,
   price?: number,
-  testnet: boolean = true
+  testnet: boolean = true,
+  credentials?: { apiKey: string; apiSecret: string }
 ): Promise<any> {
-  const apiKey = process.env.BYBIT_API_KEY;
-  const apiSecret = process.env.BYBIT_API_SECRET;
+  const apiKey = credentials?.apiKey || process.env.BYBIT_API_KEY;
+  const apiSecret = credentials?.apiSecret || process.env.BYBIT_API_SECRET;
 
   if (!apiKey || !apiSecret) {
     throw new Error('BYBIT_API_KEY and BYBIT_API_SECRET must be set');
