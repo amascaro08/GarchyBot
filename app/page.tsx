@@ -95,17 +95,16 @@ export default function Home() {
     }
   };
 
-  // Fetch levels
-  const fetchLevels = async (kPct: number) => {
+  // Fetch levels - volatility is calculated internally from daily candles
+  const fetchLevels = async () => {
     try {
       const res = await fetch('/api/levels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           symbol, 
-          kPct, 
           subdivisions: SUBDIVISIONS, 
-          // Note: interval is not needed - levels always use daily candles
+          // Note: kPct and interval are not needed - levels always use daily candles
           testnet: false, // Match the testnet setting used for klines
         }),
       });
@@ -172,12 +171,13 @@ export default function Home() {
         return;
       }
 
-      // Calculate volatility from daily closes (use last 30 days if available)
+      // Fetch levels - volatility is calculated internally from daily candles
+      const levelsData = await fetchLevels();
+      
+      // Get kPct from levels response for signal calculation
+      // Note: Signal calculation still uses the selected interval candles for checking touches
       const closes = candlesData.map((c: Candle) => c.close);
       const kPct = await calculateVol(closes);
-
-      // Fetch levels - ensure we use current symbol and interval
-      const levelsData = await fetchLevels(kPct);
       
       // Verify levels match current symbol (double check)
       if (levelsData.symbol !== symbol || symbol !== currentSymbol) {
