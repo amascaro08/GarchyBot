@@ -1,22 +1,22 @@
-import { createPool } from '@vercel/postgres';
+import { sql as vercelSql } from '@vercel/postgres';
 
 /**
  * Database utility functions for the trading bot
  * Uses STORAGE_POSTGRES_URL from Vercel Storage
+ * 
+ * Note: @vercel/postgres checks these env vars in order:
+ * 1. POSTGRES_URL
+ * 2. Falls back to connection string in process.env
+ * 
+ * To use STORAGE_POSTGRES_URL, we set POSTGRES_URL to it at runtime
  */
 
-// Configure connection - use STORAGE_POSTGRES_URL if POSTGRES_URL not found
-const connectionString = process.env.POSTGRES_URL || process.env.STORAGE_POSTGRES_URL;
-
-if (!connectionString) {
-  throw new Error('Missing database connection string. Set STORAGE_POSTGRES_URL or POSTGRES_URL');
+// Ensure POSTGRES_URL is set from STORAGE_POSTGRES_URL if needed
+if (!process.env.POSTGRES_URL && process.env.STORAGE_POSTGRES_URL) {
+  process.env.POSTGRES_URL = process.env.STORAGE_POSTGRES_URL;
 }
 
-const pool = createPool({
-  connectionString,
-});
-
-export const sql = pool.sql;
+export const sql = vercelSql;
 
 // ============================================
 // TYPE DEFINITIONS
