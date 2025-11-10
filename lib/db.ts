@@ -50,6 +50,7 @@ export interface BotConfig {
   garch_mode: 'auto' | 'custom';
   custom_k_pct: number | null;
   use_orderbook_confirm: boolean;
+  use_daily_open_entry: boolean;
   subdivisions: number;
   no_trade_band_pct: number;
   created_at: Date;
@@ -154,7 +155,7 @@ export async function createBotConfig(userId: string, config: Partial<BotConfig>
         user_id, symbol, candle_interval, is_running, max_trades, leverage,
         capital, risk_amount, risk_type, daily_target_type, daily_target_amount,
         daily_stop_type, daily_stop_amount, garch_mode, custom_k_pct,
-        use_orderbook_confirm, subdivisions, no_trade_band_pct
+        use_orderbook_confirm, use_daily_open_entry, subdivisions, no_trade_band_pct
       ) VALUES (
         ${userId},
         ${config.symbol || 'BTCUSDT'},
@@ -172,6 +173,7 @@ export async function createBotConfig(userId: string, config: Partial<BotConfig>
         ${config.garch_mode || 'auto'},
         ${config.custom_k_pct || 0.03},
         ${config.use_orderbook_confirm !== false},
+        ${config.use_daily_open_entry !== false},
         ${config.subdivisions || 5},
         ${config.no_trade_band_pct || 0.001}
       )

@@ -43,6 +43,12 @@ export async function POST(request: NextRequest) {
 
     console.log('[CRON] Bot runner started at', new Date().toISOString());
 
+    // Build base URL for internal API calls
+    // On Vercel, VERCEL_URL doesn't include protocol, so we need to add https://
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}` 
+      : 'http://localhost:3000';
+
     // Reset daily P&L if new day
     await resetDailyPnL();
 
@@ -62,6 +68,7 @@ export async function POST(request: NextRequest) {
       runningBots.map(async (botConfig) => {
         try {
           console.log(`[CRON] Processing bot for user ${botConfig.user_id}, symbol ${botConfig.symbol}`);
+          console.log(`[CRON] Bot settings - GARCH mode: ${botConfig.garch_mode}, custom k%: ${botConfig.custom_k_pct}, subdivisions: ${botConfig.subdivisions}, risk: ${botConfig.risk_amount} (${botConfig.risk_type}), capital: ${botConfig.capital}, daily open entries: ${botConfig.use_daily_open_entry ? 'ENABLED' : 'DISABLED'}`);
           
           // Check daily limits
           const dailyTargetValue = botConfig.daily_target_type === 'percent'
@@ -86,7 +93,7 @@ export async function POST(request: NextRequest) {
 
           // Fetch current market data
           const klinesRes = await fetch(
-            `${process.env.VERCEL_URL || 'http://localhost:3000'}/api/klines?symbol=${botConfig.symbol}&interval=${botConfig.candle_interval}&limit=200&testnet=false`
+            `${baseUrl}/api/klines?symbol=${botConfig.symbol}&interval=${botConfig.candle_interval}&limit=200&testnet=false`
           );
 
           if (!klinesRes.ok) {
@@ -102,7 +109,7 @@ export async function POST(request: NextRequest) {
 
           // Fetch levels (includes VWAP and k%)
           const levelsRes = await fetch(
-            `${process.env.VERCEL_URL || 'http://localhost:3000'}/api/levels`,
+            `${baseUrl}/api/levels`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -110,7 +117,7 @@ export async function POST(request: NextRequest) {
                 symbol: botConfig.symbol,
                 subdivisions: botConfig.subdivisions,
                 testnet: false,
-                ...(botConfig.garch_mode === 'custom' && { customKPct: botConfig.custom_k_pct }),
+                ...(botConfig.garch_mode === 'custom' && botConfig.custom_k_pct !== null && { customKPct: botConfig.custom_k_pct }),
               }),
             }
           );
@@ -120,6 +127,7 @@ export async function POST(request: NextRequest) {
           }
 
           const levels = await levelsRes.json();
+          console.log(`[CRON] Fetched levels - k%: ${(levels.kPct * 100).toFixed(2)}%, VWAP: ${levels.vwap.toFixed(2)}, Daily Open: ${levels.dOpen.toFixed(2)}`);
 
           // Apply breakeven to open trades
           const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
@@ -186,7 +194,7 @@ export async function POST(request: NextRequest) {
 
           // Calculate signal
           const signalRes = await fetch(
-            `${process.env.VERCEL_URL || 'http://localhost:3000'}/api/signal`,
+            `${baseUrl}/api/signal`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -195,12 +203,23 @@ export async function POST(request: NextRequest) {
                 kPct: levels.kPct,
                 subdivisions: botConfig.subdivisions,
                 noTradeBandPct: botConfig.no_trade_band_pct,
+                useDailyOpenEntry: botConfig.use_daily_open_entry,
                 candles,
               }),
             }
           );
 
           const signal = await signalRes.json();
+
+          // Log if signal is detected
+          if (signal.signal) {
+            console.log(`[CRON] Signal detected - ${signal.signal} at ${signal.touchedLevel?.toFixed(2)}, Reason: ${signal.reason}`);
+            
+            // Check if this is a daily open entry
+            if (signal.reason && signal.reason.includes('daily open')) {
+              console.log(`[CRON] ✓ Daily open entry detected! Price touched ${signal.touchedLevel?.toFixed(2)}`);
+            }
+          }
 
           // Check for new trade signal
           if (signal.signal && signal.touchedLevel) {
@@ -242,6 +261,8 @@ export async function POST(request: NextRequest) {
 
                   const stopLossDistance = Math.abs(signal.touchedLevel - signal.sl);
                   const positionSize = stopLossDistance > 0 ? riskPerTrade / stopLossDistance : 0;
+                  
+                  console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Risk: $${riskPerTrade.toFixed(2)}, Position size: ${positionSize.toFixed(4)}`);
 
                   // Create trade
                   await createTrade({

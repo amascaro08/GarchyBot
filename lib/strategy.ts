@@ -77,6 +77,7 @@ export function strictSignalWithDailyOpen(params: {
   upLevels: number[];
   dnLevels: number[];
   noTradeBandPct: number;
+  useDailyOpenEntry?: boolean; // Enable/disable daily open entries (default: true)
 }): {
   side: 'LONG' | 'SHORT' | null;
   entry: number | null;
@@ -84,7 +85,7 @@ export function strictSignalWithDailyOpen(params: {
   sl: number | null;
   reason: string;
 } {
-  const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct } = params;
+  const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct, useDailyOpenEntry = true } = params;
 
   if (candles.length === 0) {
     return { side: null, entry: null, tp: null, sl: null, reason: 'No candles' };
@@ -129,7 +130,7 @@ export function strictSignalWithDailyOpen(params: {
     }
 
     // Check if bar touches daily open first (entry at daily open, which is between daily open and U1)
-    if (low <= dOpen && dOpen <= high) {
+    if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
       // If long opens between daily open and U1 (at daily open): TP at U1, SL at D1
       const tp = upLevels.length > 0 ? upLevels[0] : dOpen * 1.01; // U1
@@ -205,7 +206,7 @@ export function strictSignalWithDailyOpen(params: {
   } else {
     // Short bias: check lower levels
     // Check if bar touches daily open
-    if (low <= dOpen && dOpen <= high) {
+    if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
       // If short opens between daily open and D1: TP at D1, SL at U1
       const tp = dnLevels.length > 0 ? dnLevels[0] : dOpen * 0.99; // D1
