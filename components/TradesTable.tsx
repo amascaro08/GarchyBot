@@ -2,19 +2,26 @@
 
 import { Trade } from './TradeLog';
 import { formatCurrencyNoSymbol } from '@/lib/format';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { io, Socket } from 'socket.io-client';
 import TradeDetailsModal from './TradeDetailsModal';
 
 interface TradesTableProps {
   trades: Trade[];
   currentPrice: number | null;
   onCloseTrade?: (trade: Trade) => void;
+  symbol?: string; // Add symbol for WebSocket subscription
 }
 
-export default function TradesTable({ trades, currentPrice, onCloseTrade }: TradesTableProps) {
+export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol = 'BTCUSDT' }: TradesTableProps) {
   const [closingTrade, setClosingTrade] = useState<Trade | null>(null);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([]);
+
+  // Combine trades from props and real-time updates
+  const allTrades = [...trades, ...realtimeTrades];
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
     return date.toLocaleString('en-US', {
@@ -93,7 +100,33 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade }: Trad
     setShowDetailsModal(true);
   };
 
-  if (trades.length === 0) {
+  // WebSocket connection for real-time trade updates
+  useEffect(() => {
+    const newSocket = io('/api/socket');
+    setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      console.log('TradesTable WebSocket connected');
+      // Subscribe to trades data
+      newSocket.emit('subscribe-trades', { symbol });
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('TradesTable WebSocket disconnected');
+    });
+
+    newSocket.on('trades-update', (data) => {
+      if (data.symbol === symbol) {
+        setRealtimeTrades(data.trades || []);
+      }
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
+  }, [symbol]);
+
+  if (allTrades.length === 0) {
     return (
       <div className="glass-effect rounded-xl p-8 shadow-2xl border-slate-700/50 text-center">
         <p className="text-gray-400">No trades yet</p>
@@ -123,7 +156,7 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade }: Trad
             </tr>
           </thead>
           <tbody>
-            {trades.map((trade, idx) => {
+            {allTrades.map((trade, idx) => {
               const unrealizedPnL = calculateUnrealizedPnL(trade);
               const realizedPnL = calculateRealizedPnL(trade);
               const outcome = getOutcome(trade);

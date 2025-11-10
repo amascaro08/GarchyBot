@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getOrderBookSnapshot } from '@/lib/orderbook';
+import { io, Socket } from 'socket.io-client';
 
 interface OrderBookProps {
   symbol: string;
@@ -14,30 +15,79 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   const [snapshot, setSnapshot] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
   const [maxSize, setMaxSize] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [realtimeOrderBook, setRealtimeOrderBook] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
 
   useEffect(() => {
     // Reset state when symbol changes
     setSnapshot(null);
+    setRealtimeOrderBook(null);
     setConnectionStatus('connecting');
-    
-    const interval = setInterval(() => {
-      const snap = getOrderBookSnapshot(symbol);
-      if (snap && snap.bids.length > 0 && snap.asks.length > 0) {
-        setSnapshot({ bids: snap.bids, asks: snap.asks });
-        setConnectionStatus('connected');
-        
-        // Calculate max size for visualization
-        const allSizes = [...snap.bids, ...snap.asks].map(e => e.size);
-        setMaxSize(Math.max(...allSizes, 1));
-      } else {
-        setConnectionStatus('connecting');
-      }
-    }, 500); // Update every 500ms
 
-    return () => clearInterval(interval);
+    // Initialize socket connection
+    const newSocket = io('/api/socket');
+    setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      console.log('OrderBook WebSocket connected');
+      setConnectionStatus('connected');
+      // Subscribe to market data for order book
+      newSocket.emit('subscribe-market-data', { symbol, interval: '5' });
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('OrderBook WebSocket disconnected');
+      setConnectionStatus('disconnected');
+    });
+
+    newSocket.on('realtime-data', (data) => {
+      if (data.symbol === symbol && data.type === 'orderbook') {
+        const orderBookData = data.data;
+        setRealtimeOrderBook({
+          bids: orderBookData.bids || [],
+          asks: orderBookData.asks || []
+        });
+
+        // Calculate max size for visualization
+        const allSizes = [...(orderBookData.bids || []), ...(orderBookData.asks || [])].map((e: DepthEntry) => e.size);
+        setMaxSize(Math.max(...allSizes, 1));
+      }
+    });
+
+    newSocket.on('market-data-update', (data) => {
+      if (data.symbol === symbol && data.orderBook) {
+        setSnapshot({
+          bids: data.orderBook.bids || [],
+          asks: data.orderBook.asks || []
+        });
+      }
+    });
+
+    // Fallback polling for order book (in case WebSocket fails)
+    const interval = setInterval(() => {
+      if (connectionStatus !== 'connected') {
+        const snap = getOrderBookSnapshot(symbol);
+        if (snap && snap.bids.length > 0 && snap.asks.length > 0) {
+          setSnapshot({ bids: snap.bids, asks: snap.asks });
+          setConnectionStatus('connected');
+
+          // Calculate max size for visualization
+          const allSizes = [...snap.bids, ...snap.asks].map(e => e.size);
+          setMaxSize(Math.max(...allSizes, 1));
+        }
+      }
+    }, 2000); // Update every 2 seconds as fallback
+
+    return () => {
+      newSocket.disconnect();
+      clearInterval(interval);
+    };
   }, [symbol]);
 
-  if (!snapshot || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+  // Use real-time order book if available, otherwise fallback to polled data
+  const displayOrderBook = realtimeOrderBook || snapshot;
+
+  if (!displayOrderBook || displayOrderBook.bids.length === 0 || displayOrderBook.asks.length === 0) {
     return (
       <div className="glass-effect rounded-xl p-6 border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
         <h3 className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-4">
@@ -57,8 +107,8 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   }
 
   // Show top 10 bids and asks
-  const topBids = snapshot.bids.slice(0, 10).reverse(); // Reverse to show highest first
-  const topAsks = snapshot.asks.slice(0, 10);
+  const topBids = displayOrderBook.bids.slice(0, 10).reverse(); // Reverse to show highest first
+  const topAsks = displayOrderBook.asks.slice(0, 10);
 
   const formatPrice = (price: number) => {
     if (price >= 1000) return price.toFixed(2);
@@ -101,7 +151,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
         {/* Asks (Sell orders) - Red */}
         {topAsks.map((ask, idx) => {
           const notional = calculateNotional(ask.price, ask.size);
-          const widthPercent = (ask.size / maxSize) * 100;
+          const widthPercent = (ask.size / Math.max(maxSize, 1)) * 100;
           const isNearPrice = currentPrice && Math.abs(ask.price - currentPrice) / currentPrice < 0.001;
           
           return (
@@ -148,7 +198,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
         {/* Bids (Buy orders) - Green */}
         {topBids.map((bid, idx) => {
           const notional = calculateNotional(bid.price, bid.size);
-          const widthPercent = (bid.size / maxSize) * 100;
+          const widthPercent = (bid.size / Math.max(maxSize, 1)) * 100;
           const isNearPrice = currentPrice && Math.abs(bid.price - currentPrice) / currentPrice < 0.001;
           
           return (

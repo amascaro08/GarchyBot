@@ -12,6 +12,7 @@ import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 import { applyBreakeven } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
+import { io, Socket } from 'socket.io-client';
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = 'BTCUSDT';
@@ -989,6 +990,7 @@ export default function Home() {
                   dnLevels={levels?.dnLevels ?? []}
                   upper={levels?.upper ?? null}
                   lower={levels?.lower ?? null}
+                  symbol={symbol}
                   markers={chartMarkers}
                   openTrades={openTrades}
                 />
@@ -1021,7 +1023,7 @@ export default function Home() {
               View Full History →
             </Link>
           </div>
-          <TradesTable trades={trades} currentPrice={currentPrice} onCloseTrade={handleManualCloseTrade} />
+          <TradesTable trades={trades} currentPrice={currentPrice} onCloseTrade={handleManualCloseTrade} symbol={symbol} />
         </div>
         </div>
       </div>

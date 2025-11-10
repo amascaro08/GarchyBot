@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine } from 'lightweight-charts';
+import { io, Socket } from 'socket.io-client';
 import type { Candle } from '@/lib/types';
 
 interface ChartProps {
@@ -13,6 +14,7 @@ interface ChartProps {
   dnLevels: number[];
   upper: number | null;
   lower: number | null;
+  symbol?: string; // Add symbol for WebSocket subscription
   markers?: Array<{
     time: number;
     position: 'aboveBar' | 'belowBar';
@@ -28,15 +30,16 @@ interface ChartProps {
   }>;
 }
 
-export default function Chart({ 
-  candles, 
-  dOpen, 
-  vwap, 
+export default function Chart({
+  candles,
+  dOpen,
+  vwap,
   vwapLine,
-  upLevels, 
-  dnLevels, 
+  upLevels,
+  dnLevels,
   upper,
   lower,
+  symbol = 'BTCUSDT',
   markers = [],
   openTrades = []
 }: ChartProps) {
@@ -46,6 +49,9 @@ export default function Chart({
   const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastProcessedRef = useRef<string>('');
+  const socketRef = useRef<Socket | null>(null);
+  const [realtimeCandles, setRealtimeCandles] = useState<Candle[]>([]);
+  const lastCandleRef = useRef<Candle | null>(null);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -122,6 +128,71 @@ export default function Chart({
     }
   }, []);
 
+  // WebSocket connection for real-time data
+  useEffect(() => {
+    // Initialize socket connection
+    const socket = io('/api/socket');
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log('Chart WebSocket connected');
+      // Subscribe to market data
+      socket.emit('subscribe-market-data', { symbol, interval: '5' });
+    });
+
+    socket.on('disconnect', () => {
+      console.log('Chart WebSocket disconnected');
+    });
+
+    socket.on('realtime-data', (data) => {
+      if (data.symbol === symbol && data.type === 'kline') {
+        const newCandle: Candle = data.data;
+        setRealtimeCandles(prev => {
+          const updated = [...prev];
+
+          // Check if we have a candle for this timestamp
+          const existingIndex = updated.findIndex(c => c.ts === newCandle.ts);
+
+          if (existingIndex >= 0) {
+            // Update existing candle
+            updated[existingIndex] = newCandle;
+          } else {
+            // Add new candle
+            updated.push(newCandle);
+
+            // Keep only recent candles (last 200)
+            if (updated.length > 200) {
+              updated.shift();
+            }
+          }
+
+          return updated.sort((a, b) => a.ts - b.ts);
+        });
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [symbol]);
+
+  // Combine static candles with real-time updates
+  const displayCandles = useMemo(() => {
+    if (realtimeCandles.length === 0) return candles;
+    if (candles.length === 0) return realtimeCandles;
+
+    // Merge candles, preferring real-time data for overlapping timestamps
+    const candleMap = new Map<number, Candle>();
+
+    // Add static candles
+    candles.forEach((candle: Candle) => candleMap.set(candle.ts, candle));
+
+    // Override with real-time candles
+    realtimeCandles.forEach((candle: Candle) => candleMap.set(candle.ts, candle));
+
+    return Array.from(candleMap.values()).sort((a, b) => a.ts - b.ts);
+  }, [candles, realtimeCandles]);
+
   // Update chart data and price lines when props change
   useEffect(() => {
     if (!seriesRef.current || !chartRef.current) {
@@ -130,12 +201,12 @@ export default function Chart({
     }
 
     // Don't proceed if we don't have candle data
-    if (!candles || candles.length === 0) {
+    if (!displayCandles || displayCandles.length === 0) {
       return;
     }
 
     // Always update candlestick data first
-    const candlestickData: CandlestickData<Time>[] = candles.map((candle) => ({
+    const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
       time: (candle.ts / 1000) as Time,
       open: candle.open,
       high: candle.high,
@@ -314,7 +385,7 @@ export default function Chart({
         seriesRef.current.setMarkers([]);
       }
     }
-  }, [candles, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
+  }, [displayCandles, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
 
   // Update VWAP line independently whenever candles or vwapLine changes
   useEffect(() => {
@@ -383,7 +454,7 @@ export default function Chart({
         vwap 
       });
     }
-  }, [candles, vwapLine, vwap]);
+  }, [displayCandles, vwapLine, vwap]);
 
   return <div ref={chartContainerRef} className="w-full h-[600px]" />;
 }
