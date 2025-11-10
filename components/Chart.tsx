@@ -114,25 +114,7 @@ export default function Chart({
       return;
     }
 
-    // Create a signature of current data to prevent duplicate processing
-    const dataSignature = JSON.stringify({
-      upper,
-      lower,
-      dOpen,
-      vwap,
-      upLevels,
-      dnLevels,
-      openTrades: openTrades.map(t => `${t.entry}-${t.tp}-${t.sl}-${t.side}`),
-    });
-
-    // Skip if we've already processed this exact data
-    if (lastProcessedRef.current === dataSignature) {
-      return;
-    }
-
-    lastProcessedRef.current = dataSignature;
-
-    // Update candlestick data
+    // Always update candlestick data first
     const candlestickData: CandlestickData<Time>[] = candles.map((candle) => ({
       time: (candle.ts / 1000) as Time,
       open: candle.open,
@@ -143,8 +125,25 @@ export default function Chart({
 
     seriesRef.current.setData(candlestickData);
 
-    // Clear all existing price lines more reliably
-    // Use the series' removePriceLine method if available, otherwise use remove()
+    // Create a signature of price line data to prevent duplicate processing
+    const priceLinesSignature = JSON.stringify({
+      upper,
+      lower,
+      dOpen,
+      vwap,
+      upLevels,
+      dnLevels,
+      openTrades: openTrades.map(t => `${t.entry}-${t.tp}-${t.sl}-${t.side}`),
+    });
+
+    // Only update price lines if the signature has changed
+    if (lastProcessedRef.current === priceLinesSignature) {
+      return;
+    }
+
+    lastProcessedRef.current = priceLinesSignature;
+
+    // Clear all existing price lines before adding new ones
     priceLinesRef.current.forEach(line => {
       try {
         if (line) {
@@ -347,24 +346,6 @@ export default function Chart({
         seriesRef.current.setMarkers([]);
       }
     }
-
-    // Cleanup function to remove lines when effect re-runs or component unmounts
-    return () => {
-      priceLinesRef.current.forEach(line => {
-        try {
-          if (line) {
-            if (seriesRef.current && typeof (seriesRef.current as any).removePriceLine === 'function') {
-              (seriesRef.current as any).removePriceLine(line);
-            } else if (typeof (line as any).remove === 'function') {
-              (line as any).remove();
-            }
-          }
-        } catch (e) {
-          // Ignore errors
-        }
-      });
-      priceLinesRef.current = [];
-    };
   }, [candles, dOpen, vwap, upLevels, dnLevels, upper, lower, markers, openTrades]);
 
   return <div ref={chartContainerRef} className="w-full h-[600px]" />;
