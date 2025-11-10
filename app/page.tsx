@@ -438,7 +438,7 @@ export default function Home() {
     }
   };
 
-  // Load bot status from database on mount
+  // Load bot status and configuration from database on mount
   useEffect(() => {
     const loadBotStatus = async () => {
       try {
@@ -447,8 +447,41 @@ export default function Home() {
         
         if (res.ok) {
           const data = await res.json();
-          // Set bot running state from database
-          setBotRunning(data.botConfig?.is_running || false);
+          
+          // Load ALL bot configuration settings from database
+          if (data.botConfig) {
+            const config = data.botConfig;
+            
+            // Set bot running state
+            setBotRunning(config.is_running || false);
+            
+            // Load trading settings
+            setSymbol(config.symbol || DEFAULT_SYMBOL);
+            setCandleInterval(config.candle_interval || DEFAULT_INTERVAL);
+            setMaxTrades(config.max_trades || DEFAULT_MAX_TRADES);
+            setLeverage(config.leverage || DEFAULT_LEVERAGE);
+            setCapital(Number(config.capital) || DEFAULT_CAPITAL);
+            setRiskAmount(Number(config.risk_amount) || DEFAULT_RISK_AMOUNT);
+            setRiskType(config.risk_type || DEFAULT_RISK_TYPE);
+            
+            // Load daily limits
+            setDailyTargetType(config.daily_target_type || DEFAULT_DAILY_TARGET_TYPE);
+            setDailyTargetAmount(Number(config.daily_target_amount) || DEFAULT_DAILY_TARGET_AMOUNT);
+            setDailyStopType(config.daily_stop_type || DEFAULT_DAILY_STOP_TYPE);
+            setDailyStopAmount(Number(config.daily_stop_amount) || DEFAULT_DAILY_STOP_AMOUNT);
+            setDailyPnL(Number(config.daily_pnl || 0));
+            
+            // Load GARCH settings
+            setGarchMode(config.garch_mode || 'auto');
+            if (config.custom_k_pct !== null) {
+              setCustomKPct(Number(config.custom_k_pct));
+            }
+            
+            // Load other settings
+            setUseOrderBookConfirm(config.use_orderbook_confirm !== false);
+            
+            addLog('success', `Bot config loaded: ${config.symbol}, ${config.garch_mode} mode, k%: ${config.custom_k_pct ? (Number(config.custom_k_pct) * 100).toFixed(2) + '%' : 'auto'}`);
+          }
           
           // Load trades from database if any
           if (data.allTrades && data.allTrades.length > 0) {
@@ -468,11 +501,6 @@ export default function Home() {
             setTrades(dbTrades);
           }
           
-          // Load daily P&L
-          if (data.botConfig) {
-            setDailyPnL(Number(data.botConfig.daily_pnl || 0));
-          }
-          
           // Load session P&L
           if (data.sessionPnL !== undefined) {
             setSessionPnL(Number(data.sessionPnL));
@@ -489,7 +517,7 @@ export default function Home() {
             setActivityLogs(dbLogs);
           }
           
-          addLog('success', 'Bot status loaded from database');
+          addLog('success', 'Bot status and settings loaded from database');
         }
       } catch (err) {
         console.error('Failed to load bot status:', err);
@@ -741,6 +769,46 @@ export default function Home() {
     }
   };
 
+  const handleSaveSettings = async () => {
+    try {
+      const settingsToSave = {
+        symbol,
+        candle_interval: candleInterval,
+        max_trades: maxTrades,
+        leverage,
+        capital,
+        risk_amount: riskAmount,
+        risk_type: riskType,
+        daily_target_type: dailyTargetType,
+        daily_target_amount: dailyTargetAmount,
+        daily_stop_type: dailyStopType,
+        daily_stop_amount: dailyStopAmount,
+        garch_mode: garchMode,
+        custom_k_pct: customKPct,
+        use_orderbook_confirm: useOrderBookConfirm,
+      };
+
+      const res = await fetch('/api/bot/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsToSave),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to save settings');
+      }
+
+      addLog('success', 'Settings saved successfully!');
+      setError(null);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to save settings';
+      setError(errorMsg);
+      addLog('error', errorMsg);
+    }
+  };
+
   return (
     <div className="min-h-screen text-white flex">
       {/* Sidebar - Desktop: fixed left, Mobile: slide-out */}
@@ -778,6 +846,7 @@ export default function Home() {
         botRunning={botRunning}
         onStartBot={handleStartBot}
         onStopBot={handleStopBot}
+        onSaveSettings={handleSaveSettings}
         symbols={SYMBOLS}
         intervals={INTERVALS}
         garchMode={garchMode}
