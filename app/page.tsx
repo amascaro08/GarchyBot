@@ -380,6 +380,9 @@ export default function Home() {
   useEffect(() => {
     const loadLevels = async () => {
       try {
+        // Reset levels first to ensure UI updates
+        setLevels(null);
+        
         const levelsRes = await fetch('/api/levels', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -389,14 +392,21 @@ export default function Home() {
             testnet: true, // Default to testnet
           }),
         });
+        
+        if (!levelsRes.ok) {
+          throw new Error('Failed to fetch levels');
+        }
+        
         const levelsData = await levelsRes.json();
         
+        // Only update if symbol hasn't changed during fetch
         if (levelsData.symbol === symbol) {
           setLevels(levelsData);
           setKPct(levelsData.kPct); // Store kPct from levels
         }
       } catch (err) {
         console.error('Failed to load levels:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load levels');
       }
     };
 
@@ -416,7 +426,7 @@ export default function Home() {
         setError(null);
 
         // Fetch klines with current symbol and interval (for display only)
-        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
         const klinesData = await res.json();
         
         if (!res.ok || !klinesData || !Array.isArray(klinesData) || klinesData.length === 0) {
@@ -426,7 +436,8 @@ export default function Home() {
 
         setCandles(klinesData);
 
-        // Get levels (includes kPct) - use the unified kPct from levels API
+        // Fetch levels for this symbol (may already be loading from symbol change useEffect)
+        // This ensures we have levels even if symbol change useEffect hasn't completed
         const levelsRes = await fetch('/api/levels', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -436,27 +447,30 @@ export default function Home() {
             testnet: true, // Default to testnet
           }),
         });
-        const levelsData = await levelsRes.json();
-        if (levelsData.symbol === symbol) {
-          setLevels(levelsData);
-          setKPct(levelsData.kPct);
-        }
-
-        // Calculate signal using kPct from levels
-        const signalRes = await fetch('/api/signal', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            symbol,
-            kPct: levelsData.kPct || kPct, // Use kPct from levels
-            subdivisions: SUBDIVISIONS,
-            noTradeBandPct: NO_TRADE_BAND_PCT,
-            candles: klinesData,
-          }),
-        });
-        const signalData = await signalRes.json();
-        if (signalData.symbol === symbol) {
-          setSignal(signalData);
+        
+        if (levelsRes.ok) {
+          const levelsData = await levelsRes.json();
+          if (levelsData.symbol === symbol) {
+            setLevels(levelsData);
+            setKPct(levelsData.kPct);
+            
+            // Calculate signal using kPct from levels
+            const signalRes = await fetch('/api/signal', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                symbol,
+                kPct: levelsData.kPct,
+                subdivisions: SUBDIVISIONS,
+                noTradeBandPct: NO_TRADE_BAND_PCT,
+                candles: klinesData,
+              }),
+            });
+            const signalData = await signalRes.json();
+            if (signalData.symbol === symbol) {
+              setSignal(signalData);
+            }
+          }
         }
 
         setLoading(false);

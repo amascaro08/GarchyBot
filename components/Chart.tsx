@@ -131,9 +131,9 @@ export default function Chart({
       lower,
       dOpen,
       vwap,
-      upLevels,
-      dnLevels,
-      openTrades: openTrades.map(t => `${t.entry}-${t.tp}-${t.sl}-${t.side}`),
+      upLevels: upLevels.slice().sort(),
+      dnLevels: dnLevels.slice().sort(),
+      openTrades: openTrades.map(t => `${t.entry}-${t.tp}-${t.sl}-${t.side}`).sort(),
     });
 
     // Only update price lines if the signature has changed
@@ -146,13 +146,9 @@ export default function Chart({
     // Clear all existing price lines before adding new ones
     priceLinesRef.current.forEach(line => {
       try {
-        if (line) {
-          // Try using removePriceLine from the series
-          if (seriesRef.current && typeof (seriesRef.current as any).removePriceLine === 'function') {
-            (seriesRef.current as any).removePriceLine(line);
-          } else if (typeof (line as any).remove === 'function') {
-            (line as any).remove();
-          }
+        if (line && seriesRef.current) {
+          // Use the removePriceLine method from the series
+          seriesRef.current.removePriceLine(line);
         }
       } catch (e) {
         // Ignore errors if line was already removed
