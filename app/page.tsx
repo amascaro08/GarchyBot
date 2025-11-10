@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
 import TradeLog, { Trade } from '@/components/TradeLog';
 import TradesTable from '@/components/TradesTable';
 import Sidebar from '@/components/Sidebar';
 import OrderBook from '@/components/OrderBook';
+import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 import { applyBreakeven } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
@@ -63,7 +64,19 @@ export default function Home() {
     // Get current UTC date string (YYYY-MM-DD)
     return new Date().toISOString().split('T')[0];
   });
+  const [activityLogs, setActivityLogs] = useState<LogEntry[]>([]);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Helper function to add log entries (memoized to avoid dependency warnings)
+  const addLog = useCallback((level: LogLevel, message: string) => {
+    const logEntry: LogEntry = {
+      id: `${Date.now()}-${Math.random()}`,
+      timestamp: new Date(),
+      level,
+      message,
+    };
+    setActivityLogs((prev) => [...prev, logEntry].slice(-100)); // Keep last 100 logs
+  }, []);
 
   // Calculate daily limits
   const dailyTargetValue = useMemo(() => {
@@ -99,8 +112,10 @@ export default function Home() {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
+      const reason = isDailyTargetHit ? 'Daily target reached' : 'Daily stop loss hit';
+      addLog('warning', `Bot auto-stopped: ${reason}`);
     }
-  }, [botRunning, canTrade]);
+  }, [botRunning, canTrade, isDailyTargetHit, addLog]);
 
   // Check if we need to reset daily P&L (new UTC day)
   useEffect(() => {
@@ -175,10 +190,12 @@ export default function Home() {
       const data = await res.json();
       setLevels(data);
       setKPct(data.kPct); // Store kPct from levels
+      addLog('info', `Levels updated: k% = ${(data.kPct * 100).toFixed(2)}%`);
       return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch levels';
       setError(errorMsg);
+      addLog('error', `Failed to fetch levels: ${errorMsg}`);
       console.error('fetchLevels error:', err);
       throw err;
     }
@@ -249,14 +266,19 @@ export default function Home() {
       }
 
       // Get levels (includes kPct) - refresh to ensure we have latest VWAP
+      addLog('info', `Monitoring levels for ${symbol}...`);
       const lv = await fetchLevels();
       const lastClose = candlesData.length > 0 ? candlesData[candlesData.length - 1].close : NaN;
+      addLog('info', `VWAP: $${lv.vwap.toFixed(2)}, Price: $${lastClose.toFixed(2)}`);
 
       // Apply breakeven to open trades (if any)
       setTrades((prev) =>
         prev.map((t) => {
           if (t.status !== 'open') return t;
           const newSL = applyBreakeven(t.side, t.entry, t.sl, lastClose, lv.vwap);
+          if (newSL !== t.sl) {
+            addLog('success', `Breakeven applied: ${t.side} @ $${t.entry.toFixed(2)}, SL → $${newSL.toFixed(2)}`);
+          }
           return newSL !== t.sl ? { ...t, sl: newSL } : t;
         })
       );
@@ -267,9 +289,12 @@ export default function Home() {
       // Check for new signal and add to trade log
       // Only enter trades if bot is running AND we have valid signal AND daily limits not hit
       if (botRunning && canTrade && signalData && signalData.signal && signalData.touchedLevel) {
+        addLog('info', `Signal detected: ${signalData.signal} @ $${signalData.touchedLevel.toFixed(2)} (${signalData.reason})`);
+        
         // Optional order-book confirmation
         let approved = true;
         if (useOrderBookConfirm) {
+          addLog('info', 'Checking order book confirmation...');
           try {
             approved = await confirmLevelTouch({
               symbol,
@@ -279,8 +304,14 @@ export default function Home() {
               minNotional: 50_000, // tune
               proximityBps: 5, // 5 bps proximity to level
             });
+            if (approved) {
+              addLog('success', 'Order book confirmation: Liquidity wall detected');
+            } else {
+              addLog('warning', 'Order book confirmation: No significant liquidity wall');
+            }
           } catch (err) {
             console.error('Order-book confirmation error:', err);
+            addLog('error', 'Order book confirmation failed');
             approved = false; // Fail-safe: reject if confirmation fails
           }
         }
@@ -291,7 +322,7 @@ export default function Home() {
             // Check max trades limit with current state
             const openTrades = prevTrades.filter((t) => t.status === 'open');
             if (openTrades.length >= maxTrades) {
-              console.log(`Max trades limit reached (${maxTrades}). Skipping new signal.`);
+              addLog('warning', `Max trades limit reached (${maxTrades}). Skipping signal.`);
               return prevTrades;
             }
 
@@ -305,7 +336,7 @@ export default function Home() {
             );
 
             if (duplicateTrade) {
-              console.log(`Duplicate trade detected at level ${signalData.touchedLevel}. Skipping.`);
+              addLog('warning', `Duplicate trade detected at $${signalData.touchedLevel!.toFixed(2)}. Skipping.`);
               return prevTrades;
             }
 
@@ -334,11 +365,16 @@ export default function Home() {
               positionSize: positionSize,
             };
             
+            addLog('success', `Trade opened: ${signalData.signal} @ $${signalData.touchedLevel!.toFixed(2)}, TP: $${signalData.tp!.toFixed(2)}, SL: $${signalData.sl!.toFixed(2)}`);
             return [...prevTrades, newTrade];
           });
         } else {
-          console.log(`Signal rejected by order-book confirmation: ${signalData.reason}`);
+          addLog('warning', `Signal rejected: ${signalData.reason}`);
         }
+      } else if (botRunning && !canTrade) {
+        addLog('warning', 'Trading paused: Daily limit reached');
+      } else if (!botRunning && signalData && signalData.signal) {
+        addLog('info', `Signal detected but bot is stopped: ${signalData.signal} @ $${signalData.touchedLevel!.toFixed(2)}`);
       }
 
       // Simulate TP/SL checks for open trades
@@ -355,17 +391,21 @@ export default function Home() {
               if (lastCandle.high >= trade.tp) {
                 newStatus = 'tp';
                 exitPrice = trade.tp;
+                addLog('success', `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               } else if (lastCandle.low <= trade.sl) {
                 newStatus = 'sl';
                 exitPrice = trade.sl;
+                addLog('error', `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               }
             } else {
               if (lastCandle.low <= trade.tp) {
                 newStatus = 'tp';
                 exitPrice = trade.tp;
+                addLog('success', `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               } else if (lastCandle.high >= trade.sl) {
                 newStatus = 'sl';
                 exitPrice = trade.sl;
+                addLog('error', `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
               }
             }
 
@@ -378,6 +418,8 @@ export default function Home() {
                   : (trade.entry - exitPrice) * positionSize;
               setSessionPnL((prev) => prev + pnl);
               setDailyPnL((prev) => prev + pnl);
+              const pnlFormatted = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+              addLog(newStatus === 'tp' ? 'success' : 'error', `P&L: ${pnlFormatted}`);
             }
 
             return { ...trade, status: newStatus, exitPrice };
@@ -394,9 +436,13 @@ export default function Home() {
 
   // Start/stop order book on symbol change
   useEffect(() => {
+    addLog('info', `Connecting to order book for ${symbol}...`);
     startOrderBook(symbol);
-    return () => stopOrderBook(symbol);
-  }, [symbol]);
+    return () => {
+      stopOrderBook(symbol);
+      addLog('info', `Disconnected order book for ${symbol}`);
+    };
+  }, [symbol, addLog]);
 
   // Fetch levels when symbol changes (levels are based on daily candles, independent of interval)
   useEffect(() => {
@@ -404,6 +450,7 @@ export default function Home() {
       try {
         // Reset levels first to ensure UI updates
         setLevels(null);
+        addLog('info', `Loading levels for ${symbol}...`);
         
         const levelsRes = await fetch('/api/levels', {
           method: 'POST',
@@ -425,15 +472,18 @@ export default function Home() {
         if (levelsData.symbol === symbol) {
           setLevels(levelsData);
           setKPct(levelsData.kPct); // Store kPct from levels
+          addLog('success', `Levels loaded for ${symbol}: k% = ${(levelsData.kPct * 100).toFixed(2)}%`);
         }
       } catch (err) {
         console.error('Failed to load levels:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load levels');
+        const errorMsg = err instanceof Error ? err.message : 'Failed to load levels';
+        setError(errorMsg);
+        addLog('error', `Failed to load levels for ${symbol}: ${errorMsg}`);
       }
     };
 
     loadLevels();
-  }, [symbol]); // Only refetch levels when symbol changes
+  }, [symbol, addLog]); // Only refetch levels when symbol changes
 
   // Initial load and polling - handles candles, signals, and interval changes
   useEffect(() => {
@@ -489,6 +539,7 @@ export default function Home() {
           if (levelsData.symbol === symbol) {
             setLevels(levelsData);
             setKPct(levelsData.kPct);
+            addLog('success', `Levels loaded: k% = ${(levelsData.kPct * 100).toFixed(2)}%`);
             
             // Calculate signal using kPct from levels
             const signalRes = await fetch('/api/signal', {
@@ -502,9 +553,14 @@ export default function Home() {
                 candles: klinesData,
               }),
             });
-            const signalData = await signalRes.json();
-            if (signalData.symbol === symbol) {
-              setSignal(signalData);
+            if (signalRes.ok) {
+              const signalData = await signalRes.json();
+              if (signalData.symbol === symbol) {
+                setSignal(signalData);
+                if (signalData.signal) {
+                  addLog('info', `Initial signal: ${signalData.signal} @ $${signalData.touchedLevel?.toFixed(2) || 'N/A'}`);
+                }
+              }
             }
           }
         }
@@ -567,14 +623,16 @@ export default function Home() {
 
   const handleStartBot = () => {
     if (!canTrade) {
-      setError(isDailyTargetHit 
+      const errorMsg = isDailyTargetHit 
         ? `Daily target reached (${dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}). Reset to continue.`
-        : `Daily stop loss hit (${dailyPnL.toFixed(2)}). Reset to continue.`
-      );
+        : `Daily stop loss hit (${dailyPnL.toFixed(2)}). Reset to continue.`;
+      setError(errorMsg);
+      addLog('error', `Cannot start bot: ${errorMsg}`);
       return;
     }
     setBotRunning(true);
     setError(null);
+    addLog('success', `Bot started for ${symbol}`);
   };
 
   const handleStopBot = () => {
@@ -583,6 +641,7 @@ export default function Home() {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
+    addLog('warning', 'Bot stopped');
   };
 
   return (
@@ -723,7 +782,7 @@ export default function Home() {
               <OrderBook symbol={symbol} currentPrice={currentPrice} />
             </div>
 
-            {/* Right sidebar - Cards and Trade Log */}
+            {/* Right sidebar - Cards, Trade Log, and Activity Log */}
             <div className="space-y-6">
               <Cards
                 price={candles.length > 0 ? candles[candles.length - 1].close : null}
@@ -734,6 +793,7 @@ export default function Home() {
                 lower={levels?.lower ?? null}
               />
               <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} />
+              <ActivityLog logs={activityLogs} maxLogs={50} />
             </div>
           </div>
 
