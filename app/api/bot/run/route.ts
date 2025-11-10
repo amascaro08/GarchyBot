@@ -238,7 +238,7 @@ export async function GET(request: NextRequest) {
 
     // Check for new signal
     const openTrades = updatedTrades.filter((t: any) => t.status === 'open');
-    if (canTrade && signal.side && signal.entry && openTrades.length < maxTrades) {
+    if (canTrade && signal.side && signal.entry !== null && signal.tp !== null && signal.sl !== null && openTrades.length < maxTrades) {
       // Check for duplicate trade
       const duplicateTrade = openTrades.find(
         (t: any) =>
@@ -252,7 +252,7 @@ export async function GET(request: NextRequest) {
         const riskPerTrade = riskType === 'percent' 
           ? (capital * riskAmount) / 100 
           : riskAmount;
-        const stopLossDistance = Math.abs(signal.entry - (signal.sl || 0));
+        const stopLossDistance = Math.abs(signal.entry - signal.sl);
         const positionSize = stopLossDistance > 0 
           ? riskPerTrade / stopLossDistance 
           : 0;
