@@ -211,20 +211,26 @@ export default function Home() {
       : [];
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-6">
+    <div className="min-h-screen text-white p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6">VWAP + GARCH Grid Trading Dashboard</h1>
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-4xl sm:text-5xl font-bold mb-2 bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+            VWAP + GARCH Grid Trading Dashboard
+          </h1>
+          <p className="text-gray-400 text-sm sm:text-base">Real-time trading signals powered by volatility analysis</p>
+        </div>
 
         {/* Symbol selector */}
         <div className="mb-6">
-          <label className="block text-sm font-medium mb-2">Symbol</label>
+          <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
           <select
             value={symbol}
             onChange={(e) => setSymbol(e.target.value)}
-            className="bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white"
+            className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full sm:w-auto min-w-[200px]"
           >
             {SYMBOLS.map((s) => (
-              <option key={s} value={s}>
+              <option key={s} value={s} className="bg-slate-800">
                 {s}
               </option>
             ))}
@@ -232,20 +238,37 @@ export default function Home() {
         </div>
 
         {error && (
-          <div className="bg-red-900/20 border border-red-700 rounded p-4 mb-6 text-red-400">
-            Error: {error}
+          <div className="glass-effect border-red-500/50 rounded-lg p-4 mb-6 text-red-400 shadow-lg shadow-red-500/10 animate-pulse">
+            <div className="flex items-center gap-2">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              <span className="font-medium">Error: {error}</span>
+            </div>
           </div>
         )}
 
         {loading && (
-          <div className="text-center py-8 text-gray-400">Loading data...</div>
+          <div className="text-center py-12">
+            <div className="inline-flex items-center gap-3 text-gray-400">
+              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span className="font-medium">Loading market data...</span>
+            </div>
+          </div>
         )}
 
         {/* Main layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Chart - takes 2 columns */}
           <div className="lg:col-span-2">
-            <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl card-hover">
+              <div className="mb-4">
+                <h2 className="text-xl font-semibold text-gray-200">Price Chart</h2>
+                <p className="text-sm text-gray-400">Real-time candlestick data with trading levels</p>
+              </div>
               <Chart
                 candles={candles}
                 dOpen={levels?.dOpen ?? null}
