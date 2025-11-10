@@ -25,17 +25,32 @@ function reconnectOrderBook(symbol: string, attempt: number = 1) {
 }
 
 export function startOrderBook(symbol: string) {
-  // Close existing connection if any
+  // Close existing connection if any for this symbol
   if (sockets[symbol]) {
     try {
+      // Unsubscribe before closing
+      if (sockets[symbol].readyState === WebSocket.OPEN) {
+        const unsub = { op: 'unsubscribe', args: [`orderbook.50.${symbol}`] };
+        sockets[symbol].send(JSON.stringify(unsub));
+      }
       sockets[symbol].close();
     } catch {}
     delete sockets[symbol];
   }
 
-  // Initialize buffer if needed
-  if (!buffers[symbol]) {
-    buffers[symbol] = [];
+  // Clear buffer for this symbol to ensure fresh start
+  buffers[symbol] = [];
+
+  // Clear any existing reconnect timer
+  if (reconnectTimers[symbol]) {
+    clearTimeout(reconnectTimers[symbol]);
+    delete reconnectTimers[symbol];
+  }
+
+  // Clear any existing ping timer
+  if (pingTimers[symbol]) {
+    clearInterval(pingTimers[symbol]);
+    delete pingTimers[symbol];
   }
 
   try {
@@ -51,8 +66,10 @@ export function startOrderBook(symbol: string) {
         delete reconnectTimers[symbol];
       }
       
-      // Subscribe to order book
-      const sub = { op: 'subscribe', args: [`orderbook.50.${symbol}`] };
+      // Subscribe to order book - ensure symbol is uppercase
+      const normalizedSymbol = symbol.toUpperCase();
+      const sub = { op: 'subscribe', args: [`orderbook.50.${normalizedSymbol}`] };
+      console.log(`Subscribing to order book for ${normalizedSymbol}`);
       ws.send(JSON.stringify(sub));
       
       // Start ping interval to keep connection alive
@@ -167,7 +184,16 @@ export function stopOrderBook(symbol: string) {
   }
   
   try {
-    sockets[symbol]?.close();
+    const ws = sockets[symbol];
+    if (ws) {
+      // Unsubscribe before closing
+      if (ws.readyState === WebSocket.OPEN) {
+        const normalizedSymbol = symbol.toUpperCase();
+        const unsub = { op: 'unsubscribe', args: [`orderbook.50.${normalizedSymbol}`] };
+        ws.send(JSON.stringify(unsub));
+      }
+      ws.close();
+    }
   } catch {}
   delete sockets[symbol];
   // Keep buffer for a bit in case user switches back quickly
