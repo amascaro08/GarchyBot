@@ -186,56 +186,6 @@ export default function Chart({
       priceLinesRef.current.push(line);
     }
 
-    // Add zone visualization (4 equal zones)
-    if (upper !== null && lower !== null && dOpen !== null && seriesRef.current) {
-      const range = upper - lower;
-      const zoneSize = range / 4;
-      
-      const zone1 = seriesRef.current.createPriceLine({
-        price: lower + zoneSize,
-        color: '#ef4444',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: 'Zone 1/4',
-      });
-      priceLinesRef.current.push(zone1);
-      
-      if (lower + zoneSize < dOpen) {
-        const zone2 = seriesRef.current.createPriceLine({
-          price: lower + zoneSize * 2,
-          color: '#f97316',
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: 'Zone 2/4',
-        });
-        priceLinesRef.current.push(zone2);
-      }
-      
-      if (dOpen < upper - zoneSize) {
-        const zone3 = seriesRef.current.createPriceLine({
-          price: upper - zoneSize * 2,
-          color: '#3b82f6',
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: 'Zone 3/4',
-        });
-        priceLinesRef.current.push(zone3);
-      }
-      
-      const zone4 = seriesRef.current.createPriceLine({
-        price: upper - zoneSize,
-        color: '#10b981',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: 'Zone 4/4',
-      });
-      priceLinesRef.current.push(zone4);
-    }
-
     // Add dOpen
     if (dOpen !== null && seriesRef.current) {
       const line = seriesRef.current.createPriceLine({
