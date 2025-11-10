@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { VolRequestSchema } from '@/lib/types';
-import { garch11 } from '@/lib/vol';
+import { estimateKPercent } from '@/lib/vol';
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,7 +9,11 @@ export async function POST(request: NextRequest) {
     const validated = VolRequestSchema.parse(body);
 
     // Calculate kPct using GARCH(1,1) with EWMA fallback
-    const k_pct = garch11(validated.closes);
+    // Returns kPct as decimal (0.01-0.10)
+    const raw_k_pct = estimateKPercent(validated.closes, { clampPct: [1, 10] });
+    
+    // Final safety clamp to prevent extreme values (should never exceed 0.10, but add safeguard)
+    const k_pct = Math.max(0.01, Math.min(0.10, raw_k_pct));
 
     return NextResponse.json({
       symbol: validated.symbol,

@@ -96,6 +96,9 @@ export default function Chart({
           minMove: 0.01,
         },
         title: 'VWAP',
+        visible: true,
+        priceLineVisible: false,
+        lastValueVisible: true,
       });
       vwapSeriesRef.current = vwapLineSeries;
 
@@ -319,19 +322,68 @@ export default function Chart({
       return;
     }
 
-    if (vwapLine && candles.length === vwapLine.length) {
-      const vwapData: LineData<Time>[] = candles
-        .map((candle, idx) => ({
-          time: (candle.ts / 1000) as Time,
-          value: vwapLine[idx],
-        }))
-        .filter((point): point is LineData<Time> => point.value !== null && !isNaN(point.value));
+    // Only require vwapLine to exist, don't require exact length match
+    // This handles cases where candles might be filtered or updated
+    if (vwapLine && vwapLine.length > 0) {
+      const vwapData: LineData<Time>[] = [];
+      
+      // Create a map of candle timestamps for faster lookup
+      const candleTimeMap = new Map<number, Candle>();
+      candles.forEach(candle => {
+        candleTimeMap.set(candle.ts, candle);
+      });
+      
+      // Try to match vwapLine to candles by index first (most common case)
+      const minLength = Math.min(candles.length, vwapLine.length);
+      let matchedByIndex = true;
+      
+      for (let idx = 0; idx < minLength; idx++) {
+        const vwapValue = vwapLine[idx];
+        if (vwapValue !== null && !isNaN(vwapValue) && vwapValue > 0) {
+          // Check if this index matches a valid candle
+          if (idx < candles.length) {
+            vwapData.push({
+              time: (candles[idx].ts / 1000) as Time,
+              value: vwapValue,
+            });
+          } else {
+            matchedByIndex = false;
+            break;
+          }
+        }
+      }
+      
+      // If index matching didn't work well, try to match by finding candles from the levels API
+      // For now, we'll use index matching as it should work if candles come from the same source
       
       if (vwapData.length > 0) {
         vwapSeriesRef.current.setData(vwapData);
+        console.debug('VWAP line updated:', vwapData.length, 'points, candles:', candles.length, 'vwapLine:', vwapLine.length);
+      } else {
+        // If no valid VWAP data, clear the series
+        vwapSeriesRef.current.setData([]);
+        console.debug('VWAP line cleared: no valid data. candles:', candles.length, 'vwapLine:', vwapLine.length);
       }
+    } else if (vwap !== null && !isNaN(vwap) && vwap > 0) {
+      // Fallback: if vwapLine is not available, use static VWAP value
+      // Create a line with the current VWAP at the last candle
+      if (candles.length > 0) {
+        const lastCandle = candles[candles.length - 1];
+        vwapSeriesRef.current.setData([{
+          time: (lastCandle.ts / 1000) as Time,
+          value: vwap,
+        }]);
+        console.debug('VWAP fallback: using static value', vwap);
+      }
+    } else {
+      console.debug('VWAP line not updated: missing data', { 
+        vwapLine: !!vwapLine, 
+        vwapLineLength: vwapLine?.length, 
+        candlesLength: candles.length, 
+        vwap 
+      });
     }
-  }, [candles, vwapLine]);
+  }, [candles, vwapLine, vwap]);
 
   return <div ref={chartContainerRef} className="w-full h-[600px]" />;
 }

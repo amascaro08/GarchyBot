@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { LevelsRequestSchema } from '@/lib/types';
 import { getKlines } from '@/lib/bybit';
 import { dailyOpenUTC, vwapFromOHLCV, vwapLineFromOHLCV, gridLevels } from '@/lib/strategy';
-import { garch11 } from '@/lib/vol';
+import { estimateKPercent } from '@/lib/vol';
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,7 +36,10 @@ export async function POST(request: NextRequest) {
       // Calculate from daily candles (default behavior)
       const dailyAsc = daily.slice().reverse(); // Ensure ascending order
       const dailyCloses = dailyAsc.map(c => c.close);
-      kPct = garch11(dailyCloses); // Clamps internally 1–10%
+      const rawKPct = estimateKPercent(dailyCloses, { clampPct: [1, 10] }); // Returns as decimal (0.01-0.10)
+      
+      // Final safety clamp to prevent extreme values
+      kPct = Math.max(0.01, Math.min(0.10, rawKPct));
     }
 
     const intradayAsc = intraday.slice().reverse(); // Ensure ascending order
