@@ -1,37 +1,28 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
-
 /**
- * Auth utilities for the trading bot using Clerk
+ * Auth utilities for the trading bot
+ * Demo mode - add Clerk later if needed
  */
 
 /**
- * Get authenticated user ID from Clerk
+ * Get authenticated user ID (demo mode)
  */
 export async function getUserId(): Promise<string | null> {
-  const { userId } = await auth();
-  return userId;
+  return 'demo-user-id';
 }
 
 /**
- * Get authenticated user email from Clerk
+ * Get authenticated user email (demo mode)
  */
 export async function getUserEmail(): Promise<string | null> {
-  const user = await currentUser();
-  return user?.emailAddresses?.[0]?.emailAddress || null;
+  return process.env.DEMO_USER_EMAIL || 'demo@example.com';
 }
 
 /**
- * Require authentication - throws if not authenticated
+ * Require authentication (demo mode - always allowed)
  */
 export async function requireAuth() {
-  const { userId } = await auth();
-  if (!userId) {
-    throw new Error('Unauthorized - Please sign in');
-  }
-  
-  const user = await currentUser();
   return {
-    id: userId,
-    email: user?.emailAddresses?.[0]?.emailAddress || null,
+    id: 'demo-user-id',
+    email: process.env.DEMO_USER_EMAIL || 'demo@example.com',
   };
 }
