@@ -9,10 +9,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const validated = LevelsRequestSchema.parse(body);
 
-    // Fetch recent klines using the interval from request (default to 5m if not provided)
-    const interval = (body.interval as string) || '5';
-    const testnet = body.testnet !== undefined ? body.testnet : false; // Use testnet from request, default to false
-    const candles = await getKlines(validated.symbol, interval as any, 288, testnet);
+    // Always use daily candles (interval 'D' = 1 day) for calculating daily open and levels
+    // The user's selected interval is only for display, not for level calculation
+    const candles = await getKlines(validated.symbol, 'D', 30, body.testnet !== undefined ? body.testnet : false);
 
     // Calculate daily open, VWAP, and grid levels
     const dOpen = dailyOpenUTC(candles);

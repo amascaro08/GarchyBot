@@ -105,7 +105,7 @@ export default function Home() {
           symbol, 
           kPct, 
           subdivisions: SUBDIVISIONS, 
-          interval: candleInterval,
+          // Note: interval is not needed - levels always use daily candles
           testnet: false, // Match the testnet setting used for klines
         }),
       });
@@ -327,7 +327,7 @@ export default function Home() {
         const volData = await volRes.json();
         const kPct = volData.k_pct || 0.02;
 
-        // Fetch levels with current symbol and interval
+        // Fetch levels - always uses daily candles regardless of display interval
         const levelsRes = await fetch('/api/levels', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -335,7 +335,7 @@ export default function Home() {
             symbol, 
             kPct, 
             subdivisions: SUBDIVISIONS, 
-            interval: candleInterval,
+            // Note: interval is not needed - levels always use daily candles
             testnet: false,
           }),
         });
