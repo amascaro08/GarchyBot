@@ -26,6 +26,30 @@ export async function GET(request: NextRequest) {
     try {
       // Try testnet first if requested
       candles = await getKlines(query.symbol, query.interval, query.limit, query.testnet);
+      
+      // Validate price data quality - check if prices seem reasonable
+      if (candles && candles.length > 0) {
+        const latestPrice = candles[candles.length - 1].close;
+        const avgPrice = candles.reduce((sum, c) => sum + c.close, 0) / candles.length;
+        
+        // If price deviates significantly from average, might be stale data
+        // For crypto, allow up to 50% deviation (could be volatile)
+        const priceDeviation = Math.abs(latestPrice - avgPrice) / avgPrice;
+        
+        // If testnet and price seems suspiciously off, try mainnet
+        if (query.testnet && priceDeviation > 0.5 && candles.length > 10) {
+          console.warn(`Testnet price data seems suspicious for ${query.symbol}, trying mainnet...`);
+          try {
+            const mainnetCandles = await getKlines(query.symbol, query.interval, query.limit, false);
+            if (mainnetCandles && mainnetCandles.length > 0) {
+              candles = mainnetCandles;
+              lastError = null;
+            }
+          } catch (mainnetError) {
+            console.error('Mainnet also failed, using testnet data:', mainnetError);
+          }
+        }
+      }
     } catch (error: any) {
       lastError = error;
       // If testnet fails, try mainnet as fallback

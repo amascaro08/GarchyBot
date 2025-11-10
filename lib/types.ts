@@ -30,6 +30,7 @@ export const LevelsResponseSchema = z.object({
   upLevels: z.array(z.number()),
   dnLevels: z.array(z.number()),
   vwap: z.number(),
+  dataSource: z.string().optional(), // For debugging
 });
 
 export type LevelsResponse = z.infer<typeof LevelsResponseSchema>;

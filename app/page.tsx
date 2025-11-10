@@ -120,17 +120,21 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [dailyStartDate]);
 
-  // Fetch klines
+  // Fetch klines - prefer mainnet for accurate prices
   const fetchKlines = async () => {
     try {
-      // Use testnet by default
-      const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+      // Try mainnet first for accurate prices
+      let res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+      
+      // If mainnet fails, fallback to testnet
+      if (!res.ok) {
+        res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+      }
       
       let data;
       try {
         data = await res.json();
       } catch (parseError) {
-        // If JSON parsing fails, throw with status
         throw new Error(`Failed to parse response: HTTP ${res.status} ${res.statusText}`);
       }
       
@@ -215,8 +219,24 @@ export default function Home() {
       setError(null);
 
       // Fetch klines
-      const candlesData = await fetchKlines();
-      if (candlesData.length === 0) {
+      // Use mainnet for accurate prices, fallback to testnet
+      let candlesData;
+      try {
+        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+        if (res.ok) {
+          candlesData = await res.json();
+        } else {
+          // Fallback to testnet
+          const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+          candlesData = await testnetRes.json();
+        }
+      } catch (err) {
+        // Final fallback to testnet
+        const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+        candlesData = await testnetRes.json();
+      }
+      
+      if (!candlesData || !Array.isArray(candlesData) || candlesData.length === 0) {
         setLoading(false);
         return;
       }
@@ -428,10 +448,24 @@ export default function Home() {
         setError(null);
 
         // Fetch klines with current symbol and interval (for display only)
-        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
-        const klinesData = await res.json();
+        // Use mainnet for accurate prices, fallback to testnet
+        let klinesData;
+        try {
+          const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
+          if (res.ok) {
+            klinesData = await res.json();
+          } else {
+            // Fallback to testnet
+            const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+            klinesData = await testnetRes.json();
+          }
+        } catch (err) {
+          // Final fallback to testnet
+          const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
+          klinesData = await testnetRes.json();
+        }
         
-        if (!res.ok || !klinesData || !Array.isArray(klinesData) || klinesData.length === 0) {
+        if (!klinesData || !Array.isArray(klinesData) || klinesData.length === 0) {
           setLoading(false);
           return;
         }

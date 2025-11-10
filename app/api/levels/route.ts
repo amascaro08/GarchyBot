@@ -11,14 +11,26 @@ export async function POST(request: NextRequest) {
     const validated = LevelsRequestSchema.parse(body);
     const testnet = body.testnet !== undefined ? body.testnet : true; // Default to testnet
 
-    // 1) Get DAILY closes (server-side) for kPct
-    const daily = await getKlines(validated.symbol, 'D', 60, testnet);
+    // For price data, prefer mainnet for accuracy, but allow testnet fallback
+    let daily, intraday;
+    let usedMainnet = false;
+    
+    try {
+      // Try mainnet first for accurate prices
+      daily = await getKlines(validated.symbol, 'D', 60, false);
+      intraday = await getKlines(validated.symbol, '5', 288, false);
+      usedMainnet = true;
+    } catch (mainnetError) {
+      // Fallback to testnet if mainnet fails
+      console.warn(`Mainnet failed for ${validated.symbol}, using testnet:`, mainnetError);
+      daily = await getKlines(validated.symbol, 'D', 60, testnet);
+      intraday = await getKlines(validated.symbol, '5', 288, testnet);
+    }
+
     const dailyAsc = daily.slice().reverse(); // Ensure ascending order
     const dailyCloses = dailyAsc.map(c => c.close);
     const kPct = garch11(dailyCloses); // Clamps internally 1–10%
 
-    // 2) Get intraday for dOpen + vwap + levels
-    const intraday = await getKlines(validated.symbol, '5', 288, testnet);
     const intradayAsc = intraday.slice().reverse(); // Ensure ascending order
 
     const dOpen = dailyOpenUTC(intradayAsc);
@@ -34,6 +46,7 @@ export async function POST(request: NextRequest) {
       lower,
       upLevels,
       dnLevels,
+      dataSource: usedMainnet ? 'mainnet' : 'testnet', // For debugging
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
