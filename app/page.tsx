@@ -19,6 +19,10 @@ const DEFAULT_LEVERAGE = 1;
 const DEFAULT_CAPITAL = 10000;
 const DEFAULT_RISK_AMOUNT = 100;
 const DEFAULT_RISK_TYPE = 'fixed'; // 'fixed' or 'percent'
+const DEFAULT_DAILY_TARGET_TYPE = 'percent'; // 'fixed' or 'percent'
+const DEFAULT_DAILY_TARGET_AMOUNT = 5; // 5% or $500
+const DEFAULT_DAILY_STOP_TYPE = 'percent'; // 'fixed' or 'percent'
+const DEFAULT_DAILY_STOP_AMOUNT = 3; // 3% or $300
 const INTERVALS = [
   { value: '1', label: '1m' },
   { value: '3', label: '3m' },
@@ -48,7 +52,71 @@ export default function Home() {
   const [riskType, setRiskType] = useState<'fixed' | 'percent'>(DEFAULT_RISK_TYPE);
   const [useOrderBookConfirm, setUseOrderBookConfirm] = useState<boolean>(true);
   const [kPct, setKPct] = useState<number>(3); // Will be filled by /levels
+  const [dailyPnL, setDailyPnL] = useState<number>(0);
+  const [dailyTargetType, setDailyTargetType] = useState<'fixed' | 'percent'>(DEFAULT_DAILY_TARGET_TYPE);
+  const [dailyTargetAmount, setDailyTargetAmount] = useState<number>(DEFAULT_DAILY_TARGET_AMOUNT);
+  const [dailyStopType, setDailyStopType] = useState<'fixed' | 'percent'>(DEFAULT_DAILY_STOP_TYPE);
+  const [dailyStopAmount, setDailyStopAmount] = useState<number>(DEFAULT_DAILY_STOP_AMOUNT);
+  const [dailyStartDate, setDailyStartDate] = useState<string>(() => {
+    // Get current UTC date string (YYYY-MM-DD)
+    return new Date().toISOString().split('T')[0];
+  });
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Auto-stop bot when daily limits are hit
+  useEffect(() => {
+    if (botRunning && !canTrade) {
+      setBotRunning(false);
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    }
+  }, [botRunning, canTrade]);
+
+  // Check if we need to reset daily P&L (new UTC day)
+  useEffect(() => {
+    const checkDailyReset = () => {
+      const today = new Date().toISOString().split('T')[0];
+      if (today !== dailyStartDate) {
+        setDailyStartDate(today);
+        setDailyPnL(0);
+        setSessionPnL(0);
+        setTrades([]);
+      }
+    };
+    
+    // Check immediately and then every minute
+    checkDailyReset();
+    const interval = setInterval(checkDailyReset, 60000);
+    return () => clearInterval(interval);
+  }, [dailyStartDate]);
+
+  // Calculate daily limits
+  const dailyTargetValue = useMemo(() => {
+    return dailyTargetType === 'percent' 
+      ? (capital * dailyTargetAmount) / 100 
+      : dailyTargetAmount;
+  }, [dailyTargetType, dailyTargetAmount, capital]);
+
+  const dailyStopValue = useMemo(() => {
+    return dailyStopType === 'percent' 
+      ? (capital * dailyStopAmount) / 100 
+      : dailyStopAmount;
+  }, [dailyStopType, dailyStopAmount, capital]);
+
+  // Check if daily limits are hit
+  const isDailyTargetHit = useMemo(() => {
+    return dailyPnL >= dailyTargetValue && dailyTargetValue > 0;
+  }, [dailyPnL, dailyTargetValue]);
+
+  const isDailyStopHit = useMemo(() => {
+    return dailyPnL <= -dailyStopValue && dailyStopValue > 0;
+  }, [dailyPnL, dailyStopValue]);
+
+  const canTrade = useMemo(() => {
+    return !isDailyTargetHit && !isDailyStopHit;
+  }, [isDailyTargetHit, isDailyStopHit]);
 
   // Fetch klines
   const fetchKlines = async () => {
@@ -175,8 +243,8 @@ export default function Home() {
       const signalData = await calculateSignal(candlesData, lv.kPct);
 
       // Check for new signal and add to trade log
-      // Only enter trades if bot is running AND we have valid signal
-      if (botRunning && signalData && signalData.signal && signalData.touchedLevel) {
+      // Only enter trades if bot is running AND we have valid signal AND daily limits not hit
+      if (botRunning && canTrade && signalData && signalData.signal && signalData.touchedLevel) {
         // Optional order-book confirmation
         let approved = true;
         if (useOrderBookConfirm) {
@@ -287,6 +355,7 @@ export default function Home() {
                   ? (exitPrice - trade.entry) * positionSize
                   : (trade.entry - exitPrice) * positionSize;
               setSessionPnL((prev) => prev + pnl);
+              setDailyPnL((prev) => prev + pnl);
             }
 
             return { ...trade, status: newStatus, exitPrice };
@@ -447,6 +516,13 @@ export default function Home() {
   const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
 
   const handleStartBot = () => {
+    if (!canTrade) {
+      setError(isDailyTargetHit 
+        ? `Daily target reached (${dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}). Reset to continue.`
+        : `Daily stop loss hit (${dailyPnL.toFixed(2)}). Reset to continue.`
+      );
+      return;
+    }
     setBotRunning(true);
     setError(null);
   };
@@ -463,61 +539,68 @@ export default function Home() {
     <div className="min-h-screen text-white p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl sm:text-5xl font-bold mb-2 bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-            Garchy Bot
-          </h1>
-          <p className="text-gray-400 text-sm sm:text-base">Real-time trading signals powered by volatility analysis</p>
+        <div className="mb-8 relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 via-purple-500/20 to-pink-500/20 blur-3xl rounded-full"></div>
+          <div className="relative">
+            <h1 className="text-5xl sm:text-6xl font-black mb-3 text-gradient-animated">
+              GARCHY BOT
+            </h1>
+            <div className="flex items-center gap-3">
+              <div className="h-1 w-16 bg-gradient-to-r from-cyan-500 to-purple-500 rounded-full"></div>
+              <p className="text-gray-300 text-sm sm:text-base font-medium tracking-wide">Real-time trading signals powered by volatility analysis</p>
+              <div className="h-1 w-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"></div>
+            </div>
+          </div>
         </div>
 
         {/* Symbol selector and Bot controls */}
         <div className="mb-6 space-y-4">
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Trading Pair</label>
+              <div className="relative group">
+                <label className="block text-xs font-bold mb-2 text-cyan-300 uppercase tracking-wider">Trading Pair</label>
                 <select
                   value={symbol}
                   onChange={(e) => setSymbol(e.target.value)}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold cursor-pointer transition-all duration-300 hover:border-cyan-500/50 hover:shadow-lg hover:shadow-cyan-500/20 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 w-full bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
                 >
                   {SYMBOLS.map((s) => (
-                    <option key={s} value={s} className="bg-slate-800">
+                    <option key={s} value={s} className="bg-slate-900">
                       {s}
                     </option>
                   ))}
                 </select>
               </div>
               
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Interval</label>
+              <div className="relative group">
+                <label className="block text-xs font-bold mb-2 text-purple-300 uppercase tracking-wider">Interval</label>
                 <select
                   value={candleInterval}
                   onChange={(e) => setCandleInterval(e.target.value)}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold cursor-pointer transition-all duration-300 hover:border-purple-500/50 hover:shadow-lg hover:shadow-purple-500/20 focus:outline-none focus:ring-2 focus:ring-purple-500/50 w-full bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
                 >
                   {INTERVALS.map((int) => (
-                    <option key={int.value} value={int.value} className="bg-slate-800">
+                    <option key={int.value} value={int.value} className="bg-slate-900">
                       {int.label}
                     </option>
                   ))}
                 </select>
               </div>
               
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Max Trades</label>
+              <div className="relative group">
+                <label className="block text-xs font-bold mb-2 text-pink-300 uppercase tracking-wider">Max Trades</label>
                 <input
                   type="number"
                   min="1"
                   max="10"
                   value={maxTrades}
                   onChange={(e) => setMaxTrades(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-pink-500/50 hover:shadow-lg hover:shadow-pink-500/20 focus:outline-none focus:ring-2 focus:ring-pink-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
                 />
               </div>
               
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Leverage</label>
+              <div className="relative group">
+                <label className="block text-xs font-bold mb-2 text-cyan-300 uppercase tracking-wider">Leverage</label>
                 <input
                   type="number"
                   min="1"
@@ -525,7 +608,7 @@ export default function Home() {
                   step="1"
                   value={leverage}
                   onChange={(e) => setLeverage(Math.max(1, Math.min(100, parseFloat(e.target.value) || 1)))}
-                  className="glass-effect rounded-lg px-4 py-2.5 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-cyan-500/50 hover:shadow-lg hover:shadow-cyan-500/20 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
                 />
               </div>
             </div>
@@ -534,7 +617,8 @@ export default function Home() {
               {!botRunning ? (
                 <button
                   onClick={handleStartBot}
-                  className="glass-effect rounded-lg px-6 py-2.5 bg-green-500/20 text-green-400 border border-green-500/30 font-semibold hover:bg-green-500/30 transition-all duration-200 flex items-center gap-2"
+                  disabled={!canTrade}
+                  className="glass-effect rounded-xl px-8 py-3 bg-gradient-to-r from-green-500/20 to-emerald-500/20 text-green-300 border-2 border-green-500/40 font-bold hover:from-green-500/30 hover:to-emerald-500/30 hover:border-green-500/60 hover:shadow-lg hover:shadow-green-500/30 transition-all duration-300 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed backdrop-blur-xl"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -545,7 +629,7 @@ export default function Home() {
               ) : (
                 <button
                   onClick={handleStopBot}
-                  className="glass-effect rounded-lg px-6 py-2.5 bg-red-500/20 text-red-400 border border-red-500/30 font-semibold hover:bg-red-500/30 transition-all duration-200 flex items-center gap-2"
+                  className="glass-effect rounded-xl px-8 py-3 bg-gradient-to-r from-red-500/20 to-rose-500/20 text-red-300 border-2 border-red-500/40 font-bold hover:from-red-500/30 hover:to-rose-500/30 hover:border-red-500/60 hover:shadow-lg hover:shadow-red-500/30 transition-all duration-300 flex items-center gap-2 backdrop-blur-xl"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -555,42 +639,47 @@ export default function Home() {
                 </button>
               )}
               {botRunning && (
-                <div className="flex items-center gap-2 text-green-400">
-                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                  <span className="text-sm font-medium">Running</span>
+                <div className="flex items-center gap-2 text-green-400 px-4 py-2 rounded-lg bg-green-500/10 border border-green-500/30">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-lg shadow-green-400/50"></div>
+                  <span className="text-sm font-bold">Running</span>
                 </div>
               )}
             </div>
           </div>
           
           {/* Risk Management Controls */}
-          <div className="glass-effect rounded-lg p-4 border border-slate-700/50">
-            <h3 className="text-sm font-semibold text-gray-300 mb-3">Risk Management</h3>
+          <div className="glass-effect rounded-xl p-5 border-2 border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-indigo-500/5 backdrop-blur-xl shadow-2xl">
+            <h3 className="text-sm font-bold text-blue-300 mb-4 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              Risk Management
+            </h3>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div>
-                <label className="block text-xs font-medium mb-2 text-gray-400">Capital ($)</label>
+                <label className="block text-xs font-bold mb-2 text-blue-300 uppercase tracking-wider">Capital ($)</label>
                 <input
                   type="number"
                   min="1"
                   step="1"
                   value={capital}
                   onChange={(e) => setCapital(Math.max(1, parseFloat(e.target.value) || 1))}
-                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/20 focus:outline-none focus:ring-2 focus:ring-blue-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-2 text-gray-400">Risk Type</label>
+                <label className="block text-xs font-bold mb-2 text-blue-300 uppercase tracking-wider">Risk Type</label>
                 <select
                   value={riskType}
                   onChange={(e) => setRiskType(e.target.value as 'fixed' | 'percent')}
-                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium cursor-pointer transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold cursor-pointer transition-all duration-300 hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/20 focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-full bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
                 >
-                  <option value="fixed" className="bg-slate-800">Fixed $</option>
-                  <option value="percent" className="bg-slate-800">% of Capital</option>
+                  <option value="fixed" className="bg-slate-900">Fixed $</option>
+                  <option value="percent" className="bg-slate-900">% of Capital</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium mb-2 text-gray-400">
+                <label className="block text-xs font-bold mb-2 text-blue-300 uppercase tracking-wider">
                   Risk {riskType === 'percent' ? '(%)' : '($)'}
                 </label>
                 <input
@@ -606,13 +695,13 @@ export default function Home() {
                       setRiskAmount(Math.max(0.01, val));
                     }
                   }}
-                  className="glass-effect rounded-lg px-4 py-2 text-white font-medium w-full transition-all duration-200 hover:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/20 focus:outline-none focus:ring-2 focus:ring-blue-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
                 />
               </div>
               <div className="flex items-end">
-                <div className="glass-effect rounded-lg px-4 py-2 w-full border border-purple-500/30 bg-purple-500/10">
-                  <div className="text-xs text-gray-400 mb-1">Risk Per Trade</div>
-                  <div className="text-sm font-semibold text-purple-300">
+                <div className="glass-effect rounded-xl px-5 py-3 w-full border-2 border-purple-500/40 bg-gradient-to-br from-purple-500/10 to-pink-500/10 backdrop-blur-xl">
+                  <div className="text-xs text-purple-300 mb-1 font-bold uppercase tracking-wider">Risk Per Trade</div>
+                  <div className="text-lg font-black text-purple-200 bg-gradient-to-r from-purple-300 to-pink-300 bg-clip-text text-transparent">
                     ${riskType === 'percent' 
                       ? ((capital * riskAmount) / 100).toFixed(2)
                       : riskAmount.toFixed(2)}
@@ -622,11 +711,129 @@ export default function Home() {
             </div>
           </div>
           
+          {/* Daily Limits Section */}
+          <div className="glass-effect rounded-xl p-5 border border-cyan-500/20 bg-gradient-to-br from-cyan-500/5 to-purple-500/5 backdrop-blur-xl shadow-2xl">
+            <h3 className="text-sm font-bold text-cyan-300 mb-4 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              Daily Limits
+            </h3>
+            
+            {/* Daily P&L Display */}
+            <div className="mb-4 p-3 rounded-lg bg-slate-900/50 border border-slate-700/50">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-gray-400">Today's P&L</span>
+                <span className={`text-lg font-bold ${dailyPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500">Target: ${dailyTargetValue.toFixed(2)}</span>
+                <span className="text-gray-500">Stop: -${dailyStopValue.toFixed(2)}</span>
+              </div>
+            </div>
+
+            {/* Daily Target */}
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-xs font-medium mb-1.5 text-cyan-300">Target Type</label>
+                <select
+                  value={dailyTargetType}
+                  onChange={(e) => setDailyTargetType(e.target.value as 'fixed' | 'percent')}
+                  className="glass-effect rounded-lg px-3 py-2 text-white text-sm font-medium cursor-pointer transition-all duration-200 hover:border-cyan-500/50 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 w-full bg-slate-900/50"
+                >
+                  <option value="percent" className="bg-slate-900">%</option>
+                  <option value="fixed" className="bg-slate-900">$</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1.5 text-cyan-300">Target Amount</label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step={dailyTargetType === 'percent' ? "0.1" : "1"}
+                  value={dailyTargetAmount}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value) || 0;
+                    if (dailyTargetType === 'percent') {
+                      setDailyTargetAmount(Math.max(0.01, Math.min(100, val)));
+                    } else {
+                      setDailyTargetAmount(Math.max(0.01, val));
+                    }
+                  }}
+                  className="glass-effect rounded-lg px-3 py-2 text-white text-sm font-medium w-full transition-all duration-200 hover:border-cyan-500/50 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 bg-slate-900/50"
+                />
+              </div>
+            </div>
+
+            {/* Daily Stop Loss */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium mb-1.5 text-red-300">Stop Type</label>
+                <select
+                  value={dailyStopType}
+                  onChange={(e) => setDailyStopType(e.target.value as 'fixed' | 'percent')}
+                  className="glass-effect rounded-lg px-3 py-2 text-white text-sm font-medium cursor-pointer transition-all duration-200 hover:border-red-500/50 focus:outline-none focus:ring-2 focus:ring-red-500/50 w-full bg-slate-900/50"
+                >
+                  <option value="percent" className="bg-slate-900">%</option>
+                  <option value="fixed" className="bg-slate-900">$</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1.5 text-red-300">Stop Amount</label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step={dailyStopType === 'percent' ? "0.1" : "1"}
+                  value={dailyStopAmount}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value) || 0;
+                    if (dailyStopType === 'percent') {
+                      setDailyStopAmount(Math.max(0.01, Math.min(100, val)));
+                    } else {
+                      setDailyStopAmount(Math.max(0.01, val));
+                    }
+                  }}
+                  className="glass-effect rounded-lg px-3 py-2 text-white text-sm font-medium w-full transition-all duration-200 hover:border-red-500/50 focus:outline-none focus:ring-2 focus:ring-red-500/50 bg-slate-900/50"
+                />
+              </div>
+            </div>
+
+            {/* Status Indicators */}
+            {(isDailyTargetHit || isDailyStopHit) && (
+              <div className={`mt-4 p-3 rounded-lg border-2 ${
+                isDailyTargetHit 
+                  ? 'bg-green-500/10 border-green-500/50 text-green-400' 
+                  : 'bg-red-500/10 border-red-500/50 text-red-400'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-sm font-semibold">
+                    {isDailyTargetHit ? 'Daily Target Reached!' : 'Daily Stop Loss Hit!'}
+                  </span>
+                </div>
+                <p className="text-xs mt-1 opacity-80">
+                  {isDailyTargetHit 
+                    ? 'Trading paused. Reset daily P&L to continue.'
+                    : 'Trading paused. Reset daily P&L to continue.'}
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Order Book Confirmation Toggle */}
-          <div className="glass-effect rounded-lg p-4 border border-slate-700/50">
+          <div className="glass-effect rounded-xl p-5 border border-purple-500/20 bg-gradient-to-br from-purple-500/5 to-pink-500/5 backdrop-blur-xl shadow-2xl">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-gray-300 mb-1">Order Book Confirmation</h3>
+                <h3 className="text-sm font-bold text-purple-300 mb-1 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Order Book Confirmation
+                </h3>
                 <p className="text-xs text-gray-400">Require order-book imbalance/wall before entering trades</p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
@@ -636,41 +843,52 @@ export default function Home() {
                   onChange={(e) => setUseOrderBookConfirm(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div className="w-12 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-800/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-purple-500 peer-checked:to-pink-500 shadow-lg"></div>
               </label>
             </div>
           </div>
           
-          <div className="flex gap-2 text-xs text-gray-400">
-            <span>Open Trades: {trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
-            <span>•</span>
-            <span>Leverage: {leverage}x</span>
-            <span>•</span>
-            <span>Interval: {INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</span>
-            {levels && <span>•</span>}
-            {levels && <span>k%: {(levels.kPct * 100).toFixed(2)}%</span>}
+          <div className="flex flex-wrap gap-3 text-xs">
+            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+              <span className="text-gray-400 font-medium">Open:</span>
+              <span className="text-cyan-300 font-bold ml-1">{trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+              <span className="text-gray-400 font-medium">Leverage:</span>
+              <span className="text-purple-300 font-bold ml-1">{leverage}x</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+              <span className="text-gray-400 font-medium">Interval:</span>
+              <span className="text-pink-300 font-bold ml-1">{INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</span>
+            </div>
+            {levels && (
+              <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
+                <span className="text-gray-400 font-medium">k%:</span>
+                <span className="text-cyan-300 font-bold ml-1">{(levels.kPct * 100).toFixed(2)}%</span>
+              </div>
+            )}
           </div>
         </div>
 
         {error && (
-          <div className="glass-effect border-red-500/50 rounded-lg p-4 mb-6 text-red-400 shadow-lg shadow-red-500/10 animate-pulse">
-            <div className="flex items-center gap-2">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+          <div className="glass-effect border-2 border-red-500/50 rounded-xl p-4 mb-6 text-red-300 shadow-2xl shadow-red-500/20 backdrop-blur-xl bg-red-500/5 animate-pulse">
+            <div className="flex items-center gap-3">
+              <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
               </svg>
-              <span className="font-medium">Error: {error}</span>
+              <span className="font-bold">Error: {error}</span>
             </div>
           </div>
         )}
 
         {loading && (
           <div className="text-center py-12">
-            <div className="inline-flex items-center gap-3 text-gray-400">
-              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <div className="inline-flex items-center gap-3 text-cyan-300">
+              <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
-              <span className="font-medium">Loading market data...</span>
+              <span className="font-bold text-lg">Loading market data...</span>
             </div>
           </div>
         )}
@@ -679,10 +897,10 @@ export default function Home() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Chart - takes 2 columns */}
           <div className="lg:col-span-2">
-            <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl card-hover">
-              <div className="mb-4">
-                <h2 className="text-xl font-semibold text-gray-200">Price Chart</h2>
-                <p className="text-sm text-gray-400">Real-time candlestick data with trading levels</p>
+            <div className="glass-effect rounded-2xl p-5 sm:p-7 shadow-2xl card-hover border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
+              <div className="mb-5">
+                <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-2">Price Chart</h2>
+                <p className="text-sm text-gray-300 font-medium">Real-time candlestick data with trading levels</p>
               </div>
               <Chart
                 candles={candles}
