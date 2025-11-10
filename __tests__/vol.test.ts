@@ -41,16 +41,17 @@ describe('GARCH(1,1) Volatility', () => {
     
     const result = garch11FromReturns(returns);
     
-    // Python reference: vol ≈ 0.02135, kPct ≈ 2.135
+    // Python reference: vol ≈ 0.02135, kPct ≈ 0.02135 (as decimal, not percentage)
     // Note: Small differences due to initialization method - using sample variance
     expect(result.vol).toBeGreaterThan(0.01);
     expect(result.vol).toBeLessThan(0.05);
     expect(result.var).toBeGreaterThan(0.0001);
     expect(result.var).toBeLessThan(0.001);
-    expect(result.kPct).toBeGreaterThan(1.5);
-    expect(result.kPct).toBeLessThan(5);
-    expect(result.kPct).toBeGreaterThanOrEqual(1);
-    expect(result.kPct).toBeLessThanOrEqual(10);
+    // kPct is now in decimal form (0.01-0.10), so 2% = 0.02
+    expect(result.kPct).toBeGreaterThan(0.015);
+    expect(result.kPct).toBeLessThan(0.05);
+    expect(result.kPct).toBeGreaterThanOrEqual(0.01);
+    expect(result.kPct).toBeLessThanOrEqual(0.10);
   });
 
   it('should handle custom GARCH parameters', () => {
@@ -63,13 +64,14 @@ describe('GARCH(1,1) Volatility', () => {
       alpha0: 1e-5,
       alpha1: 0.15,
       beta1: 0.80,
-      clampPct: [0.5, 5],
+      clampPct: [0.5, 5], // These are percentages (0.5% to 5%), will be converted to decimals
     };
     
     const result = garch11FromReturns(returns, opts);
     
-    expect(result.kPct).toBeGreaterThanOrEqual(0.5);
-    expect(result.kPct).toBeLessThanOrEqual(5);
+    // clampPct [0.5, 5] means 0.5% to 5%, which becomes [0.005, 0.05] in decimal
+    expect(result.kPct).toBeGreaterThanOrEqual(0.005);
+    expect(result.kPct).toBeLessThanOrEqual(0.05);
     expect(result.vol).toBeGreaterThan(0);
     expect(result.var).toBeGreaterThan(0);
   });
@@ -86,8 +88,9 @@ describe('GARCH(1,1) Volatility', () => {
     
     // EWMA should still produce valid results
     expect(result.vol).toBeGreaterThan(0);
-    expect(result.kPct).toBeGreaterThanOrEqual(1);
-    expect(result.kPct).toBeLessThanOrEqual(10);
+    // kPct is in decimal form (0.01-0.10)
+    expect(result.kPct).toBeGreaterThanOrEqual(0.01);
+    expect(result.kPct).toBeLessThanOrEqual(0.10);
   });
 
   it('should clamp kPct within specified bounds', () => {
@@ -96,11 +99,12 @@ describe('GARCH(1,1) Volatility', () => {
       returns.push(Math.log(testPrices1[i] / testPrices1[i - 1]));
     }
     
-    // Test with very tight bounds
+    // Test with very tight bounds (2% to 3% = 0.02 to 0.03 in decimal)
     const result = garch11FromReturns(returns, { clampPct: [2, 3] });
     
-    expect(result.kPct).toBeGreaterThanOrEqual(2);
-    expect(result.kPct).toBeLessThanOrEqual(3);
+    // clampPct [2, 3] means 2% to 3%, which becomes [0.02, 0.03] in decimal
+    expect(result.kPct).toBeGreaterThanOrEqual(0.02);
+    expect(result.kPct).toBeLessThanOrEqual(0.03);
   });
 
   it('should validate GARCH parameters', () => {
@@ -120,21 +124,22 @@ describe('GARCH(1,1) Volatility', () => {
   it('should estimate kPct from prices', () => {
     const kPct = estimateKPercent(testPrices1);
     
-    expect(kPct).toBeGreaterThanOrEqual(1);
-    expect(kPct).toBeLessThanOrEqual(10);
+    // kPct is in decimal form (0.01-0.10)
+    expect(kPct).toBeGreaterThanOrEqual(0.01);
+    expect(kPct).toBeLessThanOrEqual(0.10);
     expect(typeof kPct).toBe('number');
   });
 
   it('should handle empty price array', () => {
     const kPct = estimateKPercent([]);
     
-    expect(kPct).toBe(1); // Default minimum clamp
+    expect(kPct).toBe(0.01); // Default minimum clamp (1% = 0.01 decimal)
   });
 
   it('should handle single price', () => {
     const kPct = estimateKPercent([100]);
     
-    expect(kPct).toBe(1); // Default minimum clamp
+    expect(kPct).toBe(0.01); // Default minimum clamp (1% = 0.01 decimal)
   });
 
   /**
@@ -193,8 +198,9 @@ describe('GARCH(1,1) Volatility', () => {
     });
     
     expect(kPct1).toBe(kPct2);
-    expect(kPct1).toBeGreaterThanOrEqual(1);
-    expect(kPct1).toBeLessThanOrEqual(10);
+    // kPct is in decimal form (0.01-0.10)
+    expect(kPct1).toBeGreaterThanOrEqual(0.01);
+    expect(kPct1).toBeLessThanOrEqual(0.10);
   });
 
   /**
@@ -219,8 +225,9 @@ describe('GARCH(1,1) Volatility', () => {
     // Python reference (approximate): vol range depends on price movements
     expect(result.vol).toBeGreaterThan(0.005);
     expect(result.vol).toBeLessThan(0.05);
-    expect(result.kPct).toBeGreaterThanOrEqual(1);
-    expect(result.kPct).toBeLessThanOrEqual(10);
+    // kPct is in decimal form (0.01-0.10)
+    expect(result.kPct).toBeGreaterThanOrEqual(0.01);
+    expect(result.kPct).toBeLessThanOrEqual(0.10);
   });
 
   it('should clamp extreme volatility values to prevent 100%+ results', () => {
@@ -229,9 +236,9 @@ describe('GARCH(1,1) Volatility', () => {
     
     const kPct = estimateKPercent(extremePrices);
     
-    // Should be clamped to max 10% (or filtered if returns are too extreme)
-    expect(kPct).toBeLessThanOrEqual(10);
-    expect(kPct).toBeGreaterThanOrEqual(1);
+    // Should be clamped to max 10% (0.10 decimal) (or filtered if returns are too extreme)
+    expect(kPct).toBeLessThanOrEqual(0.10);
+    expect(kPct).toBeGreaterThanOrEqual(0.01);
   });
 
   it('should handle invalid prices gracefully', () => {
@@ -240,9 +247,9 @@ describe('GARCH(1,1) Volatility', () => {
     
     const kPct = estimateKPercent(invalidPrices);
     
-    // Should return minimum clamp value
-    expect(kPct).toBeGreaterThanOrEqual(1);
-    expect(kPct).toBeLessThanOrEqual(10);
+    // Should return minimum clamp value (0.01 = 1% decimal)
+    expect(kPct).toBeGreaterThanOrEqual(0.01);
+    expect(kPct).toBeLessThanOrEqual(0.10);
   });
 
   it('should prevent multiplier from bypassing clamp', () => {
@@ -252,8 +259,9 @@ describe('GARCH(1,1) Volatility', () => {
     const kPct1 = garch11(prices, 1.0);
     const kPct10 = garch11(prices, 10.0); // Large multiplier
     
-    expect(kPct1).toBeLessThanOrEqual(20); // Max 20% with multiplier
-    expect(kPct10).toBeLessThanOrEqual(20); // Should be clamped even with multiplier
-    expect(kPct10).toBeGreaterThanOrEqual(1);
+    // kPct is in decimal form, max 20% = 0.20 decimal
+    expect(kPct1).toBeLessThanOrEqual(0.20); // Max 20% with multiplier
+    expect(kPct10).toBeLessThanOrEqual(0.20); // Should be clamped even with multiplier
+    expect(kPct10).toBeGreaterThanOrEqual(0.01);
   });
 });

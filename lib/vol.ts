@@ -155,7 +155,11 @@ export function garch11FromReturns(
 
   if (returns.length < 2) {
     const vol = ewmaVolatility(returns);
-    const kPct = Math.max(clampPct[0], Math.min(clampPct[1], vol * 100));
+    // Cap volatility before conversion to prevent extreme values
+    const volCapped = Math.min(vol, 0.1); // Cap at 10% daily volatility
+    // Return kPct as decimal (0.01-0.10) not percentage (1-10)
+    const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+    const kPct = kPctPercent / 100; // Convert to decimal form
     return { vol, var: vol ** 2, kPct };
   }
 
@@ -174,7 +178,9 @@ export function garch11FromReturns(
   // Convert to percentage and clamp
   // Add additional safeguard: if vol is extremely large, cap it before conversion
   const volCapped = Math.min(vol, 0.1); // Cap at 10% daily volatility (100% annualized)
-  const kPct = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+  // Return kPct as decimal (0.01-0.10) not percentage (1-10)
+  const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+  const kPct = kPctPercent / 100; // Convert to decimal form
 
   return { vol, var: sigma2, kPct };
 }
@@ -297,21 +303,21 @@ export function estimateKPercent(
 
   // Validate input
   if (!Array.isArray(prices) || prices.length < 2) {
-    return clampPct[0];
+    return clampPct[0] / 100; // Convert percentage to decimal
   }
 
   // Filter out invalid prices (non-positive, NaN, Infinity)
   const validPrices = prices.filter(p => p > 0 && isFinite(p));
   
   if (validPrices.length < 2) {
-    return clampPct[0];
+    return clampPct[0] / 100; // Convert percentage to decimal
   }
 
   const returns = logReturns(validPrices);
   
   // If no valid returns after filtering, return minimum
   if (returns.length === 0) {
-    return clampPct[0];
+    return clampPct[0] / 100; // Convert percentage to decimal
   }
 
   // Use EWMA fallback if insufficient data
@@ -319,7 +325,9 @@ export function estimateKPercent(
     const vol = ewmaVolatility(returns);
     // Add safeguard: cap volatility before conversion
     const volCapped = Math.min(vol, 0.1); // Cap at 10% daily volatility
-    return Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+    // Return kPct as decimal (0.01-0.10) not percentage (1-10)
+    const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+    return kPctPercent / 100; // Convert to decimal form
   }
 
   let params: { alpha0: number; alpha1: number; beta1: number } | undefined;
@@ -354,10 +362,13 @@ export function garch11Legacy(closes: number[], multiplier: number = 1.0): numbe
   const result = garch11FromReturns(returns, { clampPct: [1, 10] });
   
   // Validate multiplier and apply with final clamp
+  // kPct is now in decimal form (0.01-0.10), so multiply by 100 to get percentage, then apply multiplier
   const safeMultiplier = Math.max(0.1, Math.min(10, multiplier));
-  const finalResult = result.kPct * safeMultiplier;
+  const kPctPercent = result.kPct * 100; // Convert to percentage
+  const finalResultPercent = kPctPercent * safeMultiplier;
+  const finalResult = Math.max(1, Math.min(20, finalResultPercent)) / 100; // Convert back to decimal
   
-  return Math.max(1, Math.min(20, finalResult));
+  return finalResult;
 }
 
 /**
@@ -370,7 +381,7 @@ export function garch11Old(closes: number[], multiplier: number = 1.0): number {
 
 /**
  * Legacy function name - maps to estimateKPercent for API compatibility
- * Takes price array (closes) and returns kPct percentage
+ * Takes price array (closes) and returns kPct as decimal (0.01-0.10)
  * @deprecated Use estimateKPercent instead
  */
 export function garch11(closes: number[], multiplier: number = 1.0): number {
@@ -379,9 +390,11 @@ export function garch11(closes: number[], multiplier: number = 1.0): number {
   
   const kPct = estimateKPercent(closes, { clampPct: [1, 10] });
   
-  // Apply multiplier but ensure result stays within reasonable bounds
-  const result = kPct * safeMultiplier;
+  // kPct is in decimal form (0.01-0.10), convert to percentage, apply multiplier, then convert back
+  const kPctPercent = kPct * 100; // Convert to percentage
+  const resultPercent = kPctPercent * safeMultiplier;
   
-  // Final clamp to prevent values > 10% (or allow up to 20% if multiplier is used, but cap at 20%)
-  return Math.max(1, Math.min(20, result));
+  // Final clamp to prevent values > 20% (0.20 decimal), then convert back to decimal
+  const finalResultPercent = Math.max(1, Math.min(20, resultPercent));
+  return finalResultPercent / 100; // Convert back to decimal form
 }
