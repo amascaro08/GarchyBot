@@ -103,7 +103,10 @@ export default function Chart({
 
   // Update chart data and price lines when props change
   useEffect(() => {
-    if (!seriesRef.current || !chartRef.current) return;
+    if (!seriesRef.current || !chartRef.current) {
+      // Chart not ready yet, wait for next render
+      return;
+    }
 
     // Clear all existing price lines
     priceLinesRef.current.forEach(line => {
@@ -114,6 +117,11 @@ export default function Chart({
       }
     });
     priceLinesRef.current = [];
+
+    // Don't proceed if we don't have candle data
+    if (!candles || candles.length === 0) {
+      return;
+    }
 
     // Update candlestick data
     const candlestickData: CandlestickData<Time>[] = candles.map((candle) => ({
@@ -214,46 +222,50 @@ export default function Chart({
       priceLinesRef.current.push(line);
     }
 
-    // Add VWAP
-    if (vwap !== null && seriesRef.current) {
+    // Add VWAP - make it more distinct (purple, thick line)
+    if (vwap !== null && !isNaN(vwap) && vwap > 0) {
       const line = seriesRef.current.createPriceLine({
         price: vwap,
-        color: '#10b981',
-        lineWidth: 2,
-        lineStyle: 1,
+        color: '#8b5cf6', // Purple to distinguish from other green lines
+        lineWidth: 3,
+        lineStyle: 0, // Solid
         axisLabelVisible: true,
-        title: 'VWAP',
+        title: `VWAP: ${vwap.toFixed(2)}`,
       });
       priceLinesRef.current.push(line);
     }
 
-    // Add upper levels (U1-U5)
-    if (seriesRef.current && upLevels.length > 0) {
+    // Add upper levels (U1-U5) - ensure they're visible
+    if (upLevels.length > 0) {
       upLevels.forEach((level, idx) => {
-        const line = seriesRef.current!.createPriceLine({
-          price: level,
-          color: '#14b8a6',
-          lineWidth: 2,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `U${idx + 1}`,
-        });
-        priceLinesRef.current.push(line);
+        if (!isNaN(level) && level > 0) {
+          const line = seriesRef.current.createPriceLine({
+            price: level,
+            color: '#14b8a6',
+            lineWidth: 2,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: true,
+            title: `U${idx + 1}`,
+          });
+          priceLinesRef.current.push(line);
+        }
       });
     }
 
-    // Add lower levels (D1-D5)
-    if (seriesRef.current && dnLevels.length > 0) {
+    // Add lower levels (D1-D5) - ensure they're visible
+    if (dnLevels.length > 0) {
       dnLevels.forEach((level, idx) => {
-        const line = seriesRef.current!.createPriceLine({
-          price: level,
-          color: '#f97316',
-          lineWidth: 2,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `D${idx + 1}`,
-        });
-        priceLinesRef.current.push(line);
+        if (!isNaN(level) && level > 0) {
+          const line = seriesRef.current.createPriceLine({
+            price: level,
+            color: '#f97316',
+            lineWidth: 2,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: true,
+            title: `D${idx + 1}`,
+          });
+          priceLinesRef.current.push(line);
+        }
       });
     }
 
