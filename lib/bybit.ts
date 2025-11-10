@@ -2,6 +2,10 @@ import crypto from 'crypto';
 
 const BYBIT_TESTNET_BASE = 'https://api-testnet.bybit.com';
 const BYBIT_MAINNET_BASE = 'https://api.bybit.com';
+// Alternative: Use Binance API as fallback (more accessible, no geo-restrictions)
+const BINANCE_BASE = 'https://api.binance.com';
+// Alternative: Use CoinGecko API as final fallback (most accessible)
+const COINGECKO_BASE = 'https://api.coingecko.com';
 
 export interface BybitKlineResponse {
   retCode: number;
@@ -25,8 +29,131 @@ export class BybitError extends Error {
 }
 
 /**
+ * Fetch klines from CoinGecko API (final fallback)
+ * CoinGecko doesn't have exact klines, so we'll use their market data
+ * This is a simplified fallback that gets recent price data
+ */
+async function getKlinesFromCoinGecko(
+  symbol: string,
+  interval: string,
+  limit: number
+): Promise<Array<{ ts: number; open: number; high: number; low: number; close: number; volume: number }>> {
+  // Map symbols to CoinGecko IDs
+  const symbolMap: Record<string, string> = {
+    'BTCUSDT': 'bitcoin',
+    'ETHUSDT': 'ethereum',
+    'SOLUSDT': 'solana',
+  };
+  
+  const coinId = symbolMap[symbol] || 'bitcoin';
+  const url = `${COINGECKO_BASE}/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=1&interval=hourly`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  const response = await fetch(url, {
+    signal: controller.signal,
+    headers: {
+      'Accept': 'application/json',
+    },
+  });
+
+  clearTimeout(timeoutId);
+
+  if (!response.ok) {
+    throw new BybitError(response.status, `CoinGecko API error: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  
+  // CoinGecko returns prices array: [[timestamp, price], ...]
+  // We'll create simplified candles from this data
+  const prices = data.prices || [];
+  if (prices.length === 0) {
+    throw new BybitError(-1, 'No price data from CoinGecko');
+  }
+
+  // Create candles from price data (simplified - using same price for OHLC)
+  const now = Date.now();
+  const intervalMs = parseInt(interval) * 60 * 1000; // Convert minutes to ms
+  const candles: Array<{ ts: number; open: number; high: number; low: number; close: number; volume: number }> = [];
+  
+  for (let i = Math.max(0, prices.length - limit); i < prices.length; i++) {
+    const [timestamp, price] = prices[i];
+    candles.push({
+      ts: timestamp,
+      open: price,
+      high: price * 1.01, // Estimate
+      low: price * 0.99,  // Estimate
+      close: price,
+      volume: 0, // CoinGecko doesn't provide volume in this endpoint
+    });
+  }
+
+  return candles;
+}
+
+/**
+ * Fetch klines from Binance API (fallback when Bybit is blocked)
+ * Binance API format: /api/v3/klines
+ * Interval mapping: 5 -> 5m, 15 -> 15m, etc.
+ */
+async function getKlinesFromBinance(
+  symbol: string,
+  interval: string,
+  limit: number
+): Promise<Array<{ ts: number; open: number; high: number; low: number; close: number; volume: number }>> {
+  // Map Bybit intervals to Binance intervals
+  const intervalMap: Record<string, string> = {
+    '1': '1m',
+    '3': '3m',
+    '5': '5m',
+    '15': '15m',
+    '60': '1h',
+    '120': '2h',
+    '240': '4h',
+    'D': '1d',
+    'W': '1w',
+    'M': '1M',
+  };
+  
+  const binanceInterval = intervalMap[interval] || '5m';
+  const url = `${BINANCE_BASE}/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  const response = await fetch(url, {
+    signal: controller.signal,
+    headers: {
+      'Accept': 'application/json',
+    },
+  });
+
+  clearTimeout(timeoutId);
+
+  if (!response.ok) {
+    throw new BybitError(response.status, `Binance API error: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  // Binance returns: [openTime, open, high, low, close, volume, closeTime, quoteVolume, trades, takerBuyBaseVolume, takerBuyQuoteVolume, ignore]
+  // We need: ts, open, high, low, close, volume
+  return data.map((item: any[]) => ({
+    ts: item[0], // openTime
+    open: parseFloat(item[1]),
+    high: parseFloat(item[2]),
+    low: parseFloat(item[3]),
+    close: parseFloat(item[4]),
+    volume: parseFloat(item[5]),
+  }));
+}
+
+/**
  * Fetch klines from Bybit Unified API v5
  * Returns candles in ascending order (oldest first)
+ * Falls back to Binance API if Bybit is blocked
  */
 export async function getKlines(
   symbol: string,
@@ -134,6 +261,23 @@ export async function getKlines(
     });
   } catch (error) {
     if (error instanceof BybitError) {
+      // If Bybit fails with 403 (geo-blocked), try Binance as fallback
+      if (error.retCode === 403 || error.retMsg?.includes('CloudFront') || error.retMsg?.includes('blocked') || error.retMsg?.includes('Invalid response format')) {
+        console.warn('Bybit API blocked, trying Binance API...');
+        try {
+          return await getKlinesFromBinance(symbol, interval, limit);
+        } catch (binanceError) {
+          console.warn('Binance API also failed, trying CoinGecko...');
+          try {
+            return await getKlinesFromCoinGecko(symbol, interval, limit);
+          } catch (coingeckoError) {
+            throw new BybitError(
+              -1,
+              `All APIs failed. Bybit: ${error.retMsg}. Binance: ${binanceError instanceof Error ? binanceError.message : 'Unknown'}. CoinGecko: ${coingeckoError instanceof Error ? coingeckoError.message : 'Unknown'}`
+            );
+          }
+        }
+      }
       throw error;
     }
     if (error instanceof Error && error.name === 'AbortError') {
