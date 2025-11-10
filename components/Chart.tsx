@@ -42,6 +42,7 @@ export default function Chart({
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const lastProcessedRef = useRef<string>('');
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -108,22 +109,28 @@ export default function Chart({
       return;
     }
 
-    // Clear all existing price lines
-    priceLinesRef.current.forEach(line => {
-      try {
-        if (line && typeof (line as any).remove === 'function') {
-          (line as any).remove();
-        }
-      } catch (e) {
-        // Ignore errors if line was already removed
-      }
-    });
-    priceLinesRef.current = [];
-
     // Don't proceed if we don't have candle data
     if (!candles || candles.length === 0) {
       return;
     }
+
+    // Create a signature of current data to prevent duplicate processing
+    const dataSignature = JSON.stringify({
+      upper,
+      lower,
+      dOpen,
+      vwap,
+      upLevels,
+      dnLevels,
+      openTrades: openTrades.map(t => `${t.entry}-${t.tp}-${t.sl}-${t.side}`),
+    });
+
+    // Skip if we've already processed this exact data
+    if (lastProcessedRef.current === dataSignature) {
+      return;
+    }
+
+    lastProcessedRef.current = dataSignature;
 
     // Update candlestick data
     const candlestickData: CandlestickData<Time>[] = candles.map((candle) => ({
@@ -135,6 +142,25 @@ export default function Chart({
     }));
 
     seriesRef.current.setData(candlestickData);
+
+    // Clear all existing price lines more reliably
+    // Use the series' removePriceLine method if available, otherwise use remove()
+    priceLinesRef.current.forEach(line => {
+      try {
+        if (line) {
+          // Try using removePriceLine from the series
+          if (seriesRef.current && typeof (seriesRef.current as any).removePriceLine === 'function') {
+            (seriesRef.current as any).removePriceLine(line);
+          } else if (typeof (line as any).remove === 'function') {
+            (line as any).remove();
+          }
+        }
+      } catch (e) {
+        // Ignore errors if line was already removed
+        console.debug('Error removing price line:', e);
+      }
+    });
+    priceLinesRef.current = [];
 
     // Add upper and lower bounds
     if (upper !== null && seriesRef.current) {
@@ -225,7 +251,7 @@ export default function Chart({
     }
 
     // Add VWAP - make it more distinct (purple, thick line)
-    if (vwap !== null && !isNaN(vwap) && vwap > 0) {
+    if (vwap !== null && !isNaN(vwap) && vwap > 0 && seriesRef.current) {
       const line = seriesRef.current.createPriceLine({
         price: vwap,
         color: '#8b5cf6', // Purple to distinguish from other green lines
@@ -321,6 +347,24 @@ export default function Chart({
         seriesRef.current.setMarkers([]);
       }
     }
+
+    // Cleanup function to remove lines when effect re-runs or component unmounts
+    return () => {
+      priceLinesRef.current.forEach(line => {
+        try {
+          if (line) {
+            if (seriesRef.current && typeof (seriesRef.current as any).removePriceLine === 'function') {
+              (seriesRef.current as any).removePriceLine(line);
+            } else if (typeof (line as any).remove === 'function') {
+              (line as any).remove();
+            }
+          }
+        } catch (e) {
+          // Ignore errors
+        }
+      });
+      priceLinesRef.current = [];
+    };
   }, [candles, dOpen, vwap, upLevels, dnLevels, upper, lower, markers, openTrades]);
 
   return <div ref={chartContainerRef} className="w-full h-[600px]" />;

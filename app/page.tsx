@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
 import TradeLog, { Trade } from '@/components/TradeLog';
@@ -388,29 +388,33 @@ export default function Home() {
     }
   }, [symbol, candleInterval, botRunning]);
 
-  // Prepare chart markers from signals
-  const chartMarkers =
-    signal && signal.signal && signal.touchedLevel
-      ? [
-          {
-            time: candles[candles.length - 1]?.ts / 1000,
-            position: signal.signal === 'LONG' ? ('belowBar' as const) : ('aboveBar' as const),
-            color: signal.signal === 'LONG' ? '#10b981' : '#ef4444',
-            shape: signal.signal === 'LONG' ? ('arrowUp' as const) : ('arrowDown' as const),
-            text: `${signal.signal} @ ${signal.touchedLevel.toFixed(2)}`,
-          },
-        ]
-      : [];
+  // Prepare chart markers from signals - memoize to prevent unnecessary re-renders
+  const chartMarkers = useMemo(() => {
+    if (signal && signal.signal && signal.touchedLevel && candles.length > 0) {
+      return [
+        {
+          time: candles[candles.length - 1]?.ts / 1000,
+          position: signal.signal === 'LONG' ? ('belowBar' as const) : ('aboveBar' as const),
+          color: signal.signal === 'LONG' ? '#10b981' : '#ef4444',
+          shape: signal.signal === 'LONG' ? ('arrowUp' as const) : ('arrowDown' as const),
+          text: `${signal.signal} @ ${signal.touchedLevel.toFixed(2)}`,
+        },
+      ];
+    }
+    return [];
+  }, [signal, candles]);
 
-  // Get open trades for chart visualization
-  const openTrades = trades
-    .filter((t) => t.status === 'open')
-    .map((t) => ({
-      entry: t.entry,
-      tp: t.tp,
-      sl: t.sl,
-      side: t.side,
-    }));
+  // Get open trades for chart visualization - memoize to prevent unnecessary re-renders
+  const openTrades = useMemo(() => {
+    return trades
+      .filter((t) => t.status === 'open')
+      .map((t) => ({
+        entry: t.entry,
+        tp: t.tp,
+        sl: t.sl,
+        side: t.side,
+      }));
+  }, [trades]);
 
   // Get current price
   const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
