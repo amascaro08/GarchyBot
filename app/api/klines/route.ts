@@ -21,17 +21,34 @@ export async function GET(request: NextRequest) {
     });
 
     let candles;
+    let lastError: Error | null = null;
+    
     try {
       // Try testnet first if requested
       candles = await getKlines(query.symbol, query.interval, query.limit, query.testnet);
     } catch (error: any) {
-      // If testnet fails with 403, try mainnet as fallback
-      if (query.testnet && error instanceof BybitError && (error.retCode === 403 || error.retCode === 10004)) {
-        console.warn('Testnet API returned error, trying mainnet...');
-        candles = await getKlines(query.symbol, query.interval, query.limit, false);
+      lastError = error;
+      // If testnet fails, try mainnet as fallback
+      if (query.testnet && error instanceof BybitError) {
+        console.warn(`Testnet API error (${error.retCode}): ${error.retMsg}, trying mainnet...`);
+        try {
+          candles = await getKlines(query.symbol, query.interval, query.limit, false);
+          lastError = null; // Success, clear error
+        } catch (mainnetError: any) {
+          console.error('Mainnet API also failed:', mainnetError);
+          lastError = mainnetError;
+          throw mainnetError;
+        }
       } else {
         throw error;
       }
+    }
+
+    if (!candles || candles.length === 0) {
+      return NextResponse.json(
+        { error: 'No kline data returned from Bybit API' },
+        { status: 500 }
+      );
     }
 
     // Validate with Zod
@@ -45,10 +62,19 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
+    
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch klines';
-    console.error('Klines API error:', errorMessage);
+    const errorDetails = error instanceof BybitError 
+      ? `Bybit API Error ${error.retCode}: ${error.retMsg}`
+      : errorMessage;
+    
+    console.error('Klines API error:', errorDetails, error);
+    
     return NextResponse.json(
-      { error: errorMessage },
+      { 
+        error: errorDetails,
+        type: error instanceof BybitError ? 'BybitError' : 'UnknownError'
+      },
       { status: 500 }
     );
   }

@@ -35,6 +35,7 @@ export async function getKlines(
   testnet: boolean = true
 ): Promise<Array<{ ts: number; open: number; high: number; low: number; close: number; volume: number }>> {
   const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  // Bybit v5 API format: /v5/market/kline
   const url = `${baseUrl}/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`;
 
   try {
@@ -45,24 +46,53 @@ export async function getKlines(
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
     });
 
     clearTimeout(timeoutId);
 
-    // Try to parse response body even if status is not ok
+    // Check content type before parsing
+    const contentType = response.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+
+    // Try to parse response body
     let data: BybitKlineResponse | BybitError;
+    let responseText: string = '';
+    
     try {
-      data = await response.json();
-    } catch (e) {
-      // If JSON parsing fails, throw with HTTP status
-      if (!response.ok) {
-        throw new BybitError(response.status, `HTTP ${response.status}: ${response.statusText}`);
+      // Always read as text first, then parse as JSON
+      // This allows us to handle both JSON and non-JSON responses
+      responseText = await response.text();
+      
+      // Try to parse as JSON
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseError) {
+        // If parsing fails, it's likely HTML or plain text error
+        if (!response.ok) {
+          throw new BybitError(
+            response.status,
+            `Invalid response format (expected JSON, got ${contentType}). Response preview: ${responseText.substring(0, 300)}`
+          );
+        }
+        throw new BybitError(-1, `Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
       }
-      throw new BybitError(-1, 'Failed to parse response');
+    } catch (e) {
+      // If reading response fails, throw with HTTP status
+      if (e instanceof BybitError) {
+        throw e;
+      }
+      if (!response.ok) {
+        throw new BybitError(
+          response.status,
+          `HTTP ${response.status}: ${response.statusText}`
+        );
+      }
+      throw new BybitError(-1, e instanceof Error ? e.message : 'Failed to read response');
     }
 
-    // Check if it's an error response
+    // Check if it's an error response from Bybit
     if ('retCode' in data && data.retCode !== 0) {
       throw new BybitError(data.retCode, data.retMsg || `HTTP ${response.status}`);
     }
@@ -76,18 +106,32 @@ export async function getKlines(
       );
     }
 
-    // Bybit returns newest first, so reverse to get oldest first
+    // Validate that we have result data
     const klineData = data as BybitKlineResponse;
-    const reversed = [...(klineData.result.list || [])].reverse();
+    if (!klineData.result || !klineData.result.list) {
+      throw new BybitError(-1, 'Invalid response format: missing result.list');
+    }
 
-    return reversed.map((item) => ({
-      ts: parseInt(item[0]),
-      open: parseFloat(item[1]),
-      high: parseFloat(item[2]),
-      low: parseFloat(item[3]),
-      close: parseFloat(item[4]),
-      volume: parseFloat(item[5]),
-    }));
+    // Bybit returns newest first, so reverse to get oldest first
+    const reversed = [...klineData.result.list].reverse();
+
+    if (reversed.length === 0) {
+      throw new BybitError(-1, 'No kline data returned');
+    }
+
+    return reversed.map((item) => {
+      if (!item || item.length < 6) {
+        throw new BybitError(-1, `Invalid kline data format: ${JSON.stringify(item)}`);
+      }
+      return {
+        ts: parseInt(item[0]),
+        open: parseFloat(item[1]),
+        high: parseFloat(item[2]),
+        low: parseFloat(item[3]),
+        close: parseFloat(item[4]),
+        volume: parseFloat(item[5]),
+      };
+    });
   } catch (error) {
     if (error instanceof BybitError) {
       throw error;

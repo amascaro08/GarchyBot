@@ -25,17 +25,31 @@ export default function Home() {
   // Fetch klines
   const fetchKlines = async () => {
     try {
+      // Use mainnet by default (more reliable for public data)
       const res = await fetch(`/api/klines?symbol=${symbol}&interval=5&limit=200&testnet=false`);
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to fetch klines');
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (parseError) {
+        // If JSON parsing fails, throw with status
+        throw new Error(`Failed to parse response: HTTP ${res.status} ${res.statusText}`);
       }
-      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to fetch klines: HTTP ${res.status}`);
+      }
+      
+      if (!data || !Array.isArray(data) || data.length === 0) {
+        throw new Error('No kline data received from API');
+      }
+      
       setCandles(data);
       return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch klines';
       setError(errorMsg);
+      console.error('fetchKlines error:', err);
       throw err;
     }
   };
