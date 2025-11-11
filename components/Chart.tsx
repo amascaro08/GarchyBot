@@ -52,8 +52,8 @@ export default function Chart({
   const lastProcessedRef = useRef<string>('');
   const lastCandleRef = useRef<Candle | null>(null);
 
-  // Use WebSocket hook for real-time data
-  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol);
+  // Use WebSocket hook for real-time data, initialize with static candles
+  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, candles);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;

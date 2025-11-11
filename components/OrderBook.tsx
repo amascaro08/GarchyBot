@@ -17,6 +17,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   const [maxSize, setMaxSize] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(0);
+  const [lastOrderBook, setLastOrderBook] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
 
   // Use WebSocket hook for real-time order book data
   const { orderBook: wsOrderBook, isConnected: wsConnected } = useWebSocket(symbol);
@@ -42,21 +43,48 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
 
   // Use WebSocket order book if available and connected, otherwise show static data
   // Only use WS data if it has meaningful content (more than just empty arrays)
+  // Throttle updates to prevent excessive re-renders
   const displayOrderBook = (wsConnected && wsOrderBook && wsOrderBook.bids.length > 0 && wsOrderBook.asks.length > 0)
     ? wsOrderBook
     : snapshot;
 
-  // Update maxSize when displayOrderBook changes, but throttle updates
-  const currentTime = Date.now();
+  // Only update the order book display if data has actually changed significantly
   useEffect(() => {
-    if (displayOrderBook && currentTime - lastUpdateTime > 1000) { // Update maxSize at most every second
-      const allSizes = [...displayOrderBook.bids, ...displayOrderBook.asks].map(e => e.size);
-      setMaxSize(Math.max(...allSizes, 1));
-      setLastUpdateTime(currentTime);
-    }
-  }, [displayOrderBook, lastUpdateTime, currentTime]);
+    if (displayOrderBook && lastOrderBook) {
+      // Check if the top 10 bids/asks have changed significantly
+      const top10BidsChanged = displayOrderBook.bids.slice(0, 10).some((bid, idx) =>
+        !lastOrderBook.bids[idx] ||
+        Math.abs(bid.price - lastOrderBook.bids[idx].price) > bid.price * 0.0001 || // 0.01% change
+        Math.abs(bid.size - lastOrderBook.bids[idx].size) > bid.size * 0.1 // 10% size change
+      );
 
-  if (!displayOrderBook || displayOrderBook.bids.length === 0 || displayOrderBook.asks.length === 0) {
+      const top10AsksChanged = displayOrderBook.asks.slice(0, 10).some((ask, idx) =>
+        !lastOrderBook.asks[idx] ||
+        Math.abs(ask.price - lastOrderBook.asks[idx].price) > ask.price * 0.0001 ||
+        Math.abs(ask.size - lastOrderBook.asks[idx].size) > ask.size * 0.1
+      );
+
+      if (top10BidsChanged || top10AsksChanged) {
+        setLastOrderBook(displayOrderBook);
+      }
+    } else if (displayOrderBook) {
+      setLastOrderBook(displayOrderBook);
+    }
+  }, [displayOrderBook, lastOrderBook]);
+
+  // Update maxSize when displayOrderBook changes, but throttle updates to prevent excessive re-renders
+  useEffect(() => {
+    if (lastOrderBook) {
+      const currentTime = Date.now();
+      if (currentTime - lastUpdateTime > 2000) { // Update maxSize at most every 2 seconds
+        const allSizes = [...lastOrderBook.bids, ...lastOrderBook.asks].map(e => e.size);
+        setMaxSize(Math.max(...allSizes, 1));
+        setLastUpdateTime(currentTime);
+      }
+    }
+  }, [lastOrderBook, lastUpdateTime]);
+
+  if (!lastOrderBook || lastOrderBook.bids.length === 0 || lastOrderBook.asks.length === 0) {
     return (
       <div className="glass-effect rounded-xl p-6 border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
         <div className="flex items-center justify-between mb-4">
@@ -88,8 +116,8 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   }
 
   // Show top 10 bids and asks
-  const topBids = displayOrderBook.bids.slice(0, 10).reverse(); // Reverse to show highest first
-  const topAsks = displayOrderBook.asks.slice(0, 10);
+  const topBids = lastOrderBook.bids.slice(0, 10).reverse(); // Reverse to show highest first
+  const topAsks = lastOrderBook.asks.slice(0, 10);
 
   const formatPrice = (price: number) => {
     if (price >= 1000) return price.toFixed(2);

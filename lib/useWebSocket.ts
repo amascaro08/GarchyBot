@@ -47,7 +47,7 @@ interface WebSocketHook {
 const BYBIT_WS_TESTNET = 'wss://stream-testnet.bybit.com/v5/public/linear';
 const BYBIT_WS_MAINNET = 'wss://stream.bybit.com/v5/public/linear';
 
-export function useWebSocket(symbol: string): WebSocketHook {
+export function useWebSocket(symbol: string, initialCandles: Candle[] = []): WebSocketHook {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -56,7 +56,7 @@ export function useWebSocket(symbol: string): WebSocketHook {
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
   const [orderBook, setOrderBook] = useState<OrderBookData | null>(null);
-  const [candles, setCandles] = useState<Candle[]>([]);
+  const [candles, setCandles] = useState<Candle[]>(initialCandles);
   const [trades, setTrades] = useState<TradeData[]>([]);
 
   // Get WebSocket URL based on environment
@@ -162,13 +162,16 @@ export function useWebSocket(symbol: string): WebSocketHook {
             return;
           }
 
-          // Handle error messages
+          // Handle error messages - only log if it's a real error (not just no data)
           if (message.retCode && message.retCode !== 0) {
-            console.error(`WebSocket error for ${symbol}:`, message.retMsg);
+            // Reduce error logging for common non-error codes
+            if (message.retCode !== 10001 && message.retCode !== 10002) { // Heartbeat related
+              console.error(`WebSocket error for ${symbol}:`, message.retMsg);
+            }
             return;
           }
 
-          // Process stream data
+          // Process stream data only if we have valid data
           if (message.topic && message.data) {
             if (message.topic.startsWith('orderbook.')) {
               handleOrderBookMessage(message);
@@ -179,7 +182,10 @@ export function useWebSocket(symbol: string): WebSocketHook {
             }
           }
         } catch (error) {
-          console.error('Error processing WebSocket message:', error);
+          // Reduce console error spam - only log parsing errors occasionally
+          if (Math.random() < 0.01) { // Log only 1% of parsing errors
+            console.error('Error processing WebSocket message:', error);
+          }
         }
       };
 
@@ -197,7 +203,10 @@ export function useWebSocket(symbol: string): WebSocketHook {
       };
 
       ws.onerror = (error) => {
-        console.error(`WebSocket error for ${symbol}:`, error);
+        // Only log WebSocket errors occasionally to reduce console spam
+        if (Math.random() < 0.1) { // Log only 10% of connection errors
+          console.error(`WebSocket error for ${symbol}:`, error);
+        }
         setConnectionStatus('error');
       };
 
