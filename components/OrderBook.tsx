@@ -18,6 +18,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(0);
   const [lastOrderBook, setLastOrderBook] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
+  const [fixedMaxSize, setFixedMaxSize] = useState<number>(0);
 
   // Use WebSocket hook for real-time order book data
   const { orderBook: wsOrderBook, isConnected: wsConnected } = useWebSocket(symbol);
@@ -36,7 +37,12 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
 
         // Calculate max size for visualization
         const allSizes = [...snap.bids, ...snap.asks].map(e => e.size);
-        setMaxSize(Math.max(...allSizes, 1));
+        const newMaxSize = Math.max(...allSizes, 1);
+        setMaxSize(newMaxSize);
+        // Set fixed max size for consistent visualization
+        if (fixedMaxSize === 0 || newMaxSize > fixedMaxSize) {
+          setFixedMaxSize(newMaxSize);
+        }
       }
     }
   }, [symbol]);
@@ -72,17 +78,8 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
     }
   }, [displayOrderBook, lastOrderBook]);
 
-  // Update maxSize when displayOrderBook changes, but throttle updates to prevent excessive re-renders
-  useEffect(() => {
-    if (lastOrderBook) {
-      const currentTime = Date.now();
-      if (currentTime - lastUpdateTime > 2000) { // Update maxSize at most every 2 seconds
-        const allSizes = [...lastOrderBook.bids, ...lastOrderBook.asks].map(e => e.size);
-        setMaxSize(Math.max(...allSizes, 1));
-        setLastUpdateTime(currentTime);
-      }
-    }
-  }, [lastOrderBook, lastUpdateTime]);
+  // Use fixed maxSize for consistent visualization - no longer update it dynamically
+  // This prevents the order book from expanding/contracting
 
   if (!lastOrderBook || lastOrderBook.bids.length === 0 || lastOrderBook.asks.length === 0) {
     return (
@@ -160,7 +157,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
         {/* Asks (Sell orders) - Red */}
         {topAsks.map((ask, idx) => {
           const notional = calculateNotional(ask.price, ask.size);
-          const widthPercent = (ask.size / Math.max(maxSize, 1)) * 100;
+          const widthPercent = (ask.size / Math.max(fixedMaxSize, 1)) * 100;
           const isNearPrice = currentPrice && Math.abs(ask.price - currentPrice) / currentPrice < 0.001;
           
           return (
@@ -207,7 +204,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
         {/* Bids (Buy orders) - Green */}
         {topBids.map((bid, idx) => {
           const notional = calculateNotional(bid.price, bid.size);
-          const widthPercent = (bid.size / Math.max(maxSize, 1)) * 100;
+          const widthPercent = (bid.size / Math.max(fixedMaxSize, 1)) * 100;
           const isNearPrice = currentPrice && Math.abs(bid.price - currentPrice) / currentPrice < 0.001;
           
           return (

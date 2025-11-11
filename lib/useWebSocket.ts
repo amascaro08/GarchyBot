@@ -57,6 +57,13 @@ export function useWebSocket(symbol: string, initialCandles: Candle[] = []): Web
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
   const [orderBook, setOrderBook] = useState<OrderBookData | null>(null);
   const [candles, setCandles] = useState<Candle[]>(initialCandles);
+
+  // Update candles state when initialCandles changes (but don't reset if we already have WS data)
+  useEffect(() => {
+    if (initialCandles.length > 0 && candles.length === 0) {
+      setCandles(initialCandles);
+    }
+  }, [initialCandles, candles.length]);
   const [trades, setTrades] = useState<TradeData[]>([]);
 
   // Get WebSocket URL based on environment
