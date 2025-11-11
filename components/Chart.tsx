@@ -75,9 +75,9 @@ export default function Chart({
           timeVisible: true,
           secondsVisible: false,
         },
-        // Disable auto-scaling to prevent inappropriate scales for different assets
-        handleScroll: false,
-        handleScale: false,
+        // Allow user interaction but prevent automatic scaling issues
+        handleScroll: true,
+        handleScale: true,
       });
 
       chartRef.current = chart;
@@ -167,18 +167,13 @@ export default function Chart({
 
      // After setting data, fit the chart to show all candles properly
      if (chartRef.current && displayCandles.length > 0) {
-       // Small delay to ensure data is processed, then fit content and disable auto-scaling
+       // Small delay to ensure data is processed
        setTimeout(() => {
          if (chartRef.current) {
+           // Fit content to show all candles, but allow user interaction
            chartRef.current.timeScale().fitContent();
-           // Lock the scale to prevent auto-adjustments that cause inappropriate scaling
-           const timeScale = chartRef.current.timeScale();
-           timeScale.applyOptions({
-             fixLeftEdge: true,
-             fixRightEdge: true,
-           });
          }
-       }, 200); // Increased delay to ensure proper rendering
+       }, 200);
      }
 
     // Create a signature of price line data to prevent duplicate processing
