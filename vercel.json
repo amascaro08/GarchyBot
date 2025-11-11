@@ -2,7 +2,7 @@
   "framework": "nextjs",
   "functions": {
     "pages/api/socket.ts": {
-      "runtime": "@vercel/node"
+      "runtime": "@vercel/node@18"
     }
   },
   "crons": [
