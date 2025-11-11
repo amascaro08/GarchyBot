@@ -25,6 +25,7 @@ interface RealtimeData {
 
 let io: SocketIOServer | null = null;
 const bybitSockets: Record<string, WebSocket> = {};
+const pingIntervals: Record<string, NodeJS.Timeout> = {};
 const symbolSubscriptions: Record<string, Set<string>> = {};
 
 export function initializeWebSocketServer(server: HTTPServer) {
@@ -115,7 +116,8 @@ export function initializeWebSocketServer(server: HTTPServer) {
 async function sendMarketDataToClient(socket: Socket, symbol: string, interval: string) {
   try {
     // Fetch latest klines data
-    const candles = await getKlines(symbol, interval as '1' | '3' | '5' | '15' | '60' | '120' | '240' | 'D' | 'W' | 'M', 200, true); // Use testnet for now
+    const isProduction = process.env.NODE_ENV === 'production';
+    const candles = await getKlines(symbol, interval as '1' | '3' | '5' | '15' | '60' | '120' | '240' | 'D' | 'W' | 'M', 200, !isProduction); // Use mainnet in production
 
     // Get order book snapshot
     const orderBookSnapshot = getOrderBookSnapshot(symbol);
@@ -195,15 +197,17 @@ function initializeBybitWebSocket(symbol: string) {
     return; // Already connected
   }
 
-  const ws = new WebSocket('wss://stream-testnet.bybit.com/v5/public/linear');
+  const isProduction = process.env.NODE_ENV === 'production';
+  const wsUrl = isProduction ? 'wss://stream.bybit.com/v5/public/linear' : 'wss://stream-testnet.bybit.com/v5/public/linear';
+  const ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     console.log(`Bybit WebSocket opened for ${symbol}`);
 
-    // Subscribe to real-time klines
+    // Subscribe to real-time klines (1-minute for more real-time updates)
     const klineSub = {
       op: 'subscribe',
-      args: [`kline.5.${symbol}`] // 5-minute klines
+      args: [`kline.1.${symbol}`]
     };
     ws.send(JSON.stringify(klineSub));
 
@@ -213,12 +217,28 @@ function initializeBybitWebSocket(symbol: string) {
       args: [`orderbook.50.${symbol}`]
     };
     ws.send(JSON.stringify(orderbookSub));
+
+    // Set up ping interval to keep connection alive
+    pingIntervals[symbol] = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30000); // Ping every 30 seconds
   };
 
   ws.onmessage = (event) => {
     try {
+      if (event.data === 'pong') {
+        return; // Handle pong responses
+      }
+
       const data = event.data.toString();
       const msg = JSON.parse(data);
+
+      if (msg.success === false) {
+        console.error(`Bybit WebSocket subscription failed for ${symbol}:`, msg.ret_msg);
+        return;
+      }
 
       if (msg.topic && msg.data) {
         // Handle kline updates
@@ -257,10 +277,15 @@ function initializeBybitWebSocket(symbol: string) {
     }
   };
 
-  ws.onclose = () => {
-    console.log(`Bybit WebSocket closed for ${symbol}`);
+  ws.onclose = (event) => {
+    console.log(`Bybit WebSocket closed for ${symbol}, code: ${event.code}, reason: ${event.reason}`);
     delete bybitSockets[symbol];
-    // Auto-reconnect after delay
+    // Clear ping interval
+    if (pingIntervals[symbol]) {
+      clearInterval(pingIntervals[symbol]);
+      delete pingIntervals[symbol];
+    }
+    // Auto-reconnect after delay if still subscribed
     setTimeout(() => {
       if (symbolSubscriptions[symbol]?.size > 0) {
         initializeBybitWebSocket(symbol);
@@ -297,6 +322,11 @@ export function unsubscribeFromRealtimeData(symbol: string) {
     // Close WebSocket if no more subscribers
     if (symbolSubscriptions[symbol].size === 0) {
       if (bybitSockets[symbol]) {
+        // Clear ping interval before closing
+        if (pingIntervals[symbol]) {
+          clearInterval(pingIntervals[symbol]);
+          delete pingIntervals[symbol];
+        }
         bybitSockets[symbol].close();
         delete bybitSockets[symbol];
       }

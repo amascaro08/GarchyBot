@@ -40,5 +40,13 @@ export default function SocketHandler(req: NextApiRequest, res: NextApiResponse)
   // Initialize our custom WebSocket handlers
   initializeWebSocketServer(httpServer);
 
+  // Initialize real-time data for common symbols
+  const { subscribeToRealtimeData } = require('@/lib/websocket');
+  const commonSymbols = ['BTCUSDT', 'ETHUSDT']; // Add more symbols as needed
+
+  commonSymbols.forEach(symbol => {
+    subscribeToRealtimeData(symbol);
+  });
+
   res.status(200).json({ message: 'Socket server initialized' });
 }

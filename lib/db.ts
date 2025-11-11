@@ -262,6 +262,7 @@ export async function updateLastPolled(botConfigId: string): Promise<void> {
 
 export async function createTrade(trade: Omit<Trade, 'id' | 'created_at' | 'updated_at'>): Promise<Trade> {
   try {
+    console.log(`[DB] Creating trade for user ${trade.user_id}: ${trade.side} ${trade.symbol} @ ${trade.entry_price}, reason: ${trade.reason}`);
     const result = await sql<Trade>`
       INSERT INTO trades (
         user_id, bot_config_id, symbol, side, status,
@@ -275,6 +276,7 @@ export async function createTrade(trade: Omit<Trade, 'id' | 'created_at' | 'upda
       )
       RETURNING *
     `;
+    console.log(`[DB] Trade created successfully with ID: ${result.rows[0].id}`);
     return result.rows[0];
   } catch (error) {
     console.error('Error creating trade:', error);
@@ -307,12 +309,14 @@ export async function getOpenTrades(userId: string, botConfigId?: string): Promi
 
 export async function getAllTrades(userId: string, limit = 100): Promise<Trade[]> {
   try {
+    console.log(`[DB] Fetching all trades for user ${userId}, limit: ${limit}`);
     const result = await sql<Trade>`
-      SELECT * FROM trades 
+      SELECT * FROM trades
       WHERE user_id = ${userId}
       ORDER BY entry_time DESC
       LIMIT ${limit}
     `;
+    console.log(`[DB] Retrieved ${result.rows.length} trades for user ${userId}`);
     return result.rows;
   } catch (error) {
     console.error('Error getting all trades:', error);
