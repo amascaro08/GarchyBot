@@ -128,15 +128,21 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
 
       newSocket.on('connect_error', (error) => {
         console.error('TradesTable WebSocket connection error:', error);
+        // Don't retry Socket.IO connection - rely on useWebSocket hook
       });
 
       newSocket.on('disconnect', (reason) => {
         console.log('TradesTable WebSocket disconnected:', reason);
+        // Don't attempt to reconnect - rely on useWebSocket hook
       });
 
       newSocket.on('trades-update', (data) => {
         if (data.symbol === symbol) {
-          setRealtimeTrades(data.trades || []);
+          // Only update if we have actual trade data to prevent empty updates
+          const trades = data.trades || [];
+          if (trades.length > 0) {
+            setRealtimeTrades(trades);
+          }
         }
       });
 

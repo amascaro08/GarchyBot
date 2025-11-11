@@ -33,7 +33,8 @@ async function pollMarketData(symbol: string): Promise<MarketData | null> {
   try {
     // Fetch latest klines data
     const isProduction = process.env.NODE_ENV === 'production';
-    const candles = await getKlines(symbol, '5', 200, !isProduction); // Use mainnet in production
+    const useTestnet = !isProduction;
+    const candles = await getKlines(symbol, '5', 200, useTestnet); // Use mainnet in production
 
     // Get order book snapshot
     const orderBookSnapshot = getOrderBookSnapshot(symbol);

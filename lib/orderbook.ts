@@ -54,8 +54,12 @@ export function startOrderBook(symbol: string) {
   }
 
   try {
-    // Bybit public testnet depth stream (unified)
-    const ws = new WebSocket('wss://stream-testnet.bybit.com/v5/public/linear');
+    // Bybit public depth stream - use mainnet in production
+    const isProduction = process.env.NODE_ENV === 'production';
+    const wsUrl = isProduction
+      ? 'wss://stream.bybit.com/v5/public/linear'
+      : 'wss://stream-testnet.bybit.com/v5/public/linear';
+    const ws = new WebSocket(wsUrl);
     sockets[symbol] = ws;
 
     ws.onopen = () => {

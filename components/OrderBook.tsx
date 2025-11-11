@@ -16,6 +16,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   const [snapshot, setSnapshot] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
   const [maxSize, setMaxSize] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [lastUpdateTime, setLastUpdateTime] = useState<number>(0);
 
   // Use WebSocket hook for real-time order book data
   const { orderBook: wsOrderBook, isConnected: wsConnected } = useWebSocket(symbol);
@@ -37,10 +38,23 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
         setMaxSize(Math.max(...allSizes, 1));
       }
     }
-  }, [symbol, wsConnected]);
+  }, [symbol]);
 
   // Use WebSocket order book if available and connected, otherwise show static data
-  const displayOrderBook = wsConnected && wsOrderBook ? wsOrderBook : snapshot;
+  // Only use WS data if it has meaningful content (more than just empty arrays)
+  const displayOrderBook = (wsConnected && wsOrderBook && wsOrderBook.bids.length > 0 && wsOrderBook.asks.length > 0)
+    ? wsOrderBook
+    : snapshot;
+
+  // Update maxSize when displayOrderBook changes, but throttle updates
+  const currentTime = Date.now();
+  useEffect(() => {
+    if (displayOrderBook && currentTime - lastUpdateTime > 1000) { // Update maxSize at most every second
+      const allSizes = [...displayOrderBook.bids, ...displayOrderBook.asks].map(e => e.size);
+      setMaxSize(Math.max(...allSizes, 1));
+      setLastUpdateTime(currentTime);
+    }
+  }, [displayOrderBook, lastUpdateTime, currentTime]);
 
   if (!displayOrderBook || displayOrderBook.bids.length === 0 || displayOrderBook.asks.length === 0) {
     return (
