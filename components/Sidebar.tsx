@@ -129,10 +129,13 @@ export default function Sidebar({
         <div className="p-4 sm:p-6 space-y-6">
           {/* Header */}
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-black text-gradient-animated">Settings</h2>
+            <div>
+              <h2 className="text-xl font-black text-gradient-animated">Settings</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Configure your trading bot</p>
+            </div>
             <button
               onClick={() => setIsOpen(false)}
-              className="p-2 rounded-lg hover:bg-slate-800/50 transition-colors"
+              className="p-3 rounded-xl hover:bg-slate-800/50 transition-all duration-300 hover:shadow-lg hover:shadow-cyan-500/20"
             >
               <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -142,12 +145,17 @@ export default function Sidebar({
 
           {/* Bot Controls */}
           <div className="glass-effect rounded-xl p-5 border-2 border-green-500/20 bg-gradient-to-br from-green-500/5 to-emerald-500/5 backdrop-blur-xl">
-            <h3 className="text-sm font-bold text-green-300 mb-4 flex items-center gap-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              Bot Controls
-            </h3>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500/20 to-emerald-500/20 flex items-center justify-center">
+                <svg className="w-6 h-6 text-green-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-green-300">Bot Controls</h3>
+                <p className="text-xs text-gray-400">Start and manage your trading bot</p>
+              </div>
+            </div>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-bold mb-2 text-cyan-300 uppercase tracking-wider">Trading Pair</label>
@@ -250,12 +258,17 @@ export default function Sidebar({
 
           {/* GARCH Settings */}
           <div className="glass-effect rounded-xl p-5 border-2 border-yellow-500/20 bg-gradient-to-br from-yellow-500/5 to-orange-500/5 backdrop-blur-xl">
-            <h3 className="text-sm font-bold text-yellow-300 mb-4 flex items-center gap-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              GARCH Volatility
-            </h3>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500/20 to-orange-500/20 flex items-center justify-center">
+                <svg className="w-6 h-6 text-yellow-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-yellow-300">GARCH Volatility</h3>
+                <p className="text-xs text-gray-400">Configure volatility estimation</p>
+              </div>
+            </div>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-bold mb-2 text-yellow-300 uppercase tracking-wider">GARCH Mode</label>
@@ -306,12 +319,17 @@ export default function Sidebar({
 
           {/* Risk Management */}
           <div className="glass-effect rounded-xl p-5 border-2 border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-indigo-500/5 backdrop-blur-xl">
-            <h3 className="text-sm font-bold text-blue-300 mb-4 flex items-center gap-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              Risk Management
-            </h3>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/20 to-indigo-500/20 flex items-center justify-center">
+                <svg className="w-6 h-6 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-blue-300">Risk Management</h3>
+                <p className="text-xs text-gray-400">Configure position sizing and limits</p>
+              </div>
+            </div>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-bold mb-2 text-blue-300 uppercase tracking-wider">Capital ($)</label>
@@ -368,12 +386,17 @@ export default function Sidebar({
 
           {/* Daily Limits */}
           <div className="glass-effect rounded-xl p-5 border-2 border-cyan-500/20 bg-gradient-to-br from-cyan-500/5 to-purple-500/5 backdrop-blur-xl">
-            <h3 className="text-sm font-bold text-cyan-300 mb-4 flex items-center gap-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              Daily Limits
-            </h3>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-purple-500/20 flex items-center justify-center">
+                <svg className="w-6 h-6 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-cyan-300">Daily Limits</h3>
+                <p className="text-xs text-gray-400">Control daily profit/loss targets</p>
+              </div>
+            </div>
             
             <div className="mb-4 p-3 rounded-lg bg-slate-900/50 border border-slate-700/50">
               <div className="flex items-center justify-between mb-2">
@@ -475,23 +498,30 @@ export default function Sidebar({
           {/* Order Book Confirmation */}
           <div className="glass-effect rounded-xl p-5 border-2 border-purple-500/20 bg-gradient-to-br from-purple-500/5 to-pink-500/5 backdrop-blur-xl">
             <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-purple-300 mb-1 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Order Book Confirmation
-                </h3>
-                <p className="text-xs text-gray-400">Require order-book imbalance/wall before entering trades</p>
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-purple-300">Order Book Confirmation</h3>
+                    <p className="text-xs text-gray-400">Require liquidity walls before trades</p>
+                  </div>
+                </div>
+                <div className="ml-11 text-xs text-gray-500">
+                  Detects buy/sell walls within 0.05% of entry price, minimum $50k notional
+                </div>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer">
+              <label className="relative inline-flex items-center cursor-pointer ml-4">
                 <input
                   type="checkbox"
                   checked={useOrderBookConfirm}
                   onChange={(e) => setUseOrderBookConfirm(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-12 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-800/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-purple-500 peer-checked:to-pink-500 shadow-lg"></div>
+                <div className="w-14 h-7 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-800/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-purple-500 peer-checked:to-pink-500 shadow-lg"></div>
               </label>
             </div>
           </div>

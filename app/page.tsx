@@ -933,51 +933,102 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Status badges */}
-          <div className="mb-6 flex flex-wrap gap-3 text-xs">
-            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
-              <span className="text-gray-400 font-medium">Open:</span>
-              <span className="text-cyan-300 font-bold ml-1">{trades.filter(t => t.status === 'open').length}/{maxTrades}</span>
-            </div>
-            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
-              <span className="text-gray-400 font-medium">Leverage:</span>
-              <span className="text-purple-300 font-bold ml-1">{leverage}x</span>
-            </div>
-            <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
-              <span className="text-gray-400 font-medium">Interval:</span>
-              <span className="text-pink-300 font-bold ml-1">{INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</span>
-            </div>
-            {levels && (
-              <div className="px-3 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/50 backdrop-blur-sm">
-                <span className="text-gray-400 font-medium">k%:</span>
-                <span className="text-cyan-300 font-bold ml-1">{(levels.kPct * 100).toFixed(2)}%</span>
+          {/* Enhanced Status badges */}
+          <div className="mb-8 flex flex-wrap gap-3">
+            {/* Core Trading Stats */}
+            <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 bg-cyan-400 rounded-full opacity-80"></div>
+                <div className="text-xs">
+                  <div className="text-gray-400 font-medium">Open Trades</div>
+                  <div className="text-cyan-300 font-bold text-sm">{trades.filter(t => t.status === 'open').length}/{maxTrades}</div>
+                </div>
               </div>
-            )}
-            {botRunning && (
-              <div className="px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/30 backdrop-blur-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-lg shadow-green-400/50"></div>
-                  <span className="text-green-400 font-bold">Running</span>
+            </div>
+
+            <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 bg-purple-400 rounded-full opacity-80"></div>
+                <div className="text-xs">
+                  <div className="text-gray-400 font-medium">Leverage</div>
+                  <div className="text-purple-300 font-bold text-sm">{leverage}x</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 bg-pink-400 rounded-full opacity-80"></div>
+                <div className="text-xs">
+                  <div className="text-gray-400 font-medium">Interval</div>
+                  <div className="text-pink-300 font-bold text-sm">{INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Volatility */}
+            {levels && (
+              <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-yellow-400 rounded-full opacity-80"></div>
+                  <div className="text-xs">
+                    <div className="text-gray-400 font-medium">Volatility</div>
+                    <div className="text-yellow-300 font-bold text-sm">{(levels.kPct * 100).toFixed(2)}%</div>
+                  </div>
                 </div>
               </div>
             )}
+
+            {/* Bot Status */}
+            {botRunning && (
+              <div className="px-4 py-2.5 rounded-xl bg-green-500/15 border border-green-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse shadow-lg shadow-green-400/50"></div>
+                  <div className="text-xs">
+                    <div className="text-green-400 font-bold">Bot Active</div>
+                    <div className="text-green-300/80 text-xs">Trading enabled</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!botRunning && canTrade && (
+              <div className="px-4 py-2.5 rounded-xl bg-orange-500/15 border border-orange-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-orange-400 rounded-full"></div>
+                  <div className="text-xs">
+                    <div className="text-orange-400 font-bold">Bot Stopped</div>
+                    <div className="text-orange-300/80 text-xs">Ready to trade</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Daily Limits Status */}
             {isDailyTargetHit && (
-              <div className="px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 backdrop-blur-sm">
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+              <div className="px-4 py-2.5 rounded-xl bg-blue-500/15 border border-blue-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="flex items-center gap-3">
+                  <svg className="w-5 h-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                   </svg>
-                  <span className="text-blue-400 font-bold">Target Hit</span>
+                  <div className="text-xs">
+                    <div className="text-blue-400 font-bold">Target Achieved</div>
+                    <div className="text-blue-300/80 text-xs">Daily goal reached</div>
+                  </div>
                 </div>
               </div>
             )}
+
             {isDailyStopHit && (
-              <div className="px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 backdrop-blur-sm">
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+              <div className="px-4 py-2.5 rounded-xl bg-red-500/15 border border-red-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                <div className="flex items-center gap-3">
+                  <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
                   </svg>
-                  <span className="text-red-400 font-bold">Stop Loss Hit</span>
+                  <div className="text-xs">
+                    <div className="text-red-400 font-bold">Stop Loss Triggered</div>
+                    <div className="text-red-300/80 text-xs">Daily limit reached</div>
+                  </div>
                 </div>
               </div>
             )}
