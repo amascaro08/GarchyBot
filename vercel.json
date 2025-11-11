@@ -1,10 +1,5 @@
 {
   "framework": "nextjs",
-  "functions": {
-    "pages/api/socket.ts": {
-      "runtime": "nodejs18.x"
-    }
-  },
   "crons": [
     {
       "path": "/api/cron/bot-runner",
