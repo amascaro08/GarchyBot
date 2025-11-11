@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { getOrderBookSnapshot } from '@/lib/orderbook';
-import { io, Socket } from 'socket.io-client';
+import { getCachedMarketData } from '@/lib/websocket';
+import { useWebSocket } from '@/lib/useWebSocket';
 
 interface OrderBookProps {
   symbol: string;
@@ -15,8 +16,11 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   const [snapshot, setSnapshot] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
   const [maxSize, setMaxSize] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
   const [realtimeOrderBook, setRealtimeOrderBook] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
+
+  // Use WebSocket hook for real-time order book data
+  const { orderBook: wsOrderBook, isConnected: wsConnected } = useWebSocket(symbol);
 
   useEffect(() => {
     // Reset state when symbol changes
@@ -24,48 +28,23 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
     setRealtimeOrderBook(null);
     setConnectionStatus('connecting');
 
-    // Initialize socket connection
-    const newSocket = io('/api/socket');
-    setSocket(newSocket);
-
-    newSocket.on('connect', () => {
-      console.log('OrderBook WebSocket connected');
-      setConnectionStatus('connected');
-      // Subscribe to market data for order book
-      newSocket.emit('subscribe-market-data', { symbol, interval: '5' });
-    });
-
-    newSocket.on('disconnect', () => {
-      console.log('OrderBook WebSocket disconnected');
-      setConnectionStatus('disconnected');
-    });
-
-    newSocket.on('realtime-data', (data) => {
-      if (data.symbol === symbol && data.type === 'orderbook') {
-        const orderBookData = data.data;
-        setRealtimeOrderBook({
-          bids: orderBookData.bids || [],
-          asks: orderBookData.asks || []
-        });
+    // Function to poll order book data
+    const pollOrderBook = () => {
+      const cachedData = getCachedMarketData(symbol);
+      if (cachedData && cachedData.orderBook) {
+        setSnapshot(cachedData.orderBook);
+        setConnectionStatus('connected');
 
         // Calculate max size for visualization
-        const allSizes = [...(orderBookData.bids || []), ...(orderBookData.asks || [])].map((e: DepthEntry) => e.size);
+        const allSizes = [...cachedData.orderBook.bids, ...cachedData.orderBook.asks].map(e => e.size);
         setMaxSize(Math.max(...allSizes, 1));
-      }
-    });
 
-    newSocket.on('market-data-update', (data) => {
-      if (data.symbol === symbol && data.orderBook) {
-        setSnapshot({
-          bids: data.orderBook.bids || [],
-          asks: data.orderBook.asks || []
-        });
-      }
-    });
-
-    // Fallback polling for order book (in case WebSocket fails)
-    const interval = setInterval(() => {
-      if (connectionStatus !== 'connected') {
+        // Update realtime order book if available
+        if (cachedData.orderBook.bids.length > 0 || cachedData.orderBook.asks.length > 0) {
+          setRealtimeOrderBook(cachedData.orderBook);
+        }
+      } else {
+        // Fallback to direct API call
         const snap = getOrderBookSnapshot(symbol);
         if (snap && snap.bids.length > 0 && snap.asks.length > 0) {
           setSnapshot({ bids: snap.bids, asks: snap.asks });
@@ -76,29 +55,50 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
           setMaxSize(Math.max(...allSizes, 1));
         }
       }
-    }, 2000); // Update every 2 seconds as fallback
+    };
+
+    // Initial poll
+    pollOrderBook();
+
+    // Set up polling interval
+    const interval = setInterval(pollOrderBook, 5000); // Poll every 5 seconds
+    setPollingInterval(interval);
 
     return () => {
-      newSocket.disconnect();
-      clearInterval(interval);
+      if (interval) {
+        clearInterval(interval);
+        setPollingInterval(null);
+      }
     };
   }, [symbol]);
 
-  // Use real-time order book if available, otherwise fallback to polled data
-  const displayOrderBook = realtimeOrderBook || snapshot;
+  // Use WebSocket order book if available and connected, otherwise fallback to polled data
+  const displayOrderBook = (wsConnected && wsOrderBook) || realtimeOrderBook || snapshot;
 
   if (!displayOrderBook || displayOrderBook.bids.length === 0 || displayOrderBook.asks.length === 0) {
     return (
       <div className="glass-effect rounded-xl p-6 border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
-        <h3 className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-4">
-          Order Book
-        </h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300">
+            Order Book
+          </h3>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${
+              wsConnected ? 'bg-green-400' : connectionStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-red-400'
+            }`} />
+            <span className="text-xs text-gray-400">
+              {wsConnected ? 'WS' : connectionStatus === 'connecting' ? 'Connecting...' : 'Polling'}
+            </span>
+          </div>
+        </div>
         <div className="text-center py-8 text-gray-400">
           <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
           </svg>
           <p className="text-sm mb-2">
-            {connectionStatus === 'connecting' ? 'Connecting to order book...' : 'Waiting for order book data...'}
+            {wsConnected ? 'WebSocket connected - waiting for data...' :
+             connectionStatus === 'connecting' ? 'Connecting to order book...' :
+             'Waiting for order book data...'}
           </p>
           <p className="text-xs text-gray-500 mt-2">Symbol: {symbol}</p>
         </div>

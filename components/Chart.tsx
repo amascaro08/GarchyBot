@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine } from 'lightweight-charts';
-import { io, Socket } from 'socket.io-client';
 import type { Candle } from '@/lib/types';
+import { getCachedMarketData } from '@/lib/websocket';
+import { useWebSocket } from '@/lib/useWebSocket';
 
 interface ChartProps {
   candles: Candle[];
@@ -49,9 +50,12 @@ export default function Chart({
   const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastProcessedRef = useRef<string>('');
-  const socketRef = useRef<Socket | null>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [realtimeCandles, setRealtimeCandles] = useState<Candle[]>([]);
   const lastCandleRef = useRef<Candle | null>(null);
+
+  // Use WebSocket hook for real-time data
+  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -128,58 +132,36 @@ export default function Chart({
     }
   }, []);
 
-  // WebSocket connection for real-time data
+  // Polling for real-time data
   useEffect(() => {
-    // Initialize socket connection
-    const socket = io('/api/socket');
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      console.log('Chart WebSocket connected');
-      // Subscribe to market data
-      socket.emit('subscribe-market-data', { symbol, interval: '5' });
-    });
-
-    socket.on('disconnect', () => {
-      console.log('Chart WebSocket disconnected');
-    });
-
-    socket.on('realtime-data', (data) => {
-      if (data.symbol === symbol && data.type === 'kline') {
-        const newCandle: Candle = data.data;
-        setRealtimeCandles(prev => {
-          const updated = [...prev];
-
-          // Check if we have a candle for this timestamp
-          const existingIndex = updated.findIndex(c => c.ts === newCandle.ts);
-
-          if (existingIndex >= 0) {
-            // Update existing candle
-            updated[existingIndex] = newCandle;
-          } else {
-            // Add new candle
-            updated.push(newCandle);
-
-            // Keep only recent candles (last 200)
-            if (updated.length > 200) {
-              updated.shift();
-            }
-          }
-
-          return updated.sort((a, b) => a.ts - b.ts);
-        });
+    const pollRealtimeData = () => {
+      const cachedData = getCachedMarketData(symbol);
+      if (cachedData && cachedData.candles && cachedData.candles.length > 0) {
+        setRealtimeCandles(cachedData.candles);
       }
-    });
+    };
+
+    // Initial poll
+    pollRealtimeData();
+
+    // Set up polling interval (same as server polling interval)
+    pollingIntervalRef.current = setInterval(pollRealtimeData, 5000);
 
     return () => {
-      socket.disconnect();
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
     };
   }, [symbol]);
 
-  // Combine static candles with real-time updates
+  // Combine static candles with real-time updates from both polling and WebSocket
   const displayCandles = useMemo(() => {
-    if (realtimeCandles.length === 0) return candles;
-    if (candles.length === 0) return realtimeCandles;
+    // Use WebSocket candles if available and connected, otherwise fall back to polling
+    const realtimeData = wsConnected && wsCandles.length > 0 ? wsCandles : realtimeCandles;
+
+    if (realtimeData.length === 0) return candles;
+    if (candles.length === 0) return realtimeData;
 
     // Merge candles, preferring real-time data for overlapping timestamps
     const candleMap = new Map<number, Candle>();
@@ -188,10 +170,10 @@ export default function Chart({
     candles.forEach((candle: Candle) => candleMap.set(candle.ts, candle));
 
     // Override with real-time candles
-    realtimeCandles.forEach((candle: Candle) => candleMap.set(candle.ts, candle));
+    realtimeData.forEach((candle: Candle) => candleMap.set(candle.ts, candle));
 
     return Array.from(candleMap.values()).sort((a, b) => a.ts - b.ts);
-  }, [candles, realtimeCandles]);
+  }, [candles, realtimeCandles, wsCandles, wsConnected]);
 
   // Update chart data and price lines when props change
   useEffect(() => {

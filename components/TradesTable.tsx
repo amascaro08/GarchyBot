@@ -5,6 +5,7 @@ import { formatCurrencyNoSymbol } from '@/lib/format';
 import { useState, useEffect } from 'react';
 import { io, Socket } from 'socket.io-client';
 import TradeDetailsModal from './TradeDetailsModal';
+import { useWebSocket } from '@/lib/useWebSocket';
 
 interface TradesTableProps {
   trades: Trade[];
@@ -20,8 +21,13 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
   const [socket, setSocket] = useState<Socket | null>(null);
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([]);
 
+  // Use WebSocket hook for real-time trade data
+  const { trades: wsTrades, isConnected: wsConnected } = useWebSocket(symbol);
+
   // Combine trades from props and real-time updates
+  // Note: wsTrades from WebSocket are public trade data, not user trades
   const allTrades = [...trades, ...realtimeTrades];
+  // TODO: Handle WebSocket trade data separately if needed for display
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
     return date.toLocaleString('en-US', {
@@ -154,7 +160,17 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
 
   return (
     <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50 overflow-x-auto">
-      <h3 className="text-xl font-bold text-white mb-4">Trades History</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xl font-bold text-white">Trades History</h3>
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full ${
+            wsConnected ? 'bg-green-400' : 'bg-red-400'
+          }`} />
+          <span className="text-xs text-gray-400">
+            {wsConnected ? 'Live' : 'Offline'}
+          </span>
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[800px]">
           <thead>
