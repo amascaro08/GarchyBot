@@ -67,6 +67,40 @@ export function gridLevels(
 }
 
 /**
+ * Find closest grid levels for TP/SL based on entry position
+ */
+function findClosestGridLevels(
+  entry: number,
+  dOpen: number,
+  upLevels: number[],
+  dnLevels: number[],
+  side: 'LONG' | 'SHORT'
+): { tp: number; sl: number } {
+  // All grid levels sorted
+  const allLevels = [...dnLevels, dOpen, ...upLevels].sort((a, b) => a - b);
+
+  if (side === 'LONG') {
+    // For LONG: TP should be next level up, SL should be next level down
+    const tpCandidates = allLevels.filter(level => level > entry);
+    const slCandidates = allLevels.filter(level => level < entry).reverse(); // Reverse for closest
+
+    const tp = tpCandidates.length > 0 ? tpCandidates[0] : entry + (entry * 0.005); // 0.5% fallback
+    const sl = slCandidates.length > 0 ? slCandidates[0] : entry - (entry * 0.005); // 0.5% fallback
+
+    return { tp, sl };
+  } else {
+    // For SHORT: TP should be next level down, SL should be next level up
+    const tpCandidates = allLevels.filter(level => level < entry).reverse(); // Reverse for closest
+    const slCandidates = allLevels.filter(level => level > entry);
+
+    const tp = tpCandidates.length > 0 ? tpCandidates[0] : entry - (entry * 0.005); // 0.5% fallback
+    const sl = slCandidates.length > 0 ? slCandidates[0] : entry + (entry * 0.005); // 0.5% fallback
+
+    return { tp, sl };
+  }
+}
+
+/**
  * Strict signal logic: Long only if open & close > VWAP, Short mirrored
  * Checks if last bar touches a grid level on the bias side
  */
@@ -117,9 +151,7 @@ export function strictSignalWithDailyOpen(params: {
       const d1Level = dnLevels[0];
       if (low <= d1Level && d1Level <= high) {
         const entry = d1Level;
-        // If long opens at D1: TP at D2, SL at daily open
-        const tp = dnLevels.length > 1 ? dnLevels[1] : d1Level - (dOpen - d1Level); // D2
-        const sl = dOpen; // Daily open
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
         return {
           side: 'LONG',
@@ -134,9 +166,7 @@ export function strictSignalWithDailyOpen(params: {
     // Check if bar touches daily open first (entry at daily open, which is between daily open and U1)
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
-      // If long opens at daily open: TP at U1, SL at D1
-      const tp = upLevels.length > 0 ? upLevels[0] : dOpen + (dOpen * kPct / subdivisions); // U1
-      const sl = dnLevels.length > 0 ? dnLevels[0] : dOpen - (dOpen * kPct / subdivisions); // D1
+      const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
       return {
         side: 'LONG',
@@ -152,9 +182,7 @@ export function strictSignalWithDailyOpen(params: {
       const u1Level = upLevels[0];
       if (low <= u1Level && u1Level <= high) {
         const entry = u1Level;
-        // If long opens at U1: TP at next upper level (U2), SL at D1
-        const tp = upLevels.length > 1 ? upLevels[1] : u1Level + (u1Level - dOpen); // U2
-        const sl = dnLevels.length > 0 ? dnLevels[0] : dOpen; // SL at D1
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
         return {
           side: 'LONG',
@@ -171,9 +199,7 @@ export function strictSignalWithDailyOpen(params: {
       const level = upLevels[i];
       if (low <= level && level <= high) {
         const entry = level;
-        // For long at upper levels: TP at next level, SL at previous level
-        const tp = i < upLevels.length - 1 ? upLevels[i + 1] : upLevels[i] + (upLevels[i] - upLevels[i - 1]);
-        const sl = upLevels[i - 1]; // Previous upper level
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
         return {
           side: 'LONG',
@@ -190,9 +216,7 @@ export function strictSignalWithDailyOpen(params: {
       const level = dnLevels[i];
       if (low <= level && level <= high) {
         const entry = level;
-        // For long at lower levels: TP at next level up, SL at daily open
-        const tp = dnLevels[i - 1]; // Next level up (closer to daily open)
-        const sl = dOpen; // Daily open
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
         return {
           side: 'LONG',
@@ -210,9 +234,7 @@ export function strictSignalWithDailyOpen(params: {
     // Check if bar touches daily open
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
-      // If short opens at daily open: TP at D1, SL at U1
-      const tp = dnLevels.length > 0 ? dnLevels[0] : dOpen - (dOpen * kPct / subdivisions); // D1
-      const sl = upLevels.length > 0 ? upLevels[0] : dOpen + (dOpen * kPct / subdivisions); // U1
+      const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
       return {
         side: 'SHORT',
@@ -228,9 +250,7 @@ export function strictSignalWithDailyOpen(params: {
       const u1Level = upLevels[0];
       if (low <= u1Level && u1Level <= high) {
         const entry = u1Level;
-        // If short opens at U1: TP at U2, SL at daily open
-        const tp = upLevels.length > 1 ? upLevels[1] : u1Level + (u1Level - dOpen); // U2
-        const sl = dOpen; // Daily open
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
         return {
           side: 'SHORT',
@@ -247,9 +267,7 @@ export function strictSignalWithDailyOpen(params: {
       const level = dnLevels[i];
       if (low <= level && level <= high) {
         const entry = level;
-        // For short at lower levels: TP at next level down, SL at previous level or daily open
-        const tp = i < dnLevels.length - 1 ? dnLevels[i + 1] : dnLevels[i] - (dnLevels[i] - (i > 0 ? dnLevels[i - 1] : dOpen));
-        const sl = i > 0 ? dnLevels[i - 1] : dOpen; // Use daily open as SL if at D1
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
         return {
           side: 'SHORT',
@@ -266,9 +284,7 @@ export function strictSignalWithDailyOpen(params: {
       const level = upLevels[i];
       if (low <= level && level <= high) {
         const entry = level;
-        // For short at upper levels (U2, U3, etc.): TP at next level down, SL at daily open
-        const tp = i > 0 ? upLevels[i - 1] : dOpen;
-        const sl = dOpen; // Always use daily open as SL for upper level shorts
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
         return {
           side: 'SHORT',
@@ -300,7 +316,8 @@ export function priceFlipAgainstVWAP(
 }
 
 /**
- * If price flipped against VWAP, move SL to entry (breakeven). Otherwise keep original SL.
+ * If price flipped against VWAP, move SL to entry (breakeven) with a 0.5% buffer.
+ * This prevents overly aggressive SL movement that can trigger premature stops.
  */
 export function applyBreakeven(
   side: 'LONG' | 'SHORT',
@@ -309,7 +326,13 @@ export function applyBreakeven(
   lastClose: number,
   vwap: number
 ): number {
-  return priceFlipAgainstVWAP(lastClose, vwap, side) ? entry : sl;
+  if (priceFlipAgainstVWAP(lastClose, vwap, side)) {
+    // Add 0.5% buffer to breakeven SL to prevent premature triggering
+    const bufferPct = 0.005; // 0.5%
+    const bufferedBreakeven = side === 'LONG' ? entry * (1 + bufferPct) : entry * (1 - bufferPct);
+    return bufferedBreakeven;
+  }
+  return sl;
 }
 
 /**

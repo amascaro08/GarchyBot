@@ -102,28 +102,46 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
 
   // WebSocket connection for real-time trade updates
   useEffect(() => {
-    const newSocket = io('/api/socket');
-    setSocket(newSocket);
+    // Only initialize WebSocket in browser environment
+    if (typeof window === 'undefined') return;
 
-    newSocket.on('connect', () => {
-      console.log('TradesTable WebSocket connected');
-      // Subscribe to trades data
-      newSocket.emit('subscribe-trades', { symbol });
-    });
+    try {
+      const newSocket = io('/api/socket', {
+        transports: ['websocket', 'polling'],
+        upgrade: true,
+        rememberUpgrade: true,
+        timeout: 20000,
+      });
+      setSocket(newSocket);
 
-    newSocket.on('disconnect', () => {
-      console.log('TradesTable WebSocket disconnected');
-    });
+      newSocket.on('connect', () => {
+        console.log('TradesTable WebSocket connected');
+        // Subscribe to trades data
+        newSocket.emit('subscribe-trades', { symbol });
+      });
 
-    newSocket.on('trades-update', (data) => {
-      if (data.symbol === symbol) {
-        setRealtimeTrades(data.trades || []);
-      }
-    });
+      newSocket.on('connect_error', (error) => {
+        console.error('TradesTable WebSocket connection error:', error);
+      });
 
-    return () => {
-      newSocket.disconnect();
-    };
+      newSocket.on('disconnect', (reason) => {
+        console.log('TradesTable WebSocket disconnected:', reason);
+      });
+
+      newSocket.on('trades-update', (data) => {
+        if (data.symbol === symbol) {
+          setRealtimeTrades(data.trades || []);
+        }
+      });
+
+      return () => {
+        if (newSocket.connected) {
+          newSocket.disconnect();
+        }
+      };
+    } catch (error) {
+      console.error('Failed to initialize WebSocket:', error);
+    }
   }, [symbol]);
 
   if (allTrades.length === 0) {

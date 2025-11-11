@@ -1,5 +1,10 @@
 {
   "framework": "nextjs",
+  "functions": {
+    "pages/api/socket.ts": {
+      "runtime": "@vercel/node"
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/bot-runner",

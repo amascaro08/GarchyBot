@@ -30,10 +30,14 @@ const symbolSubscriptions: Record<string, Set<string>> = {};
 export function initializeWebSocketServer(server: HTTPServer) {
   io = new SocketIOServer(server, {
     cors: {
-      origin: process.env.NODE_ENV === 'production' ? false : true,
-      methods: ['GET', 'POST']
+      origin: process.env.NODE_ENV === 'production' ? '*' : true,
+      methods: ['GET', 'POST'],
+      credentials: true
     },
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
   io.on('connection', (socket: Socket) => {

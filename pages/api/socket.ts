@@ -23,10 +23,15 @@ export default function SocketHandler(req: NextApiRequest, res: NextApiResponse)
   const io = new ServerIO(httpServer, {
     path: '/api/socket',
     cors: {
-      origin: process.env.NODE_ENV === 'production' ? false : true,
-      methods: ['GET', 'POST']
+      origin: process.env.NODE_ENV === 'production' ? '*' : true,
+      methods: ['GET', 'POST'],
+      credentials: true
     },
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    allowEIO3: true,
+    // Disable for Vercel serverless
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
   // Attach io to server

@@ -40,7 +40,7 @@ export default function HistoryPage() {
       const res = await fetch('/api/bot/status');
       if (res.ok) {
         const data = await res.json();
-        if (data.allTrades) {
+        if (data.allTrades && Array.isArray(data.allTrades)) {
           const formattedTrades = data.allTrades.map((t: any) => ({
             time: t.entry_time,
             side: t.side,
@@ -55,10 +55,17 @@ export default function HistoryPage() {
             exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
           }));
           setTrades(formattedTrades);
+        } else {
+          console.warn('No trades data found in response:', data);
+          setTrades([]);
         }
+      } else {
+        console.error('Failed to fetch trade history, status:', res.status);
+        setTrades([]);
       }
     } catch (error) {
       console.error('Failed to load trade history:', error);
+      setTrades([]);
     } finally {
       setLoading(false);
     }
