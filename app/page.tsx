@@ -97,6 +97,7 @@ export default function Home() {
   }, [dailyStopType, dailyStopAmount, capital]);
 
   // Check if daily limits are hit
+  // Rules: Daily limits should auto-stop the bot when reached
   const isDailyTargetHit = useMemo(() => {
     return dailyPnL >= dailyTargetValue && dailyTargetValue > 0;
   }, [dailyPnL, dailyTargetValue]);
@@ -109,7 +110,7 @@ export default function Home() {
     return !isDailyTargetHit && !isDailyStopHit;
   }, [isDailyTargetHit, isDailyStopHit]);
 
-  // Auto-stop bot when daily limits are hit
+  // Auto-stop bot when daily limits are hit (as per rules)
   useEffect(() => {
     if (botRunning && !canTrade) {
       setBotRunning(false);
@@ -726,11 +727,36 @@ export default function Home() {
 
   const handleStartBot = async () => {
     if (!canTrade) {
-      const errorMsg = isDailyTargetHit 
+      const errorMsg = isDailyTargetHit
         ? `Daily target reached (${dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}). Reset to continue.`
         : `Daily stop loss hit (${dailyPnL.toFixed(2)}). Reset to continue.`;
       setError(errorMsg);
       addLog('error', `Cannot start bot: ${errorMsg}`);
+      return;
+    }
+
+    // Check if phases are completed before starting (Phase 1 and Phase 2 must be completed)
+    try {
+      const levelsRes = await fetch('/api/levels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol,
+          subdivisions: SUBDIVISIONS,
+          testnet: true,
+        }),
+      });
+
+      if (!levelsRes.ok) {
+        const errorMsg = 'Cannot start bot: Daily setup not completed. Please wait for Phase 1 & 2 to finish.';
+        setError(errorMsg);
+        addLog('error', errorMsg);
+        return;
+      }
+    } catch (err) {
+      const errorMsg = 'Cannot start bot: Unable to verify daily setup completion.';
+      setError(errorMsg);
+      addLog('error', errorMsg);
       return;
     }
     
@@ -935,6 +961,26 @@ export default function Home() {
                 </div>
               </div>
             )}
+            {isDailyTargetHit && (
+              <div className="px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 backdrop-blur-sm">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-blue-400 font-bold">Target Hit</span>
+                </div>
+              </div>
+            )}
+            {isDailyStopHit && (
+              <div className="px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 backdrop-blur-sm">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-red-400 font-bold">Stop Loss Hit</span>
+                </div>
+              </div>
+            )}
           </div>
 
         {error && (
@@ -943,7 +989,20 @@ export default function Home() {
               <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
               </svg>
-              <span className="font-bold">Error: {error}</span>
+              <div className="flex-1">
+                <span className="font-bold">Error: {error}</span>
+                <div className="text-sm text-red-200 mt-1 opacity-80">
+                  Please check your configuration and try again. If the issue persists, contact support.
+                </div>
+              </div>
+              <button
+                onClick={() => setError(null)}
+                className="text-red-300 hover:text-red-100 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
             </div>
           </div>
         )}

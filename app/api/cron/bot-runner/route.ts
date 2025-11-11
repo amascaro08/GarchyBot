@@ -177,12 +177,14 @@ export async function POST(request: NextRequest) {
             let exitPrice = lastClose;
 
             // Immediate closure if bias changes (price crosses VWAP)
+            // Rules: If the bot is in a LONG trade and the price crosses below the VWAP,
+            // the setup is invalid and the trade should be closed immediately (and vice-versa for shorts)
             if (trade.side === 'LONG' && lastClose < levels.vwap) {
               shouldClose = true;
-              closeReason = 'Bias changed: LONG invalidated as price fell below VWAP';
+              closeReason = 'Setup invalidated: LONG trade closed as price fell below VWAP';
             } else if (trade.side === 'SHORT' && lastClose > levels.vwap) {
               shouldClose = true;
-              closeReason = 'Bias changed: SHORT invalidated as price rose above VWAP';
+              closeReason = 'Setup invalidated: SHORT trade closed as price rose above VWAP';
             }
 
             if (shouldClose) {
@@ -203,7 +205,7 @@ export async function POST(request: NextRequest) {
               continue; // Skip other trade management for this invalidated trade
             }
 
-            // Apply breakeven to remaining open trades
+            // Apply breakeven to remaining open trades (only if price hasn't crossed VWAP)
             const newSL = applyBreakeven(
               trade.side as 'LONG' | 'SHORT',
               Number(trade.entry_price),
@@ -212,6 +214,7 @@ export async function POST(request: NextRequest) {
               levels.vwap
             );
 
+            // Only apply breakeven if it hasn't already been applied and bias is still valid
             if (newSL !== Number(trade.current_sl)) {
               await updateTrade(trade.id, { current_sl: newSL } as any);
               await addActivityLog(
@@ -312,15 +315,18 @@ export async function POST(request: NextRequest) {
 
               if (!isDuplicate) {
                 // Mandatory: Order book confirmation
+                // Rules: The bot must scan the Level 2 Order Book at that exact level and see:
+                // - LONG: significant increase in buy-side limit orders (buy wall) OR rapid execution of sell orders
+                // - SHORT: significant increase in sell-side limit orders (sell wall) OR rapid execution of buy orders
                 let approved = false;
                 try {
                   approved = await confirmLevelTouch({
                     symbol: botConfig.symbol,
                     level: signal.touchedLevel,
                     side: signal.signal,
-                    windowMs: 8000,
-                    minNotional: 50000,
-                    proximityBps: 5,
+                    windowMs: 8000, // 8 second window to observe order book activity
+                    minNotional: 50000, // Minimum $50k notional for wall detection
+                    proximityBps: 5, // 0.05% proximity to level
                   });
                 } catch (err) {
                   console.error('Order book confirmation error:', err);
@@ -328,7 +334,8 @@ export async function POST(request: NextRequest) {
                 }
 
                 if (approved) {
-                  // Calculate position size
+                  // Calculate position size based on risk management
+                  // Rules: Risk amount per trade, with stop loss at next grid level
                   const riskPerTrade = botConfig.risk_type === 'percent'
                     ? (botConfig.capital * botConfig.risk_amount) / 100
                     : botConfig.risk_amount;

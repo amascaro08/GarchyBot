@@ -103,27 +103,29 @@ function findClosestGridLevels(
 }
 
 /**
- * Strict signal logic: LONG-ONLY if price ABOVE VWAP, SHORT-ONLY if price BELOW VWAP
- * Checks if last bar touches a grid level on the bias side
- */
-export function strictSignalWithDailyOpen(params: {
-  candles: Candle[];
-  vwap: number;
-  dOpen: number;
-  upLevels: number[];
-  dnLevels: number[];
-  noTradeBandPct: number;
-  useDailyOpenEntry?: boolean; // Enable/disable daily open entries (default: true)
-  kPct?: number; // Add kPct parameter
-  subdivisions?: number; // Add subdivisions parameter
-}): {
-  side: 'LONG' | 'SHORT' | null;
-  entry: number | null;
-  tp: number | null;
-  sl: number | null;
-  reason: string;
-} {
-  const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct, useDailyOpenEntry = true, kPct = 0.03, subdivisions = 5 } = params;
+  * Strict signal logic: LONG-ONLY if price ABOVE VWAP, SHORT-ONLY if price BELOW VWAP
+  * Checks if last bar touches a grid level on the bias side
+  * Rules: LONG when price ABOVE VWAP, SHORT when price BELOW VWAP
+  * Entry conditions: Price has just pulled back/rallied to touch a LowerRange/DailyOpen (LONG) or UpperRange/DailyOpen (SHORT) grid line
+  */
+ export function strictSignalWithDailyOpen(params: {
+   candles: Candle[];
+   vwap: number;
+   dOpen: number;
+   upLevels: number[];
+   dnLevels: number[];
+   noTradeBandPct: number;
+   useDailyOpenEntry?: boolean; // Enable/disable daily open entries (default: true)
+   kPct?: number; // Add kPct parameter
+   subdivisions?: number; // Add subdivisions parameter
+ }): {
+   side: 'LONG' | 'SHORT' | null;
+   entry: number | null;
+   tp: number | null;
+   sl: number | null;
+   reason: string;
+ } {
+   const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct, useDailyOpenEntry = true, kPct = 0.03, subdivisions = 5 } = params;
 
   if (candles.length === 0) {
     return { side: null, entry: null, tp: null, sl: null, reason: 'No candles' };
@@ -143,12 +145,15 @@ export function strictSignalWithDailyOpen(params: {
   const isShortBias = close < vwap;
 
   if (!isLongBias && !isShortBias) {
-    return { side: null, entry: null, tp: null, sl: null, reason: 'No clear bias (mixed VWAP)' };
+    return { side: null, entry: null, tp: null, sl: null, reason: 'No clear bias (price equals VWAP)' };
   }
 
   // Check for level touches
   if (isLongBias) {
-    // Check if bar touches D1 (entry at D1)
+    // LONG Entry: Price has just pulled back to touch a LowerRange or DailyOpenPrice grid line (acting as support)
+    // Check in order: D1 (first lower level), Daily Open, then other lower levels
+
+    // Check if bar touches D1 (first lower level - entry at D1)
     if (dnLevels.length > 0) {
       const d1Level = dnLevels[0];
       if (low <= d1Level && d1Level <= high) {
@@ -160,12 +165,12 @@ export function strictSignalWithDailyOpen(params: {
           entry,
           tp,
           sl,
-          reason: `Long signal: touched D1 at ${entry.toFixed(2)}`,
+          reason: `Long signal: touched D1 support at ${entry.toFixed(2)}`,
         };
       }
     }
 
-    // Check if bar touches daily open first (entry at daily open, which is between daily open and U1)
+    // Check if bar touches daily open (entry at daily open, acting as support)
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
       const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
@@ -175,11 +180,11 @@ export function strictSignalWithDailyOpen(params: {
         entry,
         tp,
         sl,
-        reason: `Long signal: touched daily open at ${entry.toFixed(2)}`,
+        reason: `Long signal: touched daily open support at ${entry.toFixed(2)}`,
       };
     }
 
-    // Check if bar touches U1 (entry at U1)
+    // Check if bar touches U1 (entry at U1) - U1 is first upper level above daily open
     if (upLevels.length > 0) {
       const u1Level = upLevels[0];
       if (low <= u1Level && u1Level <= high) {
@@ -232,8 +237,10 @@ export function strictSignalWithDailyOpen(params: {
 
     return { side: null, entry: null, tp: null, sl: null, reason: 'Long bias but no level touch' };
   } else {
-    // Short bias: check lower levels
-    // Check if bar touches daily open
+    // SHORT Entry: Price has just rallied up to touch an UpperRange or DailyOpenPrice grid line (acting as resistance)
+    // Check in order: Daily Open, U1, then other upper levels
+
+    // Check if bar touches daily open (entry at daily open, acting as resistance)
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
       const entry = dOpen;
       const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
@@ -243,11 +250,11 @@ export function strictSignalWithDailyOpen(params: {
         entry,
         tp,
         sl,
-        reason: `Short signal: touched daily open at ${entry.toFixed(2)}`,
+        reason: `Short signal: touched daily open resistance at ${entry.toFixed(2)}`,
       };
     }
 
-    // Check if bar touches U1 (entry at U1)
+    // Check if bar touches U1 (first upper level - entry at U1, acting as resistance)
     if (upLevels.length > 0) {
       const u1Level = upLevels[0];
       if (low <= u1Level && u1Level <= high) {
@@ -259,7 +266,7 @@ export function strictSignalWithDailyOpen(params: {
           entry,
           tp,
           sl,
-          reason: `Short signal: touched U1 at ${entry.toFixed(2)}`,
+          reason: `Short signal: touched U1 resistance at ${entry.toFixed(2)}`,
         };
       }
     }
@@ -304,8 +311,8 @@ export function strictSignalWithDailyOpen(params: {
 
 /**
  * Returns true if PRICE (not VWAP) flipped against the trade direction relative to VWAP.
- * LONG: price flipped if lastClose < vwap
- * SHORT: price flipped if lastClose > vwap
+ * LONG: price flipped if lastClose < vwap (invalidates LONG trade)
+ * SHORT: price flipped if lastClose > vwap (invalidates SHORT trade)
  */
 export function priceFlipAgainstVWAP(
   lastClose: number,
@@ -320,6 +327,9 @@ export function priceFlipAgainstVWAP(
 /**
  * If price flipped against VWAP, move SL to entry (breakeven) with a 0.5% buffer.
  * This prevents overly aggressive SL movement that can trigger premature stops.
+ *
+ * Rules: If the bot is in a LONG trade and the price crosses below the VWAP,
+ * the setup is invalid and the trade should be closed immediately (and vice-versa for shorts).
  */
 export function applyBreakeven(
   side: 'LONG' | 'SHORT',
@@ -339,7 +349,7 @@ export function applyBreakeven(
 
 /**
  * Breakeven stop logic: if VWAP flips against open trade, move stop to entry
- * @deprecated Use applyBreakeven instead
+ * @deprecated Use applyBreakeven instead - this function checks VWAP position relative to entry, not price
  */
 export function breakevenStopOnVWAPFlip(
   currentVWAP: number,

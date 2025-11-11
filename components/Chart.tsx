@@ -53,7 +53,7 @@ export default function Chart({
   const lastCandleRef = useRef<Candle | null>(null);
 
   // Use WebSocket hook for real-time data, initialize with static candles
-  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, candles);
+  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, []);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -139,42 +139,42 @@ export default function Chart({
     if (wsConnected && wsCandles.length > 0) {
       return wsCandles;
     }
-    return candles;
+    return candles.length > 0 ? candles : [];
   }, [candles, wsCandles, wsConnected]);
 
   // Update chart data and price lines when props change
-   useEffect(() => {
-     if (!seriesRef.current || !chartRef.current) {
-       // Chart not ready yet, wait for next render
-       return;
-     }
+  useEffect(() => {
+    if (!seriesRef.current || !chartRef.current) {
+      // Chart not ready yet, wait for next render
+      return;
+    }
 
-     // Don't proceed if we don't have candle data
-     if (!displayCandles || displayCandles.length === 0) {
-       return;
-     }
+    // Don't proceed if we don't have candle data
+    if (!displayCandles || displayCandles.length === 0) {
+      return;
+    }
 
-     // Always update candlestick data first
-     const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
-       time: (candle.ts / 1000) as Time,
-       open: candle.open,
-       high: candle.high,
-       low: candle.low,
-       close: candle.close,
-     }));
+    // Always update candlestick data first
+    const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
+      time: (candle.ts / 1000) as Time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    }));
 
-     seriesRef.current.setData(candlestickData);
+    seriesRef.current.setData(candlestickData);
 
-     // After setting data, fit the chart to show all candles properly
-     if (chartRef.current && displayCandles.length > 0) {
-       // Small delay to ensure data is processed
-       setTimeout(() => {
-         if (chartRef.current) {
-           // Fit content to show all candles, but allow user interaction
-           chartRef.current.timeScale().fitContent();
-         }
-       }, 200);
-     }
+    // After setting data, fit the chart to show all candles properly
+    if (chartRef.current && displayCandles.length > 0) {
+      // Small delay to ensure data is processed
+      setTimeout(() => {
+        if (chartRef.current) {
+          // Fit content to show all candles, but allow user interaction
+          chartRef.current.timeScale().fitContent();
+        }
+      }, 200);
+    }
 
     // Create a signature of price line data to prevent duplicate processing
     const priceLinesSignature = JSON.stringify({
@@ -204,7 +204,7 @@ export default function Chart({
         }
       } catch (e) {
         // Ignore errors if line was already removed
-        console.debug('Error removing price line:', e);
+        // Don't log to reduce console noise
       }
     });
     priceLinesRef.current = [];
@@ -389,30 +389,24 @@ export default function Chart({
       
       if (vwapData.length > 0) {
         vwapSeriesRef.current.setData(vwapData);
-        console.debug('VWAP line updated:', vwapData.length, 'points, candles:', candles.length, 'vwapLine:', vwapLine.length);
+        // Reduce console logging to prevent spam
       } else {
         // If no valid VWAP data, clear the series
         vwapSeriesRef.current.setData([]);
-        console.debug('VWAP line cleared: no valid data. candles:', candles.length, 'vwapLine:', vwapLine.length);
       }
     } else if (vwap !== null && !isNaN(vwap) && vwap > 0) {
       // Fallback: if vwapLine is not available, use static VWAP value
       // Create a line with the current VWAP at the last candle
-      if (candles.length > 0) {
-        const lastCandle = candles[candles.length - 1];
+      if (displayCandles.length > 0) {
+        const lastCandle = displayCandles[displayCandles.length - 1];
         vwapSeriesRef.current.setData([{
           time: (lastCandle.ts / 1000) as Time,
           value: vwap,
         }]);
-        console.debug('VWAP fallback: using static value', vwap);
       }
     } else {
-      console.debug('VWAP line not updated: missing data', { 
-        vwapLine: !!vwapLine, 
-        vwapLineLength: vwapLine?.length, 
-        candlesLength: candles.length, 
-        vwap 
-      });
+      // Clear VWAP line if no data
+      vwapSeriesRef.current.setData([]);
     }
   }, [displayCandles, vwapLine, vwap]);
 

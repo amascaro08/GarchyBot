@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
             throw new Error(`Insufficient historical data for ${symbol}: ${closes.length} days`);
           }
 
-          // Calculate volatility using all three models
+          // Calculate volatility using all three models as per rules: GARCH(1,1), EGARCH(1,1), and GJR-GARCH(1,1)
           const volatilityResult = calculateAverageVolatility(closes, {
             clampPct: [1, 10],
             symbol,
@@ -97,6 +97,7 @@ export async function POST(request: NextRequest) {
             day: new Date().toISOString().split('T')[0], // YYYY-MM-DD format
           });
 
+          // Average the three volatility forecasts as per rules
           const calculatedVolatility = volatilityResult.averaged.kPct;
 
           console.log(`[DAILY-SETUP] ${symbol} volatility calculated:`);

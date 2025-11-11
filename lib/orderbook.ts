@@ -208,9 +208,9 @@ export async function confirmLevelTouch(params: {
   symbol: string;
   level: number;
   side: Side;
-  windowMs: number; // e.g., 8000
-  minNotional: number; // e.g., 50_000 USD equiv
-  proximityBps: number; // e.g., 5 → 0.05%
+  windowMs: number; // e.g., 8000ms window to observe order book activity
+  minNotional: number; // e.g., 50000 USD minimum notional for wall detection
+  proximityBps: number; // e.g., 5 → 0.05% proximity to level
 }): Promise<boolean> {
   const { symbol, level, side, windowMs, minNotional, proximityBps } = params;
   if (!buffers[symbol]) startOrderBook(symbol);
@@ -233,15 +233,17 @@ export async function confirmLevelTouch(params: {
       }
 
       // aggregate notional near level on the relevant side
+      // For LONG: look for bid walls (buy-side limit orders) near/below the level
+      // For SHORT: look for ask walls (sell-side limit orders) near/above the level
       let notional = 0;
       for (const s of recent) {
         if (side === 'LONG') {
-          // need bid wall near/below level
+          // LONG entry: need significant buy-side limit orders (bid wall) near/below level
           for (const b of s.bids) {
             if (Math.abs(b.price - level) <= prox && b.price <= level) notional += b.price * b.size;
           }
         } else {
-          // need ask wall near/above level
+          // SHORT entry: need significant sell-side limit orders (ask wall) near/above level
           for (const a of s.asks) {
             if (Math.abs(a.price - level) <= prox && a.price >= level) notional += a.price * a.size;
           }
