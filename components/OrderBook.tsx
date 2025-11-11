@@ -26,24 +26,21 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   useEffect(() => {
     // Reset state when symbol changes
     setSnapshot(null);
+    setLastOrderBook(null);
+    setFixedMaxSize(0);
     setConnectionStatus('connecting');
 
-    // Load initial static data if websocket disconnected
-    if (!wsConnected) {
-      const snap = getOrderBookSnapshot(symbol);
-      if (snap && snap.bids.length > 0 && snap.asks.length > 0) {
-        setSnapshot({ bids: snap.bids, asks: snap.asks });
-        setConnectionStatus('connected');
+    // Always load initial static data to establish fixed max size
+    const snap = getOrderBookSnapshot(symbol);
+    if (snap && snap.bids.length > 0 && snap.asks.length > 0) {
+      setSnapshot({ bids: snap.bids, asks: snap.asks });
+      setLastOrderBook({ bids: snap.bids, asks: snap.asks });
+      setConnectionStatus('connected');
 
-        // Calculate max size for visualization
-        const allSizes = [...snap.bids, ...snap.asks].map(e => e.size);
-        const newMaxSize = Math.max(...allSizes, 1);
-        setMaxSize(newMaxSize);
-        // Set fixed max size for consistent visualization
-        if (fixedMaxSize === 0 || newMaxSize > fixedMaxSize) {
-          setFixedMaxSize(newMaxSize);
-        }
-      }
+      // Set fixed max size for consistent visualization
+      const allSizes = [...snap.bids, ...snap.asks].map(e => e.size);
+      const newMaxSize = Math.max(...allSizes, 1);
+      setFixedMaxSize(newMaxSize);
     }
   }, [symbol]);
 
@@ -54,29 +51,15 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
     ? wsOrderBook
     : snapshot;
 
-  // Only update the order book display if data has actually changed significantly
+  // Update display immediately when we have new data, but only if connected to WebSocket
   useEffect(() => {
-    if (displayOrderBook && lastOrderBook) {
-      // Check if the top 10 bids/asks have changed significantly
-      const top10BidsChanged = displayOrderBook.bids.slice(0, 10).some((bid, idx) =>
-        !lastOrderBook.bids[idx] ||
-        Math.abs(bid.price - lastOrderBook.bids[idx].price) > bid.price * 0.0001 || // 0.01% change
-        Math.abs(bid.size - lastOrderBook.bids[idx].size) > bid.size * 0.1 // 10% size change
-      );
-
-      const top10AsksChanged = displayOrderBook.asks.slice(0, 10).some((ask, idx) =>
-        !lastOrderBook.asks[idx] ||
-        Math.abs(ask.price - lastOrderBook.asks[idx].price) > ask.price * 0.0001 ||
-        Math.abs(ask.size - lastOrderBook.asks[idx].size) > ask.size * 0.1
-      );
-
-      if (top10BidsChanged || top10AsksChanged) {
-        setLastOrderBook(displayOrderBook);
-      }
-    } else if (displayOrderBook) {
+    if (wsConnected && displayOrderBook) {
+      setLastOrderBook(displayOrderBook);
+    } else if (!wsConnected && displayOrderBook && !lastOrderBook) {
+      // Only set static data if we don't have WS data yet
       setLastOrderBook(displayOrderBook);
     }
-  }, [displayOrderBook, lastOrderBook]);
+  }, [displayOrderBook, wsConnected, lastOrderBook]);
 
   // Use fixed maxSize for consistent visualization - no longer update it dynamically
   // This prevents the order book from expanding/contracting

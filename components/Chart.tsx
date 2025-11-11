@@ -75,6 +75,9 @@ export default function Chart({
           timeVisible: true,
           secondsVisible: false,
         },
+        // Disable auto-scaling to prevent inappropriate scales for different assets
+        handleScroll: false,
+        handleScale: false,
       });
 
       chartRef.current = chart;
@@ -140,27 +143,37 @@ export default function Chart({
   }, [candles, wsCandles, wsConnected]);
 
   // Update chart data and price lines when props change
-  useEffect(() => {
-    if (!seriesRef.current || !chartRef.current) {
-      // Chart not ready yet, wait for next render
-      return;
-    }
+   useEffect(() => {
+     if (!seriesRef.current || !chartRef.current) {
+       // Chart not ready yet, wait for next render
+       return;
+     }
 
-    // Don't proceed if we don't have candle data
-    if (!displayCandles || displayCandles.length === 0) {
-      return;
-    }
+     // Don't proceed if we don't have candle data
+     if (!displayCandles || displayCandles.length === 0) {
+       return;
+     }
 
-    // Always update candlestick data first
-    const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
-      time: (candle.ts / 1000) as Time,
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-    }));
+     // Always update candlestick data first
+     const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
+       time: (candle.ts / 1000) as Time,
+       open: candle.open,
+       high: candle.high,
+       low: candle.low,
+       close: candle.close,
+     }));
 
-    seriesRef.current.setData(candlestickData);
+     seriesRef.current.setData(candlestickData);
+
+     // After setting data, fit the chart to show all candles properly
+     if (chartRef.current && displayCandles.length > 0) {
+       // Small delay to ensure data is processed
+       setTimeout(() => {
+         if (chartRef.current) {
+           chartRef.current.timeScale().fitContent();
+         }
+       }, 100);
+     }
 
     // Create a signature of price line data to prevent duplicate processing
     const priceLinesSignature = JSON.stringify({
