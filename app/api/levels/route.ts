@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
 
     const intradayAsc = intraday.slice().reverse(); // Ensure ascending order
 
+    // Calculate levels (this endpoint still calculates dynamically for frontend/API calls)
     const dOpen = dailyOpenUTC(intradayAsc);
     const vwap = vwapFromOHLCV(intradayAsc);
     const vwapLine = vwapLineFromOHLCV(intradayAsc);

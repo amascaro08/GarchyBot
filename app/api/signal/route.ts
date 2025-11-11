@@ -8,10 +8,28 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const validated = SignalRequestSchema.parse(body);
 
-    // Calculate daily open, VWAP, and grid levels from provided candles
-    const dOpen = dailyOpenUTC(validated.candles);
-    const vwap = vwapFromOHLCV(validated.candles);
-    const { upLevels, dnLevels } = gridLevels(dOpen, validated.kPct, validated.subdivisions);
+    // Use provided levels if available, otherwise calculate them
+    let vwap: number;
+    let upLevels: number[];
+    let dnLevels: number[];
+    let dOpen: number;
+
+    if (body.dOpen && body.upperLevels && body.lowerLevels && body.vwap) {
+      // Use pre-calculated stored levels
+      vwap = body.vwap;
+      upLevels = body.upperLevels;
+      dnLevels = body.lowerLevels;
+      dOpen = body.dOpen;
+      console.log('[SIGNAL] Using pre-calculated stored levels');
+    } else {
+      // Calculate levels dynamically (fallback)
+      dOpen = dailyOpenUTC(validated.candles);
+      vwap = vwapFromOHLCV(validated.candles);
+      const levels = gridLevels(dOpen, validated.kPct, validated.subdivisions);
+      upLevels = levels.upLevels;
+      dnLevels = levels.dnLevels;
+      console.log('[SIGNAL] Calculated levels dynamically');
+    }
 
     // Get signal
     const signal = strictSignalWithDailyOpen({

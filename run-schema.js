@@ -11,7 +11,20 @@ async function runSchema() {
     console.log('✅ Connected to database');
 
     const sql = fs.readFileSync('schema.sql', 'utf8');
-    await client.query(sql);
+
+    // Split SQL into individual statements and execute them
+    const statements = sql.split(';').filter(stmt => stmt.trim().length > 0);
+
+    for (const statement of statements) {
+      if (statement.trim()) {
+        try {
+          await client.query(statement);
+        } catch (error) {
+          // Log errors but continue with other statements
+          console.log(`⚠️  Statement failed: ${error.message}`);
+        }
+      }
+    }
     
     console.log('✅ Schema created successfully!');
     

@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { 
-  getRunningBots, 
-  getOpenTrades, 
-  createTrade, 
-  updateTrade, 
+import {
+  getRunningBots,
+  getOpenTrades,
+  createTrade,
+  updateTrade,
   closeTrade,
   addActivityLog,
   updateLastPolled,
   updateDailyPnL,
   resetDailyPnL,
   getUserByEmail,
-  getOrCreateUser
+  getOrCreateUser,
+  getDailyLevels,
+  checkPhase2Completed
 } from '@/lib/db';
 import { applyBreakeven } from '@/lib/strategy';
 import { confirmLevelTouch } from '@/lib/orderbook';
@@ -107,8 +109,32 @@ export async function POST(request: NextRequest) {
 
           const lastClose = candles[candles.length - 1].close;
 
-          // Fetch levels (includes VWAP and k%)
-          const levelsRes = await fetch(
+          // Check if Phase 2 is completed for this symbol
+          const phase2Completed = await checkPhase2Completed(botConfig.symbol);
+          if (!phase2Completed) {
+            console.warn(`[CRON] Phase 2 not completed for ${botConfig.symbol}, skipping bot execution`);
+            await addActivityLog(botConfig.user_id, 'warning', `Bot execution skipped - Phase 2 not completed for ${botConfig.symbol}`, null, botConfig.id);
+            await updateLastPolled(botConfig.id);
+            return { userId: botConfig.user_id, status: 'skipped', reason: 'Phase 2 not completed' };
+          }
+
+          // Fetch stored daily levels from database
+          const storedLevels = await getDailyLevels(botConfig.symbol);
+          if (!storedLevels) {
+            console.error(`[CRON] No stored levels found for ${botConfig.symbol}`);
+            await addActivityLog(botConfig.user_id, 'error', `No stored levels found for ${botConfig.symbol}`, null, botConfig.id);
+            await updateLastPolled(botConfig.id);
+            return { userId: botConfig.user_id, status: 'error', error: 'No stored levels found' };
+          }
+
+          console.log(`[CRON] Using stored levels for ${botConfig.symbol}:`);
+          console.log(`  Daily Open: ${storedLevels.daily_open_price.toFixed(2)}`);
+          console.log(`  Upper Range: ${storedLevels.upper_range.toFixed(2)}`);
+          console.log(`  Lower Range: ${storedLevels.lower_range.toFixed(2)}`);
+          console.log(`  Grid Levels - Up: ${storedLevels.up_levels.length}, Down: ${storedLevels.dn_levels.length}`);
+
+          // Fetch current VWAP for signal calculation
+          const vwapRes = await fetch(
             `${baseUrl}/api/levels`,
             {
               method: 'POST',
@@ -117,21 +143,67 @@ export async function POST(request: NextRequest) {
                 symbol: botConfig.symbol,
                 subdivisions: botConfig.subdivisions,
                 testnet: false,
-                ...(botConfig.garch_mode === 'custom' && botConfig.custom_k_pct !== null && { customKPct: botConfig.custom_k_pct }),
+                // Use stored volatility for consistency
+                customKPct: storedLevels.calculated_volatility,
               }),
             }
           );
 
-          if (!levelsRes.ok) {
-            throw new Error('Failed to fetch levels');
+          if (!vwapRes.ok) {
+            throw new Error('Failed to fetch VWAP data');
           }
 
-          const levels = await levelsRes.json();
-          console.log(`[CRON] Fetched levels - k%: ${(levels.kPct * 100).toFixed(2)}%, VWAP: ${levels.vwap.toFixed(2)}, Daily Open: ${levels.dOpen.toFixed(2)}`);
+          const vwapData = await vwapRes.json();
+          console.log(`[CRON] VWAP calculated: ${vwapData.vwap.toFixed(2)}`);
 
-          // Apply breakeven to open trades
+          // Combine stored levels with current VWAP
+          const levels = {
+            ...storedLevels,
+            vwap: vwapData.vwap,
+            vwapLine: vwapData.vwapLine,
+            kPct: storedLevels.calculated_volatility,
+            dOpen: storedLevels.daily_open_price,
+            upper: storedLevels.upper_range,
+            lower: storedLevels.lower_range,
+            upLevels: storedLevels.up_levels,
+            dnLevels: storedLevels.dn_levels,
+          };
+
+          // Check for immediate bias change closure first
           const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
           for (const trade of openTrades) {
+            let shouldClose = false;
+            let closeReason = '';
+            let exitPrice = lastClose;
+
+            // Immediate closure if bias changes (price crosses VWAP)
+            if (trade.side === 'LONG' && lastClose < levels.vwap) {
+              shouldClose = true;
+              closeReason = 'Bias changed: LONG invalidated as price fell below VWAP';
+            } else if (trade.side === 'SHORT' && lastClose > levels.vwap) {
+              shouldClose = true;
+              closeReason = 'Bias changed: SHORT invalidated as price rose above VWAP';
+            }
+
+            if (shouldClose) {
+              const pnl = trade.side === 'LONG'
+                ? (exitPrice - Number(trade.entry_price)) * Number(trade.position_size)
+                : (Number(trade.entry_price) - exitPrice) * Number(trade.position_size);
+
+              await closeTrade(trade.id, 'cancelled', exitPrice, pnl);
+              await updateDailyPnL(botConfig.user_id, pnl);
+
+              await addActivityLog(
+                botConfig.user_id,
+                'warning',
+                `${closeReason}: ${trade.side} @ $${trade.entry_price} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`,
+                null,
+                botConfig.id
+              );
+              continue; // Skip other trade management for this invalidated trade
+            }
+
+            // Apply breakeven to remaining open trades
             const newSL = applyBreakeven(
               trade.side as 'LONG' | 'SHORT',
               Number(trade.entry_price),
@@ -139,7 +211,7 @@ export async function POST(request: NextRequest) {
               lastClose,
               levels.vwap
             );
-            
+
             if (newSL !== Number(trade.current_sl)) {
               await updateTrade(trade.id, { current_sl: newSL } as any);
               await addActivityLog(
@@ -155,7 +227,6 @@ export async function POST(request: NextRequest) {
             const lastCandle = candles[candles.length - 1];
             let hitTP = false;
             let hitSL = false;
-            let exitPrice: number | null = null;
 
             if (trade.side === 'LONG') {
               if (lastCandle.high >= Number(trade.tp_price)) {
@@ -177,22 +248,22 @@ export async function POST(request: NextRequest) {
 
             if (hitTP || hitSL) {
               const pnl = trade.side === 'LONG'
-                ? (exitPrice! - Number(trade.entry_price)) * Number(trade.position_size)
-                : (Number(trade.entry_price) - exitPrice!) * Number(trade.position_size);
+                ? (exitPrice - Number(trade.entry_price)) * Number(trade.position_size)
+                : (Number(trade.entry_price) - exitPrice) * Number(trade.position_size);
 
-              await closeTrade(trade.id, hitTP ? 'tp' : 'sl', exitPrice!, pnl);
+              await closeTrade(trade.id, hitTP ? 'tp' : 'sl', exitPrice, pnl);
               await updateDailyPnL(botConfig.user_id, pnl);
-              
+
               const logLevel = hitTP ? 'success' : 'error';
-              const logMsg = hitTP 
-                ? `Take profit hit: ${trade.side} @ $${trade.entry_price} → $${exitPrice!.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`
-                : `Stop loss hit: ${trade.side} @ $${trade.entry_price} → $${exitPrice!.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
-              
+              const logMsg = hitTP
+                ? `Take profit hit: ${trade.side} @ $${trade.entry_price} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`
+                : `Stop loss hit: ${trade.side} @ $${trade.entry_price} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
+
               await addActivityLog(botConfig.user_id, logLevel, logMsg, null, botConfig.id);
             }
           }
 
-          // Calculate signal
+          // Calculate signal using stored levels and current candles
           const signalRes = await fetch(
             `${baseUrl}/api/signal`,
             {
@@ -205,6 +276,11 @@ export async function POST(request: NextRequest) {
                 noTradeBandPct: botConfig.no_trade_band_pct,
                 useDailyOpenEntry: botConfig.use_daily_open_entry,
                 candles,
+                // Pass stored levels directly to avoid recalculation
+                dOpen: levels.dOpen,
+                upperLevels: levels.upLevels,
+                lowerLevels: levels.dnLevels,
+                vwap: levels.vwap,
               }),
             }
           );
@@ -235,22 +311,20 @@ export async function POST(request: NextRequest) {
               );
 
               if (!isDuplicate) {
-                // Optional: Order book confirmation
-                let approved = true;
-                if (botConfig.use_orderbook_confirm) {
-                  try {
-                    approved = await confirmLevelTouch({
-                      symbol: botConfig.symbol,
-                      level: signal.touchedLevel,
-                      side: signal.signal,
-                      windowMs: 8000,
-                      minNotional: 50000,
-                      proximityBps: 5,
-                    });
-                  } catch (err) {
-                    console.error('Order book confirmation error:', err);
-                    approved = false;
-                  }
+                // Mandatory: Order book confirmation
+                let approved = false;
+                try {
+                  approved = await confirmLevelTouch({
+                    symbol: botConfig.symbol,
+                    level: signal.touchedLevel,
+                    side: signal.signal,
+                    windowMs: 8000,
+                    minNotional: 50000,
+                    proximityBps: 5,
+                  });
+                } catch (err) {
+                  console.error('Order book confirmation error:', err);
+                  approved = false;
                 }
 
                 if (approved) {

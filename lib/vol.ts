@@ -27,6 +27,17 @@ export interface Garch11Result {
   kPct: number;
 }
 
+export interface VolatilityModelsResult {
+  /** GARCH(1,1) result */
+  garch11: Garch11Result;
+  /** EGARCH(1,1) result */
+  egarch11: Garch11Result;
+  /** GJR-GARCH(1,1) result */
+  gjrgarch11: Garch11Result;
+  /** Averaged volatility */
+  averaged: Garch11Result;
+}
+
 /**
  * Simple LRU cache for calibration results
  */
@@ -380,6 +391,197 @@ export function garch11Old(closes: number[], multiplier: number = 1.0): number {
 }
 
 /**
+ * EGARCH(1,1) volatility calculation
+ *
+ * Model: ln(σ_t²) = ω + α * (ε_{t-1} / σ_{t-1}) + γ * (|ε_{t-1}| / σ_{t-1}) + β * ln(σ_{t-1}²)
+ *
+ * Where ε_t are standardized residuals: ε_t = r_t / σ_t
+ *
+ * @param returns - Log returns array
+ * @param opts - EGARCH parameters and options
+ * @returns Volatility metrics
+ */
+export function egarch11FromReturns(
+  returns: number[],
+  opts: {
+    omega?: number;
+    alpha?: number;
+    gamma?: number;
+    beta?: number;
+    clampPct?: [number, number];
+  } = {}
+): Garch11Result {
+  const {
+    omega = -0.1,
+    alpha = 0.1,
+    gamma = 0.1,
+    beta = 0.9,
+    clampPct = [1, 10],
+  } = opts;
+
+  if (returns.length < 2) {
+    const vol = ewmaVolatility(returns);
+    const volCapped = Math.min(vol, 0.1);
+    const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+    const kPct = kPctPercent / 100;
+    return { vol, var: vol ** 2, kPct };
+  }
+
+  // Initialize log variance
+  let lnSigma2 = Math.log(initializeVariance(returns));
+
+  // EGARCH recurrence
+  for (let i = 1; i < returns.length; i++) {
+    const rPrev = returns[i - 1];
+    const sigmaPrev = Math.exp(lnSigma2 / 2);
+    const epsilonPrev = rPrev / sigmaPrev;
+    const absEpsilonPrev = Math.abs(epsilonPrev);
+
+    lnSigma2 = omega + alpha * epsilonPrev + gamma * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + beta * lnSigma2;
+  }
+
+  const sigma2 = Math.exp(lnSigma2);
+  const vol = Math.sqrt(sigma2);
+
+  const volCapped = Math.min(vol, 0.1);
+  const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+  const kPct = kPctPercent / 100;
+
+  return { vol, var: sigma2, kPct };
+}
+
+/**
+ * GJR-GARCH(1,1) volatility calculation
+ *
+ * Model: σ_t² = ω + α * ε_{t-1}² + γ * ε_{t-1}² * I(ε_{t-1} < 0) + β * σ_{t-1}²
+ *
+ * Where I is the indicator function for negative returns (leverage effect)
+ *
+ * @param returns - Log returns array
+ * @param opts - GJR-GARCH parameters and options
+ * @returns Volatility metrics
+ */
+export function gjrgarch11FromReturns(
+  returns: number[],
+  opts: {
+    omega?: number;
+    alpha?: number;
+    gamma?: number;
+    beta?: number;
+    clampPct?: [number, number];
+  } = {}
+): Garch11Result {
+  const {
+    omega = 1e-6,
+    alpha = 0.05,
+    gamma = 0.05,
+    beta = 0.9,
+    clampPct = [1, 10],
+  } = opts;
+
+  if (returns.length < 2) {
+    const vol = ewmaVolatility(returns);
+    const volCapped = Math.min(vol, 0.1);
+    const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+    const kPct = kPctPercent / 100;
+    return { vol, var: vol ** 2, kPct };
+  }
+
+  // Initialize variance
+  let sigma2 = initializeVariance(returns);
+
+  // GJR-GARCH recurrence
+  for (let i = 1; i < returns.length; i++) {
+    const rPrev = returns[i - 1];
+    const rPrevSquared = rPrev ** 2;
+    const leverageTerm = rPrev < 0 ? rPrevSquared : 0;
+
+    sigma2 = omega + alpha * rPrevSquared + gamma * leverageTerm + beta * sigma2;
+    sigma2 = Math.max(sigma2, 1e-8);
+  }
+
+  const vol = Math.sqrt(sigma2);
+
+  const volCapped = Math.min(vol, 0.1);
+  const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], volCapped * 100));
+  const kPct = kPctPercent / 100;
+
+  return { vol, var: sigma2, kPct };
+}
+
+/**
+ * Calculate volatility using all three models and average the results
+ */
+export function calculateAverageVolatility(
+  prices: number[],
+  opts: {
+    clampPct?: [number, number];
+    symbol?: string;
+    timeframe?: string;
+    day?: string;
+  } = {}
+): VolatilityModelsResult {
+  const { clampPct = [1, 10], symbol, timeframe, day } = opts;
+
+  // Validate input
+  if (!Array.isArray(prices) || prices.length < 2) {
+    const defaultResult: Garch11Result = { vol: 0.02, var: 0.0004, kPct: clampPct[0] / 100 };
+    return {
+      garch11: defaultResult,
+      egarch11: defaultResult,
+      gjrgarch11: defaultResult,
+      averaged: defaultResult,
+    };
+  }
+
+  // Filter out invalid prices
+  const validPrices = prices.filter(p => p > 0 && isFinite(p));
+  if (validPrices.length < 2) {
+    const defaultResult: Garch11Result = { vol: 0.02, var: 0.0004, kPct: clampPct[0] / 100 };
+    return {
+      garch11: defaultResult,
+      egarch11: defaultResult,
+      gjrgarch11: defaultResult,
+      averaged: defaultResult,
+    };
+  }
+
+  const returns = logReturns(validPrices);
+
+  if (returns.length === 0) {
+    const defaultResult: Garch11Result = { vol: 0.02, var: 0.0004, kPct: clampPct[0] / 100 };
+    return {
+      garch11: defaultResult,
+      egarch11: defaultResult,
+      gjrgarch11: defaultResult,
+      averaged: defaultResult,
+    };
+  }
+
+  // Calculate volatility for each model
+  const garch11 = garch11FromReturns(returns, { clampPct });
+  const egarch11 = egarch11FromReturns(returns, { clampPct });
+  const gjrgarch11 = gjrgarch11FromReturns(returns, { clampPct });
+
+  // Average the kPct values (volatility percentages)
+  const avgKPct = (garch11.kPct + egarch11.kPct + gjrgarch11.kPct) / 3;
+
+  // Create averaged result (use average kPct but keep individual vol/var for reference)
+  const averaged: Garch11Result = {
+    vol: Math.sqrt(garch11.var), // Use GARCH variance as representative
+    var: garch11.var,
+    kPct: avgKPct,
+  };
+
+  return {
+    garch11,
+    egarch11,
+    gjrgarch11,
+    averaged,
+  };
+}
+
+/**
  * Legacy function name - maps to estimateKPercent for API compatibility
  * Takes price array (closes) and returns kPct as decimal (0.01-0.10)
  * @deprecated Use estimateKPercent instead
@@ -387,13 +589,13 @@ export function garch11Old(closes: number[], multiplier: number = 1.0): number {
 export function garch11(closes: number[], multiplier: number = 1.0): number {
   // Validate multiplier to prevent extreme values
   const safeMultiplier = Math.max(0.1, Math.min(10, multiplier)); // Clamp multiplier between 0.1 and 10
-  
+
   const kPct = estimateKPercent(closes, { clampPct: [1, 10] });
-  
+
   // kPct is in decimal form (0.01-0.10), convert to percentage, apply multiplier, then convert back
   const kPctPercent = kPct * 100; // Convert to percentage
   const resultPercent = kPctPercent * safeMultiplier;
-  
+
   // Final clamp to prevent values > 20% (0.20 decimal), then convert back to decimal
   const finalResultPercent = Math.max(1, Math.min(20, resultPercent));
   return finalResultPercent / 100; // Convert back to decimal form

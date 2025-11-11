@@ -1,4 +1,5 @@
 import { sql as vercelSql } from '@vercel/postgres';
+import { VolatilityModelsResult } from './vol';
 
 /**
  * Database utility functions for the trading bot
@@ -88,6 +89,45 @@ export interface ActivityLog {
   message: string;
   metadata: any | null;
   created_at: Date;
+}
+
+export interface VolatilityData {
+  id: string;
+  symbol: string;
+  date: string;
+  calculated_volatility: number;
+  garch11_volatility: number;
+  egarch11_volatility: number;
+  gjrgarch11_volatility: number;
+  data_points_used: number;
+  calculation_timestamp: Date;
+}
+
+export interface DailyLevels {
+  id: string;
+  symbol: string;
+  date: string;
+  daily_open_price: number;
+  upper_range: number;
+  lower_range: number;
+  up_levels: number[];
+  dn_levels: number[];
+  calculated_volatility: number;
+  subdivisions: number;
+  calculation_timestamp: Date;
+  last_updated: Date;
+}
+
+export interface DailyPhase {
+  id: string;
+  symbol: string;
+  date: string;
+  phase1_completed: boolean;
+  phase2_completed: boolean;
+  phase1_timestamp: Date | null;
+  phase2_timestamp: Date | null;
+  last_error: string | null;
+  error_timestamp: Date | null;
 }
 
 // ============================================
@@ -469,4 +509,219 @@ export async function calculateSessionPnL(userId: string): Promise<number> {
     console.error('Error calculating session P&L:', error);
     return 0;
   }
+}
+
+// ============================================
+// VOLATILITY DATA FUNCTIONS
+// ============================================
+
+export async function saveVolatilityData(
+  symbol: string,
+  calculatedVolatility: number,
+  volatilityModels: VolatilityModelsResult,
+  dataPointsUsed: number
+): Promise<VolatilityData> {
+  try {
+    const result = await sql<VolatilityData>`
+      INSERT INTO volatility_data (
+        symbol, date, calculated_volatility,
+        garch11_volatility, egarch11_volatility, gjrgarch11_volatility,
+        data_points_used
+      ) VALUES (
+        ${symbol}, CURRENT_DATE, ${calculatedVolatility},
+        ${volatilityModels.garch11.kPct}, ${volatilityModels.egarch11.kPct}, ${volatilityModels.gjrgarch11.kPct},
+        ${dataPointsUsed}
+      )
+      ON CONFLICT (symbol, date)
+      DO UPDATE SET
+        calculated_volatility = EXCLUDED.calculated_volatility,
+        garch11_volatility = EXCLUDED.garch11_volatility,
+        egarch11_volatility = EXCLUDED.egarch11_volatility,
+        gjrgarch11_volatility = EXCLUDED.gjrgarch11_volatility,
+        data_points_used = EXCLUDED.data_points_used,
+        calculation_timestamp = NOW()
+      RETURNING *
+    `;
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error saving volatility data:', error);
+    throw error;
+  }
+}
+
+export async function getVolatilityData(symbol: string, date?: string): Promise<VolatilityData | null> {
+  try {
+    const result = date
+      ? await sql<VolatilityData>`
+          SELECT * FROM volatility_data
+          WHERE symbol = ${symbol} AND date = ${date}
+          LIMIT 1
+        `
+      : await sql<VolatilityData>`
+          SELECT * FROM volatility_data
+          WHERE symbol = ${symbol}
+          ORDER BY date DESC
+          LIMIT 1
+        `;
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('Error getting volatility data:', error);
+    throw error;
+  }
+}
+
+export async function getLatestVolatilityData(): Promise<VolatilityData[]> {
+  try {
+    const result = await sql<VolatilityData>`
+      SELECT DISTINCT ON (symbol) *
+      FROM volatility_data
+      ORDER BY symbol, date DESC
+    `;
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting latest volatility data:', error);
+    throw error;
+  }
+}
+
+// ============================================
+// DAILY LEVELS FUNCTIONS
+// ============================================
+
+export async function saveDailyLevels(
+  symbol: string,
+  dailyOpenPrice: number,
+  upperRange: number,
+  lowerRange: number,
+  upLevels: number[],
+  dnLevels: number[],
+  calculatedVolatility: number,
+  subdivisions: number
+): Promise<DailyLevels> {
+  try {
+    const result = await sql<DailyLevels>`
+      INSERT INTO daily_levels (
+        symbol, date, daily_open_price, upper_range, lower_range,
+        up_levels, dn_levels, calculated_volatility, subdivisions
+      ) VALUES (
+        ${symbol}, CURRENT_DATE, ${dailyOpenPrice}, ${upperRange}, ${lowerRange},
+        ${JSON.stringify(upLevels)}, ${JSON.stringify(dnLevels)}, ${calculatedVolatility}, ${subdivisions}
+      )
+      ON CONFLICT (symbol, date)
+      DO UPDATE SET
+        daily_open_price = EXCLUDED.daily_open_price,
+        upper_range = EXCLUDED.upper_range,
+        lower_range = EXCLUDED.lower_range,
+        up_levels = EXCLUDED.up_levels,
+        dn_levels = EXCLUDED.dn_levels,
+        calculated_volatility = EXCLUDED.calculated_volatility,
+        subdivisions = EXCLUDED.subdivisions,
+        last_updated = NOW()
+      RETURNING *
+    `;
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error saving daily levels:', error);
+    throw error;
+  }
+}
+
+export async function getDailyLevels(symbol: string, date?: string): Promise<DailyLevels | null> {
+  try {
+    const result = date
+      ? await sql<DailyLevels>`
+          SELECT * FROM daily_levels
+          WHERE symbol = ${symbol} AND date = ${date}
+          LIMIT 1
+        `
+      : await sql<DailyLevels>`
+          SELECT * FROM daily_levels
+          WHERE symbol = ${symbol}
+          ORDER BY date DESC
+          LIMIT 1
+        `;
+
+    if (!result.rows[0]) return null;
+
+    const levels = result.rows[0];
+    // Parse JSON arrays back to number arrays
+    levels.up_levels = JSON.parse(levels.up_levels as any);
+    levels.dn_levels = JSON.parse(levels.dn_levels as any);
+
+    return levels;
+  } catch (error) {
+    console.error('Error getting daily levels:', error);
+    throw error;
+  }
+}
+
+// ============================================
+// DAILY PHASE FUNCTIONS
+// ============================================
+
+export async function updatePhaseStatus(
+  symbol: string,
+  phase: 1 | 2,
+  completed: boolean,
+  error?: string
+): Promise<DailyPhase> {
+  try {
+    const phaseColumn = phase === 1 ? 'phase1_completed' : 'phase2_completed';
+    const timestampColumn = phase === 1 ? 'phase1_timestamp' : 'phase2_timestamp';
+
+    const setClauses = [`${phaseColumn} = ${completed}`];
+    if (completed) {
+      setClauses.push(`${timestampColumn} = NOW()`);
+    }
+
+    if (error) {
+      setClauses.push('last_error = $2', 'error_timestamp = NOW()');
+    }
+
+    const query = `
+      INSERT INTO daily_phases (symbol, date, ${phaseColumn}, ${timestampColumn}${error ? ', last_error, error_timestamp' : ''})
+      VALUES ($1, CURRENT_DATE, ${completed ? 'true' : 'false'}, ${completed ? 'NOW()' : 'NULL'}${error ? ', $2, NOW()' : ''})
+      ON CONFLICT (symbol, date)
+      DO UPDATE SET
+        ${setClauses.join(', ')}
+      RETURNING *
+    `;
+
+    const result = await sql.query(query, error ? [symbol, error] : [symbol]);
+    return result.rows[0];
+  } catch (err) {
+    console.error('Error updating phase status:', err);
+    throw err;
+  }
+}
+
+export async function getPhaseStatus(symbol: string, date?: string): Promise<DailyPhase | null> {
+  try {
+    const result = date
+      ? await sql<DailyPhase>`
+          SELECT * FROM daily_phases
+          WHERE symbol = ${symbol} AND date = ${date}
+          LIMIT 1
+        `
+      : await sql<DailyPhase>`
+          SELECT * FROM daily_phases
+          WHERE symbol = ${symbol}
+          ORDER BY date DESC
+          LIMIT 1
+        `;
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('Error getting phase status:', error);
+    throw error;
+  }
+}
+
+export async function checkPhase1Completed(symbol: string, date?: string): Promise<boolean> {
+  const phase = await getPhaseStatus(symbol, date);
+  return phase?.phase1_completed || false;
+}
+
+export async function checkPhase2Completed(symbol: string, date?: string): Promise<boolean> {
+  const phase = await getPhaseStatus(symbol, date);
+  return phase?.phase2_completed || false;
 }

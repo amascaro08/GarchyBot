@@ -67,7 +67,7 @@ export function gridLevels(
 }
 
 /**
- * Find closest grid levels for TP/SL based on entry position
+ * Find next available grid levels for TP/SL based on entry position
  */
 function findClosestGridLevels(
   entry: number,
@@ -82,18 +82,20 @@ function findClosestGridLevels(
   if (side === 'LONG') {
     // For LONG: TP should be next level up, SL should be next level down
     const tpCandidates = allLevels.filter(level => level > entry);
-    const slCandidates = allLevels.filter(level => level < entry).reverse(); // Reverse for closest
+    const slCandidates = allLevels.filter(level => level < entry);
 
+    // Use next available grid level, not closest
     const tp = tpCandidates.length > 0 ? tpCandidates[0] : entry + (entry * 0.005); // 0.5% fallback
-    const sl = slCandidates.length > 0 ? slCandidates[0] : entry - (entry * 0.005); // 0.5% fallback
+    const sl = slCandidates.length > 0 ? slCandidates[slCandidates.length - 1] : entry - (entry * 0.005); // 0.5% fallback
 
     return { tp, sl };
   } else {
     // For SHORT: TP should be next level down, SL should be next level up
-    const tpCandidates = allLevels.filter(level => level < entry).reverse(); // Reverse for closest
+    const tpCandidates = allLevels.filter(level => level < entry);
     const slCandidates = allLevels.filter(level => level > entry);
 
-    const tp = tpCandidates.length > 0 ? tpCandidates[0] : entry - (entry * 0.005); // 0.5% fallback
+    // Use next available grid level, not closest
+    const tp = tpCandidates.length > 0 ? tpCandidates[tpCandidates.length - 1] : entry - (entry * 0.005); // 0.5% fallback
     const sl = slCandidates.length > 0 ? slCandidates[0] : entry + (entry * 0.005); // 0.5% fallback
 
     return { tp, sl };
@@ -101,7 +103,7 @@ function findClosestGridLevels(
 }
 
 /**
- * Strict signal logic: Long only if open & close > VWAP, Short mirrored
+ * Strict signal logic: LONG-ONLY if price ABOVE VWAP, SHORT-ONLY if price BELOW VWAP
  * Checks if last bar touches a grid level on the bias side
  */
 export function strictSignalWithDailyOpen(params: {
@@ -136,9 +138,9 @@ export function strictSignalWithDailyOpen(params: {
     return { side: null, entry: null, tp: null, sl: null, reason: 'Within VWAP dead zone' };
   }
 
-  // Determine bias: Long if open > VWAP && close > VWAP
-  const isLongBias = open > vwap && close > vwap;
-  const isShortBias = open < vwap && close < vwap;
+  // Determine bias: LONG-ONLY if price ABOVE VWAP, SHORT-ONLY if price BELOW VWAP
+  const isLongBias = close > vwap;
+  const isShortBias = close < vwap;
 
   if (!isLongBias && !isShortBias) {
     return { side: null, entry: null, tp: null, sl: null, reason: 'No clear bias (mixed VWAP)' };

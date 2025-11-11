@@ -124,6 +124,32 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 CREATE INDEX IF NOT EXISTS idx_activity_logs_user_created ON activity_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_bot_created ON activity_logs(bot_config_id, created_at DESC);
 
+-- Volatility data table - stores daily calculated volatility
+CREATE TABLE IF NOT EXISTS volatility_data (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  symbol VARCHAR(20) NOT NULL,
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+
+  -- Calculated volatility (averaged from multiple models)
+  calculated_volatility DECIMAL(10, 6) NOT NULL, -- As decimal (0.01-0.10)
+
+  -- Individual model results
+  garch11_volatility DECIMAL(10, 6) NOT NULL,
+  egarch11_volatility DECIMAL(10, 6) NOT NULL,
+  gjrgarch11_volatility DECIMAL(10, 6) NOT NULL,
+
+  -- Metadata
+  data_points_used INTEGER NOT NULL, -- How many historical days used
+  calculation_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+  -- Ensure one record per symbol per day
+  UNIQUE(symbol, date)
+);
+
+-- Create indexes for volatility data
+CREATE INDEX IF NOT EXISTS idx_volatility_data_symbol_date ON volatility_data(symbol, date DESC);
+CREATE INDEX IF NOT EXISTS idx_volatility_data_date ON volatility_data(date DESC);
+
 -- Create a view for easy querying of open trades with current P&L
 CREATE OR REPLACE VIEW open_trades_view AS
 SELECT 
@@ -216,6 +242,96 @@ WHERE is_running = true;
 -- as the owner has all permissions by default
 
 -- =====================================================
+-- VOLATILITY DATA TABLE
+-- =====================================================
+
+DROP TABLE IF EXISTS daily_phases CASCADE;
+DROP TABLE IF EXISTS daily_levels CASCADE;
+DROP TABLE IF EXISTS volatility_data CASCADE;
+
+CREATE TABLE IF NOT EXISTS volatility_data (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  symbol VARCHAR(20) NOT NULL,
+  date DATE NOT NULL,
+  calculated_volatility DECIMAL(10, 6) NOT NULL, -- Averaged volatility (decimal form, e.g., 0.025 for 2.5%)
+  garch11_volatility DECIMAL(10, 6) NOT NULL,
+  egarch11_volatility DECIMAL(10, 6) NOT NULL,
+  gjrgarch11_volatility DECIMAL(10, 6) NOT NULL,
+  data_points_used INTEGER NOT NULL,
+  calculation_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+  -- Ensure one record per symbol per date
+  UNIQUE(symbol, date)
+);
+
+-- Create index for fast lookups
+CREATE INDEX IF NOT EXISTS idx_volatility_data_symbol_date ON volatility_data(symbol, date DESC);
+
+-- =====================================================
+-- DAILY LEVELS TABLE (Phase 2 persistence)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS daily_levels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  symbol VARCHAR(20) NOT NULL,
+  date DATE NOT NULL,
+
+  -- Daily Open Price (Phase 2 requirement)
+  daily_open_price DECIMAL(20, 8) NOT NULL,
+
+  -- Calculated Levels (Phase 2 results)
+  upper_range DECIMAL(20, 8) NOT NULL,
+  lower_range DECIMAL(20, 8) NOT NULL,
+
+  -- Grid Levels (arrays stored as JSON)
+  up_levels JSONB NOT NULL, -- Array of upper levels above daily open
+  dn_levels JSONB NOT NULL, -- Array of lower levels below daily open
+
+  -- Configuration used for calculation
+  calculated_volatility DECIMAL(10, 6) NOT NULL, -- kPct used (decimal form)
+  subdivisions INTEGER NOT NULL,
+
+  -- Metadata
+  calculation_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+  -- Ensure one record per symbol per date
+  UNIQUE(symbol, date)
+);
+
+-- Create indexes for fast lookups
+CREATE INDEX IF NOT EXISTS idx_daily_levels_symbol_date ON daily_levels(symbol, date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_levels_calculation_ts ON daily_levels(calculation_timestamp DESC);
+
+-- =====================================================
+-- PHASE TRACKING TABLE
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS daily_phases (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  symbol VARCHAR(20) NOT NULL,
+  date DATE NOT NULL,
+
+  -- Phase status
+  phase1_completed BOOLEAN NOT NULL DEFAULT false, -- Volatility calculation
+  phase2_completed BOOLEAN NOT NULL DEFAULT false, -- Level calculation
+
+  -- Timestamps
+  phase1_timestamp TIMESTAMP WITH TIME ZONE,
+  phase2_timestamp TIMESTAMP WITH TIME ZONE,
+
+  -- Error tracking
+  last_error TEXT,
+  error_timestamp TIMESTAMP WITH TIME ZONE,
+
+  -- Ensure one record per symbol per date
+  UNIQUE(symbol, date)
+);
+
+-- Create index for phase tracking
+CREATE INDEX IF NOT EXISTS idx_daily_phases_symbol_date ON daily_phases(symbol, date DESC);
+
+-- =====================================================
 -- NOTES
 -- =====================================================
 -- 1. Run this script on your Neon database
@@ -224,3 +340,5 @@ WHERE is_running = true;
 -- 4. Daily P&L resets automatically based on daily_start_date
 -- 5. Activity logs are capped at 1000 per user
 -- 6. All timestamps use UTC timezone
+-- 7. Phase 1: Daily volatility calculation at 00:00 UTC
+-- 8. Phase 2: Daily level calculation after Phase 1 completion

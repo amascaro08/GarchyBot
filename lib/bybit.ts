@@ -221,7 +221,7 @@ async function getKlinesFromBinance(
  */
 export async function getKlines(
   symbol: string,
-  interval: '1' | '3' | '5' | '15' | '60' | '120' | '240' | 'D' | 'W' | 'M' = '5',
+  interval: '1' | '3' | '5' | '15' | '60' | '120' | '240' | 'D' | 'W' | 'M' | '1d' = '5',
   limit: number = 300,
   testnet: boolean = true
 ): Promise<Array<{ ts: number; open: number; high: number; low: number; close: number; volume: number }>> {

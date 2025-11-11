@@ -50,8 +50,6 @@ export default function Chart({
   const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastProcessedRef = useRef<string>('');
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const [realtimeCandles, setRealtimeCandles] = useState<Candle[]>([]);
   const lastCandleRef = useRef<Candle | null>(null);
 
   // Use WebSocket hook for real-time data
@@ -132,48 +130,14 @@ export default function Chart({
     }
   }, []);
 
-  // Polling for real-time data
-  useEffect(() => {
-    const pollRealtimeData = () => {
-      const cachedData = getCachedMarketData(symbol);
-      if (cachedData && cachedData.candles && cachedData.candles.length > 0) {
-        setRealtimeCandles(cachedData.candles);
-      }
-    };
 
-    // Initial poll
-    pollRealtimeData();
-
-    // Set up polling interval (same as server polling interval)
-    pollingIntervalRef.current = setInterval(pollRealtimeData, 5000);
-
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    };
-  }, [symbol]);
-
-  // Combine static candles with real-time updates from both polling and WebSocket
+  // Use only websocket candles when available, otherwise fall back to static candles
   const displayCandles = useMemo(() => {
-    // Use WebSocket candles if available and connected, otherwise fall back to polling
-    const realtimeData = wsConnected && wsCandles.length > 0 ? wsCandles : realtimeCandles;
-
-    if (realtimeData.length === 0) return candles;
-    if (candles.length === 0) return realtimeData;
-
-    // Merge candles, preferring real-time data for overlapping timestamps
-    const candleMap = new Map<number, Candle>();
-
-    // Add static candles
-    candles.forEach((candle: Candle) => candleMap.set(candle.ts, candle));
-
-    // Override with real-time candles
-    realtimeData.forEach((candle: Candle) => candleMap.set(candle.ts, candle));
-
-    return Array.from(candleMap.values()).sort((a, b) => a.ts - b.ts);
-  }, [candles, realtimeCandles, wsCandles, wsConnected]);
+    if (wsConnected && wsCandles.length > 0) {
+      return wsCandles;
+    }
+    return candles;
+  }, [candles, wsCandles, wsConnected]);
 
   // Update chart data and price lines when props change
   useEffect(() => {

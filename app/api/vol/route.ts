@@ -1,23 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { VolRequestSchema } from '@/lib/types';
-import { estimateKPercent } from '@/lib/vol';
+import { calculateAverageVolatility } from '@/lib/vol';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const validated = VolRequestSchema.parse(body);
 
-    // Calculate kPct using GARCH(1,1) with EWMA fallback
-    // Returns kPct as decimal (0.01-0.10)
-    const raw_k_pct = estimateKPercent(validated.closes, { clampPct: [1, 10] });
-    
+    // Calculate volatility using all three models (GARCH, EGARCH, GJR-GARCH) and average
+    const volatilityResult = calculateAverageVolatility(validated.closes, { clampPct: [1, 10] });
+
+    // Use the averaged kPct result
     // Final safety clamp to prevent extreme values (should never exceed 0.10, but add safeguard)
-    const k_pct = Math.max(0.01, Math.min(0.10, raw_k_pct));
+    const k_pct = Math.max(0.01, Math.min(0.10, volatilityResult.averaged.kPct));
 
     return NextResponse.json({
       symbol: validated.symbol,
       k_pct,
+      models: {
+        garch11: volatilityResult.garch11.kPct,
+        egarch11: volatilityResult.egarch11.kPct,
+        gjrgarch11: volatilityResult.gjrgarch11.kPct,
+        averaged: volatilityResult.averaged.kPct,
+      },
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

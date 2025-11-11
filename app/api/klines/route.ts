@@ -5,9 +5,9 @@ import { CandleSchema } from '@/lib/types';
 
 const QuerySchema = z.object({
   symbol: z.string().default('BTCUSDT'),
-  interval: z.enum(['1', '3', '5', '15', '60', '120', '240']).default('5'),
+  interval: z.enum(['1', '3', '5', '15', '60', '120', '240', 'D', '1d']).default('5'),
   limit: z.coerce.number().int().min(1).max(1000).default(200),
-  testnet: z.coerce.boolean().default(true),
+  testnet: z.coerce.boolean().default(false), // Default to mainnet for daily data
 });
 
 export async function GET(request: NextRequest) {

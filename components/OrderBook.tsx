@@ -16,8 +16,6 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   const [snapshot, setSnapshot] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
   const [maxSize, setMaxSize] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
-  const [realtimeOrderBook, setRealtimeOrderBook] = useState<{ bids: DepthEntry[]; asks: DepthEntry[] } | null>(null);
 
   // Use WebSocket hook for real-time order book data
   const { orderBook: wsOrderBook, isConnected: wsConnected } = useWebSocket(symbol);
@@ -25,55 +23,24 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
   useEffect(() => {
     // Reset state when symbol changes
     setSnapshot(null);
-    setRealtimeOrderBook(null);
     setConnectionStatus('connecting');
 
-    // Function to poll order book data
-    const pollOrderBook = () => {
-      const cachedData = getCachedMarketData(symbol);
-      if (cachedData && cachedData.orderBook) {
-        setSnapshot(cachedData.orderBook);
+    // Load initial static data if websocket disconnected
+    if (!wsConnected) {
+      const snap = getOrderBookSnapshot(symbol);
+      if (snap && snap.bids.length > 0 && snap.asks.length > 0) {
+        setSnapshot({ bids: snap.bids, asks: snap.asks });
         setConnectionStatus('connected');
 
         // Calculate max size for visualization
-        const allSizes = [...cachedData.orderBook.bids, ...cachedData.orderBook.asks].map(e => e.size);
+        const allSizes = [...snap.bids, ...snap.asks].map(e => e.size);
         setMaxSize(Math.max(...allSizes, 1));
-
-        // Update realtime order book if available
-        if (cachedData.orderBook.bids.length > 0 || cachedData.orderBook.asks.length > 0) {
-          setRealtimeOrderBook(cachedData.orderBook);
-        }
-      } else {
-        // Fallback to direct API call
-        const snap = getOrderBookSnapshot(symbol);
-        if (snap && snap.bids.length > 0 && snap.asks.length > 0) {
-          setSnapshot({ bids: snap.bids, asks: snap.asks });
-          setConnectionStatus('connected');
-
-          // Calculate max size for visualization
-          const allSizes = [...snap.bids, ...snap.asks].map(e => e.size);
-          setMaxSize(Math.max(...allSizes, 1));
-        }
       }
-    };
+    }
+  }, [symbol, wsConnected]);
 
-    // Initial poll
-    pollOrderBook();
-
-    // Set up polling interval
-    const interval = setInterval(pollOrderBook, 5000); // Poll every 5 seconds
-    setPollingInterval(interval);
-
-    return () => {
-      if (interval) {
-        clearInterval(interval);
-        setPollingInterval(null);
-      }
-    };
-  }, [symbol]);
-
-  // Use WebSocket order book if available and connected, otherwise fallback to polled data
-  const displayOrderBook = (wsConnected && wsOrderBook) || realtimeOrderBook || snapshot;
+  // Use WebSocket order book if available and connected, otherwise show static data
+  const displayOrderBook = wsConnected && wsOrderBook ? wsOrderBook : snapshot;
 
   if (!displayOrderBook || displayOrderBook.bids.length === 0 || displayOrderBook.asks.length === 0) {
     return (
@@ -87,7 +54,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
               wsConnected ? 'bg-green-400' : connectionStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-red-400'
             }`} />
             <span className="text-xs text-gray-400">
-              {wsConnected ? 'WS' : connectionStatus === 'connecting' ? 'Connecting...' : 'Polling'}
+              {wsConnected ? 'WS' : connectionStatus === 'connecting' ? 'Connecting...' : 'Static'}
             </span>
           </div>
         </div>
@@ -98,7 +65,7 @@ export default function OrderBook({ symbol, currentPrice }: OrderBookProps) {
           <p className="text-sm mb-2">
             {wsConnected ? 'WebSocket connected - waiting for data...' :
              connectionStatus === 'connecting' ? 'Connecting to order book...' :
-             'Waiting for order book data...'}
+             'Showing static order book data...'}
           </p>
           <p className="text-xs text-gray-500 mt-2">Symbol: {symbol}</p>
         </div>
