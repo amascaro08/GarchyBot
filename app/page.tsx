@@ -996,8 +996,8 @@ export default function Home() {
                 />
               </div>
 
-              {/* Order Book Visualization */}
-              <OrderBook symbol={symbol} currentPrice={currentPrice} />
+              {/* Order Book Visualization - Temporarily hidden */}
+              {/* <OrderBook symbol={symbol} currentPrice={currentPrice} /> */}
             </div>
 
             {/* Right sidebar - Cards, Trade Log, and Activity Log */}
