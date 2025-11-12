@@ -2,32 +2,20 @@
 
 import { Trade } from './TradeLog';
 import { formatCurrencyNoSymbol } from '@/lib/format';
-import { useState, useEffect } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { useState } from 'react';
 import TradeDetailsModal from './TradeDetailsModal';
-import { useWebSocket } from '@/lib/useWebSocket';
 
 interface TradesTableProps {
   trades: Trade[];
   currentPrice: number | null;
   onCloseTrade?: (trade: Trade) => void;
-  symbol?: string; // Add symbol for WebSocket subscription
 }
 
-export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol = 'BTCUSDT' }: TradesTableProps) {
-  const [closingTrade, setClosingTrade] = useState<Trade | null>(null);
+export default function TradesTable({ trades, currentPrice, onCloseTrade }: TradesTableProps) {
+  const [closingTradeId, setClosingTradeId] = useState<string | null>(null);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([]);
 
-  // Use WebSocket hook for real-time trade data
-  const { trades: wsTrades, isConnected: wsConnected } = useWebSocket(symbol);
-
-  // Combine trades from props and real-time updates
-  // Note: wsTrades from WebSocket are public trade data, not user trades
-  const allTrades = [...trades, ...realtimeTrades];
-  // TODO: Handle WebSocket trade data separately if needed for display
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
     return date.toLocaleString('en-US', {
@@ -66,6 +54,7 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
     if (trade.status === 'tp') return 'Win';
     if (trade.status === 'sl') return 'Loss';
     if (trade.status === 'breakeven') return 'Breakeven';
+    if (trade.status === 'cancelled') return 'Cancelled';
     return '—';
   };
 
@@ -76,6 +65,7 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
       case 'Loss':
         return 'text-red-400';
       case 'Breakeven':
+      case 'Cancelled':
         return 'text-yellow-400';
       case 'Active':
         return 'text-blue-400';
@@ -92,11 +82,11 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
     );
 
     if (confirmed) {
-      setClosingTrade(trade);
+      setClosingTradeId(trade.id);
       try {
         await onCloseTrade(trade);
       } finally {
-        setClosingTrade(null);
+        setClosingTradeId(null);
       }
     }
   };
@@ -106,57 +96,7 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
     setShowDetailsModal(true);
   };
 
-  // WebSocket connection for real-time trade updates
-  useEffect(() => {
-    // Only initialize WebSocket in browser environment
-    if (typeof window === 'undefined') return;
-
-    try {
-      const newSocket = io('/api/socket', {
-        transports: ['websocket', 'polling'],
-        upgrade: true,
-        rememberUpgrade: true,
-        timeout: 20000,
-      });
-      setSocket(newSocket);
-
-      newSocket.on('connect', () => {
-        console.log('TradesTable WebSocket connected');
-        // Subscribe to trades data
-        newSocket.emit('subscribe-trades', { symbol });
-      });
-
-      newSocket.on('connect_error', (error) => {
-        console.error('TradesTable WebSocket connection error:', error);
-        // Don't retry Socket.IO connection - rely on useWebSocket hook
-      });
-
-      newSocket.on('disconnect', (reason) => {
-        console.log('TradesTable WebSocket disconnected:', reason);
-        // Don't attempt to reconnect - rely on useWebSocket hook
-      });
-
-      newSocket.on('trades-update', (data) => {
-        if (data.symbol === symbol) {
-          // Only update if we have actual trade data to prevent empty updates
-          const trades = data.trades || [];
-          if (trades.length > 0) {
-            setRealtimeTrades(trades);
-          }
-        }
-      });
-
-      return () => {
-        if (newSocket.connected) {
-          newSocket.disconnect();
-        }
-      };
-    } catch (error) {
-      console.error('Failed to initialize WebSocket:', error);
-    }
-  }, [symbol]);
-
-  if (allTrades.length === 0) {
+  if (trades.length === 0) {
     return (
       <div className="glass-effect rounded-xl p-8 shadow-2xl border-slate-700/50 text-center">
         <p className="text-gray-400">No trades yet</p>
@@ -168,14 +108,6 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
     <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50 overflow-x-auto">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-xl font-bold text-white">Trades History</h3>
-        <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${
-            wsConnected ? 'bg-green-400' : 'bg-red-400'
-          }`} />
-          <span className="text-xs text-gray-400">
-            {wsConnected ? 'Live' : 'Offline'}
-          </span>
-        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[800px]">
@@ -196,14 +128,14 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
             </tr>
           </thead>
           <tbody>
-            {allTrades.map((trade, idx) => {
+            {trades.map((trade) => {
               const unrealizedPnL = calculateUnrealizedPnL(trade);
               const realizedPnL = calculateRealizedPnL(trade);
               const outcome = getOutcome(trade);
               
               return (
                 <tr
-                  key={idx}
+                  key={trade.id}
                   className={`border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors ${
                     trade.status === 'open' ? 'bg-blue-500/5' : ''
                   }`}
@@ -282,10 +214,10 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade, symbol
                     {trade.status === 'open' && (
                       <button
                         onClick={() => handleCloseTrade(trade)}
-                        disabled={closingTrade === trade}
+                        disabled={closingTradeId === trade.id}
                         className="px-2 py-1 text-xs bg-red-500/20 text-red-400 border border-red-500/30 rounded hover:bg-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
-                        {closingTrade === trade ? 'Closing...' : 'Close'}
+                        {closingTradeId === trade.id ? 'Closing...' : 'Close'}
                       </button>
                     )}
                   </td>

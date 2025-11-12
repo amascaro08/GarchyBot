@@ -3,13 +3,14 @@
 import { formatCurrency } from '@/lib/format';
 
 export interface Trade {
+  id: string;
   time: string;
   side: 'LONG' | 'SHORT';
   entry: number;
   tp: number;
   sl: number;
   reason: string;
-  status?: 'open' | 'tp' | 'sl' | 'breakeven';
+  status?: 'open' | 'tp' | 'sl' | 'breakeven' | 'cancelled';
   exitPrice?: number;
   symbol?: string;
   leverage?: number;
@@ -45,6 +46,7 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
       tp: 'bg-green-500/20 text-green-400 border-green-500/30',
       sl: 'bg-red-500/20 text-red-400 border-red-500/30',
       breakeven: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+      cancelled: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
     };
     return badges[status as keyof typeof badges] || badges.open;
   };

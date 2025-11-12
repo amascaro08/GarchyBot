@@ -47,11 +47,16 @@ interface WebSocketHook {
 const BYBIT_WS_TESTNET = 'wss://stream-testnet.bybit.com/v5/public/linear';
 const BYBIT_WS_MAINNET = 'wss://stream.bybit.com/v5/public/linear';
 
-export function useWebSocket(symbol: string, initialCandles: Candle[] = []): WebSocketHook {
+const VALID_INTERVALS = new Set([
+  '1', '3', '5', '15', '60', '120', '240', 'D', 'W', 'M'
+]);
+
+export function useWebSocket(symbol: string, interval: string = '5', initialCandles: Candle[] = []): WebSocketHook {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastCandleRef = useRef<Candle | null>(null);
+  const intervalRef = useRef<string>(interval);
 
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
@@ -64,6 +69,11 @@ export function useWebSocket(symbol: string, initialCandles: Candle[] = []): Web
       setCandles(initialCandles);
     }
   }, [initialCandles, candles.length]);
+
+  useEffect(() => {
+    intervalRef.current = interval;
+    setCandles(initialCandles.length > 0 ? initialCandles : []);
+  }, [interval]);
   const [trades, setTrades] = useState<TradeData[]>([]);
 
   // Get WebSocket URL based on environment
@@ -138,9 +148,10 @@ export function useWebSocket(symbol: string, initialCandles: Candle[] = []): Web
         startPing();
 
         // Subscribe to streams
+        const klineInterval = VALID_INTERVALS.has(intervalRef.current) ? intervalRef.current : '5';
         const subscriptions = [
           `orderbook.50.${symbol}`, // Order book depth 50
-          `kline.5.${symbol}`,      // 5-minute candles
+          `kline.${klineInterval}.${symbol}`,      // Candles
           `publicTrade.${symbol}`, // Recent trades
         ];
 
@@ -160,11 +171,11 @@ export function useWebSocket(symbol: string, initialCandles: Candle[] = []): Web
           }
 
           // Handle subscription confirmation
-          if (message.op === 'subscribe') {
+          if (message.op === 'subscribe' || message.op === 'unsubscribe') {
             if (message.success) {
-              console.log(`Subscribed to ${symbol} streams`);
+              console.log(`${message.op === 'subscribe' ? 'Subscribed' : 'Unsubscribed'} to ${symbol} streams`);
             } else {
-              console.error(`Subscription failed for ${symbol}:`, message.retMsg);
+              console.error(`${message.op === 'subscribe' ? 'Subscription' : 'Unsubscription'} failed for ${symbol}:`, message.retMsg);
             }
             return;
           }
@@ -237,9 +248,10 @@ export function useWebSocket(symbol: string, initialCandles: Candle[] = []): Web
       try {
         if (wsRef.current.readyState === WebSocket.OPEN) {
           // Unsubscribe before closing
+          const klineInterval = VALID_INTERVALS.has(intervalRef.current) ? intervalRef.current : '5';
           wsRef.current.send(JSON.stringify({
             op: 'unsubscribe',
-            args: [`orderbook.50.${symbol}`, `kline.5.${symbol}`, `publicTrade.${symbol}`]
+            args: [`orderbook.50.${symbol}`, `kline.${klineInterval}.${symbol}`, `publicTrade.${symbol}`]
           }));
         }
         wsRef.current.close();
@@ -357,7 +369,7 @@ export function useWebSocket(symbol: string, initialCandles: Candle[] = []): Web
     return () => {
       disconnect();
     };
-  }, [symbol, connect, disconnect]);
+  }, [symbol, interval, connect, disconnect]);
 
   // Cleanup on unmount
   useEffect(() => {

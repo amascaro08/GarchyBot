@@ -325,29 +325,6 @@ export function priceFlipAgainstVWAP(
 }
 
 /**
- * If price flipped against VWAP, move SL to entry (breakeven) with a 0.5% buffer.
- * This prevents overly aggressive SL movement that can trigger premature stops.
- *
- * Rules: If the bot is in a LONG trade and the price crosses below the VWAP,
- * the setup is invalid and the trade should be closed immediately (and vice-versa for shorts).
- */
-export function applyBreakeven(
-  side: 'LONG' | 'SHORT',
-  entry: number,
-  sl: number,
-  lastClose: number,
-  vwap: number
-): number {
-  if (priceFlipAgainstVWAP(lastClose, vwap, side)) {
-    // Add 0.5% buffer to breakeven SL to prevent premature triggering
-    const bufferPct = 0.005; // 0.5%
-    const bufferedBreakeven = side === 'LONG' ? entry * (1 + bufferPct) : entry * (1 - bufferPct);
-    return bufferedBreakeven;
-  }
-  return sl;
-}
-
-/**
  * Breakeven stop logic: if VWAP flips against open trade, move stop to entry
  * @deprecated Use applyBreakeven instead - this function checks VWAP position relative to entry, not price
  */

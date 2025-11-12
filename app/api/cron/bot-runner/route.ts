@@ -3,7 +3,6 @@ import {
   getRunningBots,
   getOpenTrades,
   createTrade,
-  updateTrade,
   closeTrade,
   addActivityLog,
   updateLastPolled,
@@ -14,7 +13,7 @@ import {
   getDailyLevels,
   checkPhase2Completed
 } from '@/lib/db';
-import { applyBreakeven } from '@/lib/strategy';
+import { priceFlipAgainstVWAP } from '@/lib/strategy';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import type { Candle } from '@/lib/types';
 
@@ -179,12 +178,11 @@ export async function POST(request: NextRequest) {
             // Immediate closure if bias changes (price crosses VWAP)
             // Rules: If the bot is in a LONG trade and the price crosses below the VWAP,
             // the setup is invalid and the trade should be closed immediately (and vice-versa for shorts)
-            if (trade.side === 'LONG' && lastClose < levels.vwap) {
+            if (priceFlipAgainstVWAP(lastClose, levels.vwap, trade.side as 'LONG' | 'SHORT')) {
               shouldClose = true;
-              closeReason = 'Setup invalidated: LONG trade closed as price fell below VWAP';
-            } else if (trade.side === 'SHORT' && lastClose > levels.vwap) {
-              shouldClose = true;
-              closeReason = 'Setup invalidated: SHORT trade closed as price rose above VWAP';
+              closeReason = trade.side === 'LONG'
+                ? 'Setup invalidated: LONG trade closed as price fell below VWAP'
+                : 'Setup invalidated: SHORT trade closed as price rose above VWAP';
             }
 
             if (shouldClose) {
@@ -192,7 +190,7 @@ export async function POST(request: NextRequest) {
                 ? (exitPrice - Number(trade.entry_price)) * Number(trade.position_size)
                 : (Number(trade.entry_price) - exitPrice) * Number(trade.position_size);
 
-              await closeTrade(trade.id, 'cancelled', exitPrice, pnl);
+              await closeTrade(trade.id, 'breakeven', exitPrice, pnl);
               await updateDailyPnL(botConfig.user_id, pnl);
 
               await addActivityLog(
@@ -205,27 +203,6 @@ export async function POST(request: NextRequest) {
               continue; // Skip other trade management for this invalidated trade
             }
 
-            // Apply breakeven to remaining open trades (only if price hasn't crossed VWAP)
-            const newSL = applyBreakeven(
-              trade.side as 'LONG' | 'SHORT',
-              Number(trade.entry_price),
-              Number(trade.current_sl),
-              lastClose,
-              levels.vwap
-            );
-
-            // Only apply breakeven if it hasn't already been applied and bias is still valid
-            if (newSL !== Number(trade.current_sl)) {
-              await updateTrade(trade.id, { current_sl: newSL } as any);
-              await addActivityLog(
-                botConfig.user_id,
-                'success',
-                `Breakeven applied: ${trade.side} @ $${trade.entry_price}, SL → $${newSL.toFixed(2)}`,
-                null,
-                botConfig.id
-              );
-            }
-
             // Check if TP or SL hit
             const lastCandle = candles[candles.length - 1];
             let hitTP = false;
@@ -235,17 +212,17 @@ export async function POST(request: NextRequest) {
               if (lastCandle.high >= Number(trade.tp_price)) {
                 hitTP = true;
                 exitPrice = Number(trade.tp_price);
-              } else if (lastCandle.low <= newSL) {
+              } else if (lastCandle.low <= Number(trade.sl_price)) {
                 hitSL = true;
-                exitPrice = newSL;
+                exitPrice = Number(trade.sl_price);
               }
             } else {
               if (lastCandle.low <= Number(trade.tp_price)) {
                 hitTP = true;
                 exitPrice = Number(trade.tp_price);
-              } else if (lastCandle.high >= newSL) {
+              } else if (lastCandle.high >= Number(trade.sl_price)) {
                 hitSL = true;
-                exitPrice = newSL;
+                exitPrice = Number(trade.sl_price);
               }
             }
 
@@ -341,37 +318,42 @@ export async function POST(request: NextRequest) {
                     : botConfig.risk_amount;
 
                   const stopLossDistance = Math.abs(signal.touchedLevel - signal.sl);
-                  const positionSize = stopLossDistance > 0 ? riskPerTrade / stopLossDistance : 0;
+                  const rawPositionSize = stopLossDistance > 0 ? riskPerTrade / stopLossDistance : 0;
+                  const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
                   
-                  console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Risk: $${riskPerTrade.toFixed(2)}, Position size: ${positionSize.toFixed(4)}`);
+                  if (positionSize <= 0) {
+                    console.log('[CRON] Skipping trade - calculated position size <= 0');
+                  } else {
+                    console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Risk: $${riskPerTrade.toFixed(2)}, Position size: ${positionSize.toFixed(4)}`);
 
-                  // Create trade
-                  await createTrade({
-                    user_id: botConfig.user_id,
-                    bot_config_id: botConfig.id,
-                    symbol: botConfig.symbol,
-                    side: signal.signal,
-                    status: 'open',
-                    entry_price: signal.touchedLevel,
-                    tp_price: signal.tp,
-                    sl_price: signal.sl,
-                    current_sl: signal.sl,
-                    exit_price: null,
-                    position_size: positionSize,
-                    leverage: botConfig.leverage,
-                    pnl: 0,
-                    reason: signal.reason,
-                    entry_time: new Date(),
-                    exit_time: null,
-                  });
+                    // Create trade
+                    await createTrade({
+                      user_id: botConfig.user_id,
+                      bot_config_id: botConfig.id,
+                      symbol: botConfig.symbol,
+                      side: signal.signal,
+                      status: 'open',
+                      entry_price: signal.touchedLevel,
+                      tp_price: signal.tp,
+                      sl_price: signal.sl,
+                      current_sl: signal.sl,
+                      exit_price: null,
+                      position_size: positionSize,
+                      leverage: botConfig.leverage,
+                      pnl: 0,
+                      reason: signal.reason,
+                      entry_time: new Date(),
+                      exit_time: null,
+                    });
 
-                  await addActivityLog(
-                    botConfig.user_id,
-                    'success',
-                    `Trade opened: ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
-                    { signal, positionSize },
-                    botConfig.id
-                  );
+                    await addActivityLog(
+                      botConfig.user_id,
+                      'success',
+                      `Trade opened: ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
+                      { signal, positionSize },
+                      botConfig.id
+                    );
+                  }
                 }
               }
             }

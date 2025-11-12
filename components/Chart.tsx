@@ -16,6 +16,7 @@ interface ChartProps {
   upper: number | null;
   lower: number | null;
   symbol?: string; // Add symbol for WebSocket subscription
+  interval?: string;
   markers?: Array<{
     time: number;
     position: 'aboveBar' | 'belowBar';
@@ -41,6 +42,7 @@ export default function Chart({
   upper,
   lower,
   symbol = 'BTCUSDT',
+  interval = '5',
   markers = [],
   openTrades = []
 }: ChartProps) {
@@ -53,7 +55,7 @@ export default function Chart({
   const lastCandleRef = useRef<Candle | null>(null);
 
   // Use WebSocket hook for real-time data, initialize with static candles
-  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, []);
+  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, interval, candles);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;

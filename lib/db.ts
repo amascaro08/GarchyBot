@@ -364,6 +364,20 @@ export async function getAllTrades(userId: string, limit = 100): Promise<Trade[]
   }
 }
 
+export async function getTradeById(tradeId: string): Promise<Trade | null> {
+  try {
+    const result = await sql<Trade>`
+      SELECT * FROM trades
+      WHERE id = ${tradeId}
+      LIMIT 1
+    `;
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('Error getting trade by ID:', error);
+    throw error;
+  }
+}
+
 export async function updateTrade(tradeId: string, updates: Partial<Trade>): Promise<Trade> {
   try {
     const setClauses: string[] = [];

@@ -10,7 +10,7 @@ import Sidebar from '@/components/Sidebar';
 import OrderBook from '@/components/OrderBook';
 import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
-import { applyBreakeven } from '@/lib/strategy';
+import { priceFlipAgainstVWAP } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
 
@@ -71,6 +71,7 @@ export default function Home() {
   const [garchMode, setGarchMode] = useState<'auto' | 'custom'>('auto');
   const [customKPct, setCustomKPct] = useState<number>(0.03); // Default 3% (0.03 as decimal)
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const tradesRef = useRef<Trade[]>([]);
   
   // Helper function to add log entries (memoized to avoid dependency warnings)
   const addLog = useCallback((level: LogLevel, message: string) => {
@@ -82,6 +83,10 @@ export default function Home() {
     };
     setActivityLogs((prev) => [...prev, logEntry].slice(-100)); // Keep last 100 logs
   }, []);
+
+  useEffect(() => {
+    tradesRef.current = trades;
+  }, [trades]);
 
   // Calculate daily limits
   const dailyTargetValue = useMemo(() => {
@@ -232,11 +237,109 @@ export default function Home() {
     }
   };
 
+  const addTradeToState = useCallback((trade: Trade) => {
+    setTrades((prev) => {
+      const next = [...prev, trade];
+      tradesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const replaceTradeInState = useCallback((updatedTrade: Trade) => {
+    setTrades((prev) => {
+      const next = prev.map((t) => (t.id === updatedTrade.id ? updatedTrade : t));
+      tradesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const openTradeOnServer = useCallback(async (params: {
+    entry: number;
+    tp: number;
+    sl: number;
+    side: 'LONG' | 'SHORT';
+    positionSize: number;
+    leverage: number;
+    reason: string;
+  }) => {
+    try {
+      const res = await fetch('/api/trades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol,
+          side: params.side,
+          entry: params.entry,
+          tp: params.tp,
+          sl: params.sl,
+          positionSize: params.positionSize,
+          leverage: params.leverage,
+          reason: params.reason,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to persist trade');
+      }
+
+      addTradeToState(data.trade);
+      addLog('success', `Trade opened: ${params.side} @ $${params.entry.toFixed(2)}, TP $${params.tp.toFixed(2)}, SL $${params.sl.toFixed(2)}`);
+      return data.trade as Trade;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to persist trade';
+      addLog('error', message);
+      setError(message);
+      return null;
+    }
+  }, [symbol, addTradeToState, addLog]);
+
+  const closeTradeOnServer = useCallback(async (
+    trade: Trade,
+    status: 'tp' | 'sl' | 'breakeven' | 'cancelled',
+    exitPrice: number,
+    logLevel: LogLevel,
+    logMessage: string
+  ) => {
+    try {
+      const res = await fetch(`/api/trades/${trade.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status,
+          exitPrice,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to update trade');
+      }
+
+      const updatedTrade = data.trade as Trade;
+      const pnlChange = Number(data.pnlChange || 0);
+
+      replaceTradeInState(updatedTrade);
+      if (!Number.isNaN(pnlChange) && Number.isFinite(pnlChange)) {
+        setSessionPnL((prev) => prev + pnlChange);
+        setDailyPnL((prev) => prev + pnlChange);
+      }
+
+      const pnlFormatted = pnlChange >= 0 ? `+$${pnlChange.toFixed(2)}` : `-$${Math.abs(pnlChange).toFixed(2)}`;
+      addLog(logLevel, `${logMessage} (P&L: ${pnlFormatted})`);
+      return { updatedTrade, pnlChange };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update trade';
+      addLog('error', message);
+      setError(message);
+      return null;
+    }
+  }, [replaceTradeInState, addLog]);
+
   // Main polling function - uses current symbol/interval from closure
   const pollData = async () => {
     // Capture current values to ensure we use latest
     const currentSymbol = symbol;
-    const currentInterval = candleInterval;
     
     try {
       setLoading(true);
@@ -275,20 +378,9 @@ export default function Home() {
       // Get levels (includes kPct) - refresh to ensure we have latest VWAP
       addLog('info', `Monitoring levels for ${symbol}...`);
       const lv = await fetchLevels();
-      const lastClose = candlesData.length > 0 ? candlesData[candlesData.length - 1].close : NaN;
+      const lastCandle = candlesData[candlesData.length - 1];
+      const lastClose = lastCandle?.close ?? NaN;
       addLog('info', `VWAP: $${lv.vwap.toFixed(2)}, Price: $${lastClose.toFixed(2)}`);
-
-      // Apply breakeven to open trades (if any)
-      setTrades((prev) =>
-        prev.map((t) => {
-          if (t.status !== 'open') return t;
-          const newSL = applyBreakeven(t.side, t.entry, t.sl, lastClose, lv.vwap);
-          if (newSL !== t.sl) {
-            addLog('success', `Breakeven applied: ${t.side} @ $${t.entry.toFixed(2)}, SL → $${newSL.toFixed(2)}`);
-          }
-          return newSL !== t.sl ? { ...t, sl: newSL } : t;
-        })
-      );
 
       // Calculate signal using THE SAME kPct from levels
       const signalData = await calculateSignal(candlesData, lv.kPct);
@@ -324,57 +416,45 @@ export default function Home() {
         }
 
         if (approved) {
-          // Use functional update to get current trades state
-          setTrades((prevTrades) => {
-            // Check max trades limit with current state
-            const openTrades = prevTrades.filter((t) => t.status === 'open');
-            if (openTrades.length >= maxTrades) {
-              addLog('warning', `Max trades limit reached (${maxTrades}). Skipping signal.`);
-              return prevTrades;
-            }
+          const openTradesForSymbol = tradesRef.current.filter(
+            (t) => t.status === 'open' && t.symbol === symbol
+          );
 
-            // Check if there's already an open trade at this exact level/symbol/side
-            // This prevents duplicate entries on small price fluctuations
-            const duplicateTrade = openTrades.find(
+          if (openTradesForSymbol.length >= maxTrades) {
+            addLog('warning', `Max trades limit reached (${maxTrades}). Skipping signal.`);
+          } else {
+            const duplicateTrade = openTradesForSymbol.find(
               (t) =>
-                t.symbol === symbol &&
                 t.side === signalData.signal &&
-                Math.abs(t.entry - signalData.touchedLevel!) < 0.01 // Allow small tolerance for floating point
+                Math.abs(t.entry - signalData.touchedLevel!) < 0.01
             );
 
             if (duplicateTrade) {
               addLog('warning', `Duplicate trade detected at $${signalData.touchedLevel!.toFixed(2)}. Skipping.`);
-              return prevTrades;
+            } else {
+              const riskPerTrade = riskType === 'percent'
+                ? (capital * riskAmount) / 100
+                : riskAmount;
+
+              const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
+              const rawPositionSize = stopLossDistance > 0 ? riskPerTrade / stopLossDistance : 0;
+              const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
+
+              if (positionSize <= 0) {
+                addLog('warning', 'Calculated position size is zero. Skipping trade.');
+              } else {
+                await openTradeOnServer({
+                  entry: signalData.touchedLevel!,
+                  tp: signalData.tp!,
+                  sl: signalData.sl!,
+                  side: signalData.signal,
+                  positionSize,
+                  leverage,
+                  reason: signalData.reason,
+                });
+              }
             }
-
-            // Calculate position size based on risk management
-            const riskPerTrade = riskType === 'percent' 
-              ? (capital * riskAmount) / 100 
-              : riskAmount;
-            
-            // Calculate position size: risk amount / (entry - stop loss)
-            // Note: Position size is in base units, not leveraged
-            const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
-            const positionSize = stopLossDistance > 0 
-              ? riskPerTrade / stopLossDistance 
-              : 0;
-
-            const newTrade: Trade = {
-              time: new Date().toISOString(),
-              side: signalData.signal,
-              entry: signalData.touchedLevel!,
-              tp: signalData.tp!,
-              sl: signalData.sl!,
-              reason: signalData.reason,
-              status: 'open',
-              symbol: symbol,
-              leverage: leverage,
-              positionSize: positionSize,
-            };
-            
-            addLog('success', `Trade opened: ${signalData.signal} @ $${signalData.touchedLevel!.toFixed(2)}, TP: $${signalData.tp!.toFixed(2)}, SL: $${signalData.sl!.toFixed(2)}`);
-            return [...prevTrades, newTrade];
-          });
+          }
         } else {
           addLog('warning', `Signal rejected: ${signalData.reason}`);
         }
@@ -386,52 +466,65 @@ export default function Home() {
 
       // Simulate TP/SL checks for open trades
       if (candlesData.length > 0) {
-        const lastCandle = candlesData[candlesData.length - 1];
-        setTrades((prevTrades) => {
-          return prevTrades.map((trade) => {
-            if (trade.status !== 'open') return trade;
+        const openTradesSnapshot = tradesRef.current.filter(
+          (trade) => trade.status === 'open' && trade.symbol === symbol
+        );
 
-            let newStatus: 'open' | 'tp' | 'sl' | 'breakeven' = trade.status;
-            let exitPrice: number | undefined;
+        for (const trade of openTradesSnapshot) {
+          // VWAP invalidation check
+          if (Number.isFinite(lastClose) && priceFlipAgainstVWAP(lastClose, lv.vwap, trade.side)) {
+            await closeTradeOnServer(
+              trade,
+              'breakeven',
+              lastClose,
+              'warning',
+              `VWAP invalidation: ${trade.side} @ $${trade.entry.toFixed(2)} closed at $${lastClose.toFixed(2)}`
+            );
+            continue;
+          }
 
-            if (trade.side === 'LONG') {
-              if (lastCandle.high >= trade.tp) {
-                newStatus = 'tp';
-                exitPrice = trade.tp;
-                addLog('success', `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
-              } else if (lastCandle.low <= trade.sl) {
-                newStatus = 'sl';
-                exitPrice = trade.sl;
-                addLog('error', `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
-              }
-            } else {
-              if (lastCandle.low <= trade.tp) {
-                newStatus = 'tp';
-                exitPrice = trade.tp;
-                addLog('success', `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
-              } else if (lastCandle.high >= trade.sl) {
-                newStatus = 'sl';
-                exitPrice = trade.sl;
-                addLog('error', `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`);
-              }
+          if (trade.side === 'LONG') {
+            if (lastCandle.high >= trade.tp) {
+              await closeTradeOnServer(
+                trade,
+                'tp',
+                trade.tp,
+                'success',
+                `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
+              );
+              continue;
             }
-
-            // Update P&L (with position size)
-            if (newStatus !== 'open' && exitPrice) {
-              const positionSize = trade.positionSize || 0;
-              const pnl =
-                trade.side === 'LONG'
-                  ? (exitPrice - trade.entry) * positionSize
-                  : (trade.entry - exitPrice) * positionSize;
-              setSessionPnL((prev) => prev + pnl);
-              setDailyPnL((prev) => prev + pnl);
-              const pnlFormatted = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
-              addLog(newStatus === 'tp' ? 'success' : 'error', `P&L: ${pnlFormatted}`);
+            if (lastCandle.low <= trade.sl) {
+              await closeTradeOnServer(
+                trade,
+                'sl',
+                trade.sl,
+                'error',
+                `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
+              );
             }
-
-            return { ...trade, status: newStatus, exitPrice };
-          });
-        });
+          } else {
+            if (lastCandle.low <= trade.tp) {
+              await closeTradeOnServer(
+                trade,
+                'tp',
+                trade.tp,
+                'success',
+                `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
+              );
+              continue;
+            }
+            if (lastCandle.high >= trade.sl) {
+              await closeTradeOnServer(
+                trade,
+                'sl',
+                trade.sl,
+                'error',
+                `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
+              );
+            }
+          }
+        }
       }
 
       setLoading(false);
@@ -489,15 +582,16 @@ export default function Home() {
           // Load trades from database if any
           if (data.allTrades && data.allTrades.length > 0) {
             const dbTrades = data.allTrades.map((t: any) => ({
+              id: t.id,
               time: t.entry_time,
               side: t.side,
               entry: Number(t.entry_price),
               tp: Number(t.tp_price),
-              sl: Number(t.current_sl),
+              sl: Number(t.sl_price),
               reason: t.reason || '',
               status: t.status,
               symbol: t.symbol,
-              leverage: t.leverage,
+              leverage: Number(t.leverage || leverage),
               positionSize: Number(t.position_size),
               exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
             }));
@@ -842,26 +936,14 @@ export default function Home() {
 
   const handleManualCloseTrade = async (trade: Trade) => {
     try {
-      const exitPrice = currentPrice || trade.entry; // Use current price or entry if no current price
-
-      setTrades((prevTrades) =>
-        prevTrades.map((t) =>
-          t === trade
-            ? { ...t, status: 'breakeven', exitPrice, exitTime: new Date().toISOString() }
-            : t
-        )
+      const exitPrice = currentPrice ?? trade.entry;
+      await closeTradeOnServer(
+        trade,
+        'breakeven',
+        exitPrice,
+        'warning',
+        `Trade manually closed: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`
       );
-
-      // Calculate P&L
-      const positionSize = trade.positionSize || 0;
-      const pnl = trade.side === 'LONG'
-        ? (exitPrice - trade.entry) * positionSize
-        : (trade.entry - exitPrice) * positionSize;
-
-      setSessionPnL((prev) => prev + pnl);
-      setDailyPnL((prev) => prev + pnl);
-
-      addLog('warning', `Trade manually closed: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}, P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to close trade';
       setError(errorMsg);
@@ -1101,6 +1183,7 @@ export default function Home() {
                   upper={levels?.upper ?? null}
                   lower={levels?.lower ?? null}
                   symbol={symbol}
+                  interval={candleInterval}
                   markers={chartMarkers}
                   openTrades={openTrades}
                 />
@@ -1133,7 +1216,7 @@ export default function Home() {
               View Full History →
             </Link>
           </div>
-          <TradesTable trades={trades} currentPrice={currentPrice} onCloseTrade={handleManualCloseTrade} symbol={symbol} />
+          <TradesTable trades={trades} currentPrice={currentPrice} onCloseTrade={handleManualCloseTrade} />
         </div>
         </div>
       </div>

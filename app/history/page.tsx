@@ -42,11 +42,12 @@ export default function HistoryPage() {
         const data = await res.json();
         if (data.allTrades && Array.isArray(data.allTrades)) {
           const formattedTrades = data.allTrades.map((t: any) => ({
+            id: t.id,
             time: t.entry_time,
             side: t.side,
             entry: Number(t.entry_price),
             tp: Number(t.tp_price),
-            sl: Number(t.current_sl),
+            sl: Number(t.sl_price),
             reason: t.reason || '',
             status: t.status,
             symbol: t.symbol,
