@@ -4,6 +4,7 @@
  * Equivalent to Pine Script v5: ta.vwap(src)
  * - Resets each daily session (UTC midnight by default for crypto)
  * - Supports source selection: close | hlc3 | ohlc4
+ *   - 'hlc3' uses (high + low) / 2 in this build, per latest strategy tweak
  */
 
 import type { Candle } from './types';
@@ -25,7 +26,7 @@ function getTypicalPrice(candle: Candle, source: VwapSource): number {
     case 'close':
       return candle.close;
     case 'hlc3':
-      return (candle.high + candle.low + candle.close) / 3;
+      return (candle.high + candle.low) / 2;
     case 'ohlc4':
       return (candle.open + candle.high + candle.low + candle.close) / 4;
     default:

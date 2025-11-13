@@ -20,6 +20,8 @@ import { placeOrder } from '@/lib/bybit';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import type { Candle } from '@/lib/types';
 
+const NO_TRADE_BAND_PCT = 0.001;
+
 /**
  * Cron job endpoint that runs trading bots in the background
  * 
@@ -180,6 +182,15 @@ export async function POST(request: NextRequest) {
             const entryPrice = Number(trade.entry_price);
             const placedAtMs = trade.entry_time ? new Date(trade.entry_time).getTime() : nowMs;
             if (nowMs - placedAtMs < pendingDelayMs) {
+              continue;
+            }
+
+            const biasBuffer = Math.abs(levels.vwap) * NO_TRADE_BAND_PCT;
+            const biasValid = trade.side === 'LONG'
+              ? lastClose > levels.vwap + biasBuffer
+              : lastClose < levels.vwap - biasBuffer;
+
+            if (!biasValid) {
               continue;
             }
 

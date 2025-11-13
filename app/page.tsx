@@ -549,6 +549,15 @@ export default function Home() {
             continue;
           }
 
+          const biasBuffer = Math.abs(lv.vwap) * NO_TRADE_BAND_PCT;
+          const biasValid = trade.side === 'LONG'
+            ? lastClose > lv.vwap + biasBuffer
+            : lastClose < lv.vwap - biasBuffer;
+
+          if (!biasValid) {
+            continue;
+          }
+
           const retest = trade.side === 'LONG'
             ? lastCandle.low <= trade.entry
             : lastCandle.high >= trade.entry;
