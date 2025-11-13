@@ -14,7 +14,7 @@ import {
   checkPhase2Completed,
   updateTrade,
 } from '@/lib/db';
-import { shouldExitOnVWAPFlip, computeTrailingBreakeven } from '@/lib/strategy';
+import { computeTrailingBreakeven } from '@/lib/strategy';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import type { Candle } from '@/lib/types';
 
@@ -177,31 +177,6 @@ export async function POST(request: NextRequest) {
             const initialSl = Number(trade.sl_price);
             const currentSl = Number(trade.current_sl ?? trade.sl_price);
             const positionSize = Number(trade.position_size);
-
-            if (
-              shouldExitOnVWAPFlip(
-                candles,
-                levels.vwap,
-                trade.side as 'LONG' | 'SHORT'
-              )
-            ) {
-              const pnl =
-                trade.side === 'LONG'
-                  ? (lastClose - entryPrice) * positionSize
-                  : (entryPrice - lastClose) * positionSize;
-
-              await closeTrade(trade.id, 'breakeven', lastClose, pnl);
-              await updateDailyPnL(botConfig.user_id, pnl);
-
-              await addActivityLog(
-                botConfig.user_id,
-                'warning',
-                `VWAP invalidation: ${trade.side} @ $${entryPrice} → $${lastClose.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`,
-                null,
-                botConfig.id
-              );
-              continue;
-            }
 
             const trailingSl = computeTrailingBreakeven(
               trade.side as 'LONG' | 'SHORT',

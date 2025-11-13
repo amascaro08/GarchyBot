@@ -10,7 +10,7 @@ import Sidebar from '@/components/Sidebar';
 import OrderBook from '@/components/OrderBook';
 import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
-import { shouldExitOnVWAPFlip, computeTrailingBreakeven } from '@/lib/strategy';
+import { computeTrailingBreakeven } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
 
@@ -498,17 +498,6 @@ export default function Home() {
 
         for (const trade of openTradesSnapshot) {
           if (!Number.isFinite(lastClose)) {
-            continue;
-          }
-
-          if (shouldExitOnVWAPFlip(candlesData, lv.vwap, trade.side)) {
-            await closeTradeOnServer(
-              trade,
-              'breakeven',
-              lastClose,
-              'warning',
-              `VWAP invalidation: ${trade.side} @ $${trade.entry.toFixed(2)} closed at $${lastClose.toFixed(2)}`
-            );
             continue;
           }
 
