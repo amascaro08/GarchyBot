@@ -679,9 +679,24 @@ export default function Home() {
     }
   };
 
-  // Load bot status and configuration from database on mount
+  // Check auth status and load bot status on mount
   useEffect(() => {
-    const loadBotStatus = async () => {
+    const checkAuthAndLoadStatus = async () => {
+      // First check if user is authenticated
+      try {
+        const authRes = await fetch('/api/auth/me');
+        if (!authRes.ok) {
+          // Not authenticated, redirect to login
+          window.location.href = '/login';
+          return;
+        }
+      } catch (err) {
+        console.error('Auth check failed:', err);
+        window.location.href = '/login';
+        return;
+      }
+
+      // User is authenticated, load bot status
       try {
         setLoadingBotStatus(true);
         const res = await fetch('/api/bot/status');
@@ -779,7 +794,7 @@ export default function Home() {
       }
     };
     
-    loadBotStatus();
+    checkAuthAndLoadStatus();
   }, [addLog]);
 
   // Start/stop order book on symbol change
