@@ -534,6 +534,79 @@ export function gjrgarch11FromReturns(
 }
 
 /**
+ * Fit GARCH model with explicit parameters (helper function)
+ */
+function fitGarchModelWithParams(
+  returnsPct: number[],
+  modelType: 'garch' | 'gjr' | 'egarch',
+  params: {
+    alpha0?: number;
+    omega?: number;
+    alpha1?: number;
+    alpha?: number;
+    gamma?: number;
+    beta1?: number;
+    beta?: number;
+  }
+): FittedGarchModel {
+  let sigma2 = initializeVariance(returnsPct);
+  const conditionalVol: number[] = [];
+
+  if (modelType === 'garch') {
+    const { alpha0 = 1e-4, alpha1 = 0.10, beta1 = 0.85 } = params;
+    for (let i = 1; i < returnsPct.length; i++) {
+      const rPrevSquared = returnsPct[i - 1] ** 2;
+      sigma2 = alpha0 + alpha1 * rPrevSquared + beta1 * sigma2;
+      sigma2 = Math.max(sigma2, 1e-8);
+      conditionalVol.push(Math.sqrt(sigma2));
+    }
+    return {
+      type: 'garch',
+      params: { alpha0, alpha1, beta1 },
+      finalVariance: sigma2,
+      lastReturn: returnsPct[returnsPct.length - 1],
+      conditionalVolatility: conditionalVol,
+    };
+  } else if (modelType === 'gjr') {
+    const { omega = 1e-4, alpha = 0.05, gamma = 0.05, beta = 0.9 } = params;
+    for (let i = 1; i < returnsPct.length; i++) {
+      const rPrev = returnsPct[i - 1];
+      const rPrevSquared = rPrev ** 2;
+      const leverageTerm = rPrev < 0 ? rPrevSquared : 0;
+      sigma2 = omega + alpha * rPrevSquared + gamma * leverageTerm + beta * sigma2;
+      sigma2 = Math.max(sigma2, 1e-8);
+      conditionalVol.push(Math.sqrt(sigma2));
+    }
+    return {
+      type: 'gjr',
+      params: { omega, alpha, gamma, beta },
+      finalVariance: sigma2,
+      lastReturn: returnsPct[returnsPct.length - 1],
+      conditionalVolatility: conditionalVol,
+    };
+  } else { // egarch
+    const { omega = -0.1, alpha = 0.1, gamma = 0.1, beta = 0.9 } = params;
+    let lnSigma2 = Math.log(initializeVariance(returnsPct));
+    for (let i = 1; i < returnsPct.length; i++) {
+      const rPrev = returnsPct[i - 1];
+      const sigmaPrev = Math.exp(lnSigma2 / 2);
+      const epsilonPrev = rPrev / sigmaPrev;
+      const absEpsilonPrev = Math.abs(epsilonPrev);
+      lnSigma2 = omega + alpha * epsilonPrev + gamma * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + beta * lnSigma2;
+      sigma2 = Math.exp(lnSigma2);
+      conditionalVol.push(Math.sqrt(sigma2));
+    }
+    return {
+      type: 'egarch',
+      params: { omega, alpha, gamma, beta },
+      finalVariance: sigma2,
+      lastReturn: returnsPct[returnsPct.length - 1],
+      conditionalVolatility: conditionalVol,
+    };
+  }
+}
+
+/**
  * Fit GARCH(1,1) model and return fitted model for forecasting
  * 
  * Returns model with fitted parameters and conditional volatility series
@@ -893,9 +966,45 @@ export function calculateAverageVolatility(
   const returnsPct = returns.map(r => r * 100.0);
 
   // Fit models
+  // Note: Python arch library fits all models with MLE. We calibrate GARCH, but use defaults for GJR/EGARCH
+  // This might cause differences, but calibration for all three would be computationally expensive
+  // For better accuracy, we could derive GJR/EGARCH parameters from GARCH parameters
   const garchModel = fitGarchModel(returnsPct, 'garch', true);
-  const gjrModel = fitGarchModel(returnsPct, 'gjr', false);
-  const egarchModel = fitGarchModel(returnsPct, 'egarch', false);
+  
+  // Use GARCH parameters as basis for GJR and EGARCH (adjust for leverage effects)
+  // This is a heuristic - proper MLE would be better but computationally expensive
+  const { alpha0 = 1e-4, alpha1 = 0.10, beta1 = 0.85 } = garchModel.params;
+  
+  // Estimate GJR parameters from GARCH (split alpha into alpha + gamma)
+  const gjrAlpha = alpha1 * 0.5; // Split alpha for symmetric and asymmetric parts
+  const gjrGamma = alpha1 * 0.5; // Asymmetric leverage term
+  const gjrOmega = alpha0; // Same long-term variance
+  
+  // Estimate EGARCH parameters from GARCH (approximate conversion)
+  // EGARCH omega in log space: omega ≈ log(alpha0) - mean adjustment
+  const egarchOmega = Math.log(Math.max(alpha0, 1e-6)) - 2.0; // Approximate conversion to log space
+  const egarchAlpha = alpha1 * 0.5; // Asymmetric response
+  const egarchGamma = alpha1 * 0.5; // Symmetric response
+  
+  // Create models with estimated parameters
+  const gjrModel = fitGarchModelWithParams(returnsPct, 'gjr', { 
+    omega: gjrOmega, 
+    alpha: gjrAlpha, 
+    gamma: gjrGamma, 
+    beta: beta1 
+  });
+  const egarchModel = fitGarchModelWithParams(returnsPct, 'egarch', { 
+    omega: egarchOmega, 
+    alpha: egarchAlpha, 
+    gamma: egarchGamma, 
+    beta: beta1 
+  });
+
+  // Calculate historical std dev for comparison (like Python script)
+  // Python uses ddof=1 (Bessel's correction): std = sqrt(sum((r - mean)^2) / (n - 1))
+  const returnsMean = returnsPct.reduce((a, b) => a + b, 0) / returnsPct.length;
+  const returnsVariance = returnsPct.reduce((sum, r) => sum + Math.pow(r - returnsMean, 2), 0) / (returnsPct.length - 1);
+  const returnsStdDevPct = Math.sqrt(returnsVariance);
 
   // Forecast h days ahead for each model
   const garchForecasts = forecastVolatility(garchModel, horizon);
@@ -908,9 +1017,25 @@ export function calculateAverageVolatility(
   const promGjr = gjrForecasts.reduce((a, b) => a + b, 0) / gjrForecasts.length;
   const promEgarch = egarchForecasts.reduce((a, b) => a + b, 0) / egarchForecasts.length;
 
+  // Debug logging (can be removed in production)
+  if (symbol && timeframe) {
+    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe}:`);
+    console.log(`  Historical std dev: ${returnsStdDevPct.toFixed(4)}%`);
+    console.log(`  GARCH forecasts (h=${horizon}):`, garchForecasts.map(f => f.toFixed(4)).join(', '));
+    console.log(`  GJR forecasts (h=${horizon}):`, gjrForecasts.map(f => f.toFixed(4)).join(', '));
+    console.log(`  EGARCH forecasts (h=${horizon}):`, egarchForecasts.map(f => f.toFixed(4)).join(', '));
+    console.log(`  Prom GARCH: ${promGarch.toFixed(4)}%, Prom GJR: ${promGjr.toFixed(4)}%, Prom EGARCH: ${promEgarch.toFixed(4)}%`);
+  }
+
   // Average the three model averages (prom_global in Python script)
   // DO NOT clamp individual models before averaging - this matches Python script
   const promGlobal = (promGarch + promGjr + promEgarch) / 3;
+
+  // Debug logging
+  if (symbol && timeframe) {
+    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe} - Final averaging:`);
+    console.log(`  promGlobal (before conversion): ${promGlobal.toFixed(4)}%`);
+  }
 
   // Convert from percentage units to decimal units (e.g., 2.5% -> 0.025)
   const promGlobalDecimal = promGlobal / 100.0;
@@ -920,6 +1045,15 @@ export function calculateAverageVolatility(
   const promGlobalCapped = Math.min(promGlobalDecimal, 0.15); // Allow up to 15% daily volatility
   const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], promGlobalCapped * 100));
   const kPct = kPctPercent / 100; // Convert to decimal form (0.01-0.10)
+
+  // Debug logging
+  if (symbol && timeframe) {
+    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe} - After conversion and clamping:`);
+    console.log(`  promGlobalDecimal: ${promGlobalDecimal.toFixed(6)}`);
+    console.log(`  promGlobalCapped: ${promGlobalCapped.toFixed(6)}`);
+    console.log(`  kPctPercent: ${kPctPercent.toFixed(4)}%`);
+    console.log(`  Final kPct (decimal): ${kPct.toFixed(6)}`);
+  }
 
   // Calculate individual model results for reporting (convert to decimal, don't clamp aggressively)
   const garchVolDecimal = promGarch / 100.0;
