@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS bot_configs (
   use_orderbook_confirm BOOLEAN NOT NULL DEFAULT true,
   subdivisions INTEGER NOT NULL DEFAULT 5,
   no_trade_band_pct DECIMAL(10, 6) NOT NULL DEFAULT 0.001,
-  fide VARCHAR(10) NOT NULL DEFAULT 'demo',
+  api_mode VARCHAR(10) NOT NULL DEFAULT 'demo',
   api_key TEXT,
   api_secret TEXT,
   

@@ -134,19 +134,18 @@ export function computeSessionAnchoredVWAPLine(
 
   const { sessionAnchor = 'utc-midnight', source = 'hlc3' } = opts;
 
-  // Get session start timestamp (for the most recent candle)
-  const lastCandle = ohlcv[ohlcv.length - 1];
-  const sessionStartTs = getSessionStartTimestamp(lastCandle.ts, sessionAnchor);
-
   const vwapValues: (number | null)[] = [];
   let cumulativePriceVolume = 0;
   let cumulativeVolume = 0;
+  let currentSessionTs: number | null = null;
 
   for (const candle of ohlcv) {
-    // If candle is before session start, VWAP is null
-    if (candle.ts < sessionStartTs) {
-      vwapValues.push(null);
-      continue;
+    const candleSessionTs = getSessionStartTimestamp(candle.ts, sessionAnchor);
+
+    if (currentSessionTs === null || candleSessionTs !== currentSessionTs) {
+      currentSessionTs = candleSessionTs;
+      cumulativePriceVolume = 0;
+      cumulativeVolume = 0;
     }
 
     // Add this candle's contribution

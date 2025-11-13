@@ -117,6 +117,12 @@ export default function TradesTable({
     );
   }
 
+  const sortedTrades = [...trades].sort((a, b) => {
+    if (a.status === 'open' && b.status !== 'open') return -1;
+    if (a.status !== 'open' && b.status === 'open') return 1;
+    return new Date(b.time).getTime() - new Date(a.time).getTime();
+  });
+
   return (
     <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50 overflow-x-auto">
       <div className="flex items-center justify-between mb-4">
@@ -141,7 +147,7 @@ export default function TradesTable({
             </tr>
           </thead>
           <tbody>
-            {trades.map((trade) => {
+            {sortedTrades.map((trade) => {
               const unrealizedPnL = calculateUnrealizedPnL(trade);
               const realizedPnL = calculateRealizedPnL(trade);
               const outcome = getOutcome(trade);
