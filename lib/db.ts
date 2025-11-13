@@ -235,34 +235,64 @@ export async function createBotConfig(userId: string, config: Partial<BotConfig>
 
 export async function updateBotConfig(userId: string, updates: Partial<BotConfig>): Promise<BotConfig> {
   try {
-    const setClauses: string[] = [];
-    const values: any[] = [];
-    let paramIndex = 1;
+    // Get existing config first to ensure it exists
+    const existing = await getBotConfig(userId);
+    if (!existing) {
+      throw new Error('Bot config not found');
+    }
 
-    // Dynamically build SET clause based on provided updates
+    // Filter out undefined values and protected fields
+    const validUpdates: Record<string, any> = {};
     Object.entries(updates).forEach(([key, value]) => {
-      if (value !== undefined && key !== 'id' && key !== 'user_id') {
-        setClauses.push(`${key} = $${paramIndex}`);
-        values.push(value);
-        paramIndex++;
+      if (value !== undefined && key !== 'id' && key !== 'user_id' && key !== 'created_at') {
+        validUpdates[key] = value;
       }
     });
 
-    if (setClauses.length === 0) {
-      const existing = await getBotConfig(userId);
-      if (!existing) throw new Error('Bot config not found');
+    if (Object.keys(validUpdates).length === 0) {
       return existing;
     }
 
-    values.push(userId); // Add userId for WHERE clause
-    const query = `
-      UPDATE bot_configs 
-      SET ${setClauses.join(', ')}, updated_at = NOW()
-      WHERE user_id = $${paramIndex}
-      RETURNING *
-    `;
+    // Build SET clauses - using template literals with sql.unsafe for dynamic column names
+    // Column names are safe since they come from our code, not user input
+    const setParts: string[] = [];
+    const values: any[] = [];
 
+    // Allowed column names (whitelist for safety)
+    const allowedColumns = [
+      'symbol', 'candle_interval', 'is_running', 'max_trades', 'leverage',
+      'capital', 'risk_amount', 'risk_type', 'daily_target_type', 'daily_target_amount',
+      'daily_stop_type', 'daily_stop_amount', 'daily_pnl', 'daily_start_date',
+      'garch_mode', 'custom_k_pct', 'use_orderbook_confirm', 'use_daily_open_entry',
+      'subdivisions', 'no_trade_band_pct', 'api_mode', 'api_key', 'api_secret', 'last_polled_at'
+    ];
+
+    for (const [key, value] of Object.entries(validUpdates)) {
+      if (allowedColumns.includes(key)) {
+        setParts.push(`${key} = $${values.length + 1}`);
+        values.push(value);
+      }
+    }
+
+    if (setParts.length === 0) {
+      return existing;
+    }
+
+    // Add updated_at and userId
+    setParts.push('updated_at = NOW()');
+    values.push(userId);
+
+    // Build query string
+    const query = `UPDATE bot_configs SET ${setParts.join(', ')} WHERE user_id = $${values.length} RETURNING *`;
+
+    // Execute using sql.query (same pattern as updateTrade function)
     const result = await sql.query(query, values);
+    
+    if (!result || !result.rows || result.rows.length === 0) {
+      // Fallback to existing if update didn't return a row
+      return existing;
+    }
+    
     return result.rows[0];
   } catch (error) {
     console.error('Error updating bot config:', error);

@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS bot_configs (
   
   -- Other settings
   use_orderbook_confirm BOOLEAN NOT NULL DEFAULT true,
+  use_daily_open_entry BOOLEAN NOT NULL DEFAULT true,
   subdivisions INTEGER NOT NULL DEFAULT 5,
   no_trade_band_pct DECIMAL(10, 6) NOT NULL DEFAULT 0.001,
   api_mode VARCHAR(10) NOT NULL DEFAULT 'demo',

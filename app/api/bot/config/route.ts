@@ -73,6 +73,14 @@ export async function POST(request: NextRequest) {
 
     // Update bot config
     const botConfig = await updateBotConfig(user.id, allowedUpdates);
+    
+    if (!botConfig || !botConfig.id) {
+      return NextResponse.json(
+        { error: 'Failed to update bot configuration' },
+        { status: 500 }
+      );
+    }
+    
     await addActivityLog(user.id, 'info', 'Bot configuration updated', allowedUpdates, botConfig.id);
 
     return NextResponse.json({
