@@ -9,17 +9,44 @@
  */
 
 // Use global fetch if available (Node 18+), otherwise need node-fetch
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const BASE_URL = process.env.BASE_URL || process.argv[2] || 'http://localhost:3000';
+const CRON_SECRET = process.env.CRON_SECRET || process.argv[3] || '';
 
 async function testDailySetup() {
   try {
     console.log('🚀 Testing daily setup endpoint...');
     console.log(`📡 Calling: ${BASE_URL}/api/cron/daily-setup`);
-    console.log('📝 Note: Check the terminal running "npm run dev" for detailed GARCH debug logs\n');
+    
+    // Check if this is a production URL
+    const isProduction = BASE_URL.includes('vercel.app') || BASE_URL.includes('vercel.com');
+    
+    if (isProduction && !CRON_SECRET) {
+      console.error('\n❌ Error: CRON_SECRET is required for production/Vercel deployments');
+      console.error('\n💡 To run with CRON_SECRET:');
+      console.error('   node test-daily-setup.js <BASE_URL> <CRON_SECRET>');
+      console.error('   Example: node test-daily-setup.js https://your-app.vercel.app your-secret-here');
+      console.error('\n   Or set environment variables:');
+      console.error('   CRON_SECRET=your-secret node test-daily-setup.js https://your-app.vercel.app\n');
+      process.exit(1);
+    }
+    
+    if (isProduction && CRON_SECRET) {
+      console.log('🔐 Using CRON_SECRET for authentication');
+    } else {
+      console.log('📝 Note: For localhost, auth is optional. Check the terminal running "npm run dev" for detailed GARCH debug logs');
+    }
+    console.log('');
+    
+    // Build headers
+    const headers = {};
+    if (CRON_SECRET) {
+      headers['Authorization'] = `Bearer ${CRON_SECRET}`;
+    }
     
     // Use GET method (endpoint allows GET for testing)
     const response = await fetch(`${BASE_URL}/api/cron/daily-setup`, {
       method: 'GET',
+      headers,
     });
     
     if (!response.ok) {
