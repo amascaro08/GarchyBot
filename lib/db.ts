@@ -236,9 +236,11 @@ export async function createBotConfig(userId: string, config: Partial<BotConfig>
 export async function updateBotConfig(userId: string, updates: Partial<BotConfig>): Promise<BotConfig> {
   try {
     // Get existing config first to ensure it exists
-    const existing = await getBotConfig(userId);
+    let existing = await getBotConfig(userId);
     if (!existing) {
-      throw new Error('Bot config not found');
+      // If bot config doesn't exist, create a default one
+      console.log(`[DB] Bot config not found for user ${userId}, creating default config`);
+      existing = await createBotConfig(userId);
     }
 
     // Filter out undefined values and protected fields

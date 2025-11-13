@@ -20,11 +20,13 @@ export async function GET(request: NextRequest) {
     // Ensure user exists in database
     const user = await getOrCreateUser(userEmail, userId);
 
-    // Get bot config
-    const botConfig = await getBotConfig(user.id);
+    // Get bot config, create if it doesn't exist
+    let botConfig = await getBotConfig(user.id);
     
     if (!botConfig) {
-      return NextResponse.json({ error: 'Bot configuration not found' }, { status: 404 });
+      // Create default bot config if it doesn't exist
+      const { createBotConfig } = await import('@/lib/db');
+      botConfig = await createBotConfig(user.id);
     }
 
     return NextResponse.json({
@@ -51,6 +53,14 @@ export async function POST(request: NextRequest) {
 
     // Ensure user exists in database
     const user = await getOrCreateUser(userEmail, userId);
+
+    // Ensure bot config exists
+    let botConfig = await getBotConfig(user.id);
+    if (!botConfig) {
+      // Create default bot config if it doesn't exist
+      const { createBotConfig } = await import('@/lib/db');
+      botConfig = await createBotConfig(user.id);
+    }
 
     // Get update payload
     const body = await request.json();

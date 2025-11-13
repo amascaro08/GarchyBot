@@ -26,11 +26,13 @@ export async function POST(request: NextRequest) {
       // no body provided
     }
 
-    // Get bot config
+    // Get bot config, create if it doesn't exist
     let botConfig = await getBotConfig(user.id);
     
     if (!botConfig) {
-      return NextResponse.json({ error: 'Bot configuration not found' }, { status: 404 });
+      // Create default bot config if it doesn't exist
+      const { createBotConfig } = await import('@/lib/db');
+      botConfig = await createBotConfig(user.id);
     }
 
     // Check daily limits
