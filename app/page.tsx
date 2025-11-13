@@ -700,31 +700,48 @@ export default function Home() {
       try {
         setLoadingBotStatus(true);
         
-        // Run daily setup first to see GARCH debug logs in console
+        // Calculate GARCH volatility to see debug logs in console
         try {
-          console.log('🚀 [INIT] Running daily setup to calculate GARCH volatility...');
-          const dailySetupRes = await fetch('/api/cron/daily-setup');
-          if (dailySetupRes.ok) {
-            const dailySetupData = await dailySetupRes.json();
-            console.log('✅ [INIT] Daily setup completed. Check logs above for GARCH debug info.');
-            if (dailySetupData.results && Array.isArray(dailySetupData.results)) {
-              dailySetupData.results.forEach((result: any) => {
-                if (result.success && result.debugInfo) {
-                  console.log(`\n📊 [INIT] ${result.symbol} GARCH Summary:`);
-                  console.log(`  Historical Std Dev: ${result.debugInfo.historicalStdDev?.toFixed(4)}%`);
-                  console.log(`  Prom GARCH: ${result.debugInfo.promGarch?.toFixed(4)}%`);
-                  console.log(`  Prom GJR: ${result.debugInfo.promGjr?.toFixed(4)}%`);
-                  console.log(`  Prom EGARCH: ${result.debugInfo.promEgarch?.toFixed(4)}%`);
-                  console.log(`  Prom Global: ${result.debugInfo.promGlobal?.toFixed(4)}%`);
-                  console.log(`  Final Volatility (kPct): ${((result.volatility || 0) * 100).toFixed(4)}%`);
-                }
-              });
+          console.log('🚀 [INIT] Calculating GARCH volatility...');
+          const garchRes = await fetch('/api/garch/calculate?symbol=BTCUSDT');
+          if (garchRes.ok) {
+            const garchData = await garchRes.json();
+            if (garchData.success && garchData.debugInfo) {
+              console.log('\n' + '='.repeat(80));
+              console.log('✅ [INIT] GARCH Calculation Complete');
+              console.log('='.repeat(80));
+              console.log(`📊 Symbol: ${garchData.symbol}`);
+              console.log(`📅 Data Points: ${garchData.dataPoints} days`);
+              console.log(`\n📈 Results:`);
+              console.log(`  Historical Std Dev: ${garchData.debugInfo.historicalStdDev?.toFixed(4)}%`);
+              if (garchData.debugInfo.garchForecasts) {
+                console.log(`  GARCH Forecasts: ${garchData.debugInfo.garchForecasts.map((f: number) => f.toFixed(4)).join(', ')}%`);
+              }
+              if (garchData.debugInfo.gjrForecasts) {
+                console.log(`  GJR Forecasts: ${garchData.debugInfo.gjrForecasts.map((f: number) => f.toFixed(4)).join(', ')}%`);
+              }
+              if (garchData.debugInfo.egarchForecasts) {
+                console.log(`  EGARCH Forecasts: ${garchData.debugInfo.egarchForecasts.map((f: number) => f.toFixed(4)).join(', ')}%`);
+              }
+              console.log(`\n📊 Model Averages:`);
+              console.log(`  Prom GARCH: ${garchData.debugInfo.promGarch?.toFixed(4)}%`);
+              console.log(`  Prom GJR: ${garchData.debugInfo.promGjr?.toFixed(4)}%`);
+              console.log(`  Prom EGARCH: ${garchData.debugInfo.promEgarch?.toFixed(4)}%`);
+              console.log(`  ⭐ Prom Global (avg of three): ${garchData.debugInfo.promGlobal?.toFixed(4)}%`);
+              console.log(`\n🎯 Final Results:`);
+              console.log(`  GARCH(1,1) kPct: ${(garchData.models.garch11.kPct * 100).toFixed(4)}%`);
+              console.log(`  GJR-GARCH(1,1) kPct: ${(garchData.models.gjrgarch11.kPct * 100).toFixed(4)}%`);
+              console.log(`  EGARCH(1,1) kPct: ${(garchData.models.egarch11.kPct * 100).toFixed(4)}%`);
+              console.log(`  🎯 Averaged kPct: ${(garchData.models.averaged.kPct * 100).toFixed(4)}%`);
+              console.log('='.repeat(80) + '\n');
+              console.log('💡 Check the server terminal (where npm run dev runs) for detailed GARCH debug logs');
             }
           } else {
-            console.warn('⚠️  [INIT] Daily setup failed (this is okay if database is not configured)');
+            const errorData = await garchRes.json().catch(() => ({}));
+            console.warn('⚠️  [INIT] GARCH calculation failed:', errorData.error || 'Unknown error');
           }
         } catch (err) {
-          console.warn('⚠️  [INIT] Daily setup error (this is okay):', err instanceof Error ? err.message : err);
+          console.warn('⚠️  [INIT] GARCH calculation error:', err instanceof Error ? err.message : err);
         }
         
         const res = await fetch('/api/bot/status');
