@@ -50,6 +50,10 @@ interface SidebarProps {
   setApiKey: (value: string) => void;
   apiSecret: string;
   setApiSecret: (value: string) => void;
+  onTestConnection: () => void;
+  connectionStatus: 'idle' | 'loading' | 'success' | 'error';
+  connectionMessage: string | null;
+  walletInfo: Array<{ coin: string; equity: number; availableToWithdraw: number }> | null;
 }
 
 export default function Sidebar({
@@ -99,8 +103,13 @@ export default function Sidebar({
   setApiKey,
   apiSecret,
   setApiSecret,
+  onTestConnection,
+  connectionStatus,
+  connectionMessage,
+  walletInfo,
 }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'trading' | 'risk' | 'account'>('trading');
 
   return (
     <>
@@ -155,7 +164,29 @@ export default function Sidebar({
             </button>
           </div>
 
-          {/* Bot Controls */}
+          {/* Tab Navigation */}
+          <div className="flex items-center gap-3 bg-slate-900/70 border border-slate-700/60 rounded-xl p-2">
+            {[
+              { key: 'trading', label: 'Trading' },
+              { key: 'risk', label: 'Risk' },
+              { key: 'account', label: 'Account' },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-300 ${
+                  activeTab === tab.key
+                    ? 'bg-cyan-500/30 text-cyan-100 border border-cyan-400/50 shadow-lg shadow-cyan-500/20'
+                    : 'text-gray-400 hover:text-cyan-200 hover:bg-cyan-500/10'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Trading Tab */}
+          {activeTab === 'trading' && (
           <div className="glass-effect rounded-xl p-5 border-2 border-green-500/20 bg-gradient-to-br from-green-500/5 to-emerald-500/5 backdrop-blur-xl">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500/20 to-emerald-500/20 flex items-center justify-center">
@@ -316,23 +347,12 @@ export default function Sidebar({
                   </p>
                 </div>
               </div>
-
-              {/* Save Settings Button */}
-              <div className="mt-3">
-                <button
-                  onClick={onSaveSettings}
-                  className="w-full glass-effect rounded-xl px-6 py-3 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 text-cyan-300 border-2 border-cyan-500/40 font-bold hover:from-cyan-500/30 hover:to-purple-500/30 hover:border-cyan-500/60 hover:shadow-lg hover:shadow-cyan-500/30 transition-all duration-300 backdrop-blur-xl flex items-center justify-center gap-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                  </svg>
-                  Save Settings
-                </button>
-              </div>
             </div>
           </div>
+          )}
 
-          {/* GARCH Settings */}
+          {/* Risk Tab */}
+          {activeTab === 'risk' && (
           <div className="glass-effect rounded-xl p-5 border-2 border-yellow-500/20 bg-gradient-to-br from-yellow-500/5 to-orange-500/5 backdrop-blur-xl">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500/20 to-orange-500/20 flex items-center justify-center">
@@ -392,8 +412,6 @@ export default function Sidebar({
               )}
             </div>
           </div>
-
-          {/* Risk Management */}
           <div className="glass-effect rounded-xl p-5 border-2 border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-indigo-500/5 backdrop-blur-xl">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/20 to-indigo-500/20 flex items-center justify-center">
@@ -459,8 +477,6 @@ export default function Sidebar({
               </div>
             </div>
           </div>
-
-          {/* Daily Limits */}
           <div className="glass-effect rounded-xl p-5 border-2 border-cyan-500/20 bg-gradient-to-br from-cyan-500/5 to-purple-500/5 backdrop-blur-xl">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-purple-500/20 flex items-center justify-center">
@@ -569,6 +585,162 @@ export default function Sidebar({
                 </div>
               )}
             </div>
+          </div>
+          )}
+
+          {/* Account Tab */}
+          {activeTab === 'account' && (
+          <div className="glass-effect rounded-xl p-5 border-2 border-green-500/20 bg-gradient-to-br from-green-500/5 to-emerald-500/5 backdrop-blur-xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500/20 to-emerald-500/20 flex items-center justify-center">
+                <svg className="w-6 h-6 text-green-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 1.343-3 3v7h6v-7c0-1.657-1.343-3-3-3z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10V6a3 3 0 013-3h8a3 3 0 013 3v4M4 21h16" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-green-300">Bybit Account</h3>
+                <p className="text-xs text-gray-400">Configure API access and monitor balances</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold mb-2 text-green-300 uppercase tracking-wider">Account Mode</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setApiMode('demo')}
+                    className={`px-4 py-3 rounded-xl border-2 transition-all duration-300 text-sm font-semibold ${
+                      apiMode === 'demo'
+                        ? 'bg-green-500/20 border-green-500/60 text-green-200 shadow-lg shadow-green-500/20'
+                        : 'bg-slate-900/70 border-slate-700/50 text-gray-300 hover:border-green-500/40 hover:shadow-green-500/10'
+                    }`}
+                  >
+                    Demo (Testnet)
+                  </button>
+                  <button
+                    onClick={() => setApiMode('live')}
+                    className={`px-4 py-3 rounded-xl border-2 transition-all duration-300 text-sm font-semibold ${
+                      apiMode === 'live'
+                        ? 'bg-red-500/20 border-red-500/60 text-red-200 shadow-lg shadow-red-500/20'
+                        : 'bg-slate-900/70 border-slate-700/50 text-gray-300 hover:border-red-500/40 hover:shadow-red-500/10'
+                    }`}
+                  >
+                    Live (Mainnet)
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  Demo mode uses Bybit Testnet credentials. Live mode sends orders to production – double-check your API keys before enabling.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold mb-2 text-green-300 uppercase tracking-wider">
+                  Bybit API Key
+                </label>
+                <input
+                  type="text"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Enter your Bybit API key"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-green-500/50 hover:shadow-lg hover:shadow-green-500/20 focus:outline-none focus:ring-2 focus:ring-green-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold mb-2 text-green-300 uppercase tracking-wider">
+                  Bybit API Secret
+                </label>
+                <input
+                  type="password"
+                  value={apiSecret}
+                  onChange={(e) => setApiSecret(e.target.value)}
+                  placeholder="Enter your Bybit API secret"
+                  className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-green-500/50 hover:shadow-lg hover:shadow-green-500/20 focus:outline-none focus:ring-2 focus:ring-green-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={onTestConnection}
+                  className="glass-effect rounded-xl px-4 py-3 bg-gradient-to-r from-green-500/20 to-emerald-500/20 text-green-300 border-2 border-green-500/40 font-semibold hover:from-green-500/30 hover:to-emerald-500/30 hover:border-green-500/60 hover:shadow-lg hover:shadow-green-500/30 transition-all duration-300 backdrop-blur-xl flex items-center justify-center gap-2"
+                >
+                  {connectionStatus === 'loading' ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 text-green-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Testing...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m7 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Test Connection
+                    </>
+                  )}
+                </button>
+
+                {connectionStatus === 'success' && (
+                  <span className="text-sm text-green-300 font-semibold flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    Connection successful
+                  </span>
+                )}
+
+                {connectionStatus === 'error' && (
+                  <span className="text-sm text-red-300 font-semibold flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                    {connectionMessage || 'Connection failed'}
+                  </span>
+                )}
+              </div>
+
+              {walletInfo && walletInfo.length > 0 && (
+                <div className="glass-effect rounded-xl border border-green-500/30 p-4 bg-green-500/5">
+                  <div className="text-xs text-green-300 uppercase tracking-wider font-bold mb-2">Wallet Balances</div>
+                  <div className="space-y-2">
+                    {walletInfo.map((wallet) => (
+                      <div key={wallet.coin} className="flex items-center justify-between text-sm text-green-200">
+                        <span className="font-semibold">{wallet.coin}</span>
+                        <span className="font-mono">
+                          Equity: {wallet.equity}
+                          <span className="text-xs text-green-300 ml-2">Available: {wallet.availableToWithdraw}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {connectionMessage && connectionStatus !== 'error' && (
+                <p className="text-xs text-gray-400">{connectionMessage}</p>
+              )}
+            </div>
+          </div>
+          )}
+
+          {/* Save Settings Button */}
+          <div className="mt-6">
+            <button
+              onClick={onSaveSettings}
+              className="w-full glass-effect rounded-xl px-6 py-3 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 text-cyan-300 border-2 border-cyan-500/40 font-bold hover:from-cyan-500/30 hover:to-purple-500/30 hover:border-cyan-500/60 hover:shadow-lg hover:shadow-cyan-500/30 transition-all duration-300 backdrop-blur-xl flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+              Save Settings
+            </button>
           </div>
 
           {/* Order Book Confirmation */}

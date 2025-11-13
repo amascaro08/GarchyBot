@@ -453,3 +453,54 @@ export async function placeOrder(params: {
     throw new BybitError(-1, error instanceof Error ? error.message : 'Unknown error');
   }
 }
+
+/**
+ * Fetch wallet balance from Bybit (private endpoint)
+ */
+export async function fetchWalletBalance(params: {
+  apiKey: string;
+  apiSecret: string;
+  testnet?: boolean;
+  accountType?: 'UNIFIED' | 'CONTRACT' | 'SPOT' | 'OPTION';
+}): Promise<any> {
+  const {
+    apiKey,
+    apiSecret,
+    testnet = true,
+    accountType = 'UNIFIED',
+  } = params;
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/account/wallet-balance';
+  const recvWindow = '5000';
+  const timestamp = Date.now().toString();
+  const query = `accountType=${accountType}`;
+  const prehash = `${timestamp}${apiKey}${recvWindow}${query}`;
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(prehash)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}?${query}`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'X-BAPI-API-KEY': apiKey,
+      'X-BAPI-SIGN': signature,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-RECV-WINDOW': recvWindow,
+    },
+  });
+
+  if (!response.ok) {
+    throw new BybitError(response.status, `HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.retCode !== 0) {
+    throw new BybitError(data.retCode, data.retMsg || 'Failed to fetch wallet balance');
+  }
+
+  return data;
+}

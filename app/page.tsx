@@ -73,6 +73,10 @@ export default function Home() {
   const [apiMode, setApiMode] = useState<'demo' | 'live'>('demo');
   const [apiKey, setApiKey] = useState<string>('');
   const [apiSecret, setApiSecret] = useState<string>('');
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
+  const [walletInfo, setWalletInfo] = useState<Array<{ coin: string; equity: number; availableToWithdraw: number }> | null>(null);
+  const [overrideDailyLimits, setOverrideDailyLimits] = useState<boolean>(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const tradesRef = useRef<Trade[]>([]);
   
@@ -120,7 +124,7 @@ export default function Home() {
 
   // Auto-stop bot when daily limits are hit (as per rules)
   useEffect(() => {
-    if (botRunning && !canTrade) {
+    if (botRunning && !canTrade && !overrideDailyLimits) {
       setBotRunning(false);
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
@@ -129,7 +133,13 @@ export default function Home() {
       const reason = isDailyTargetHit ? 'Daily target reached' : 'Daily stop loss hit';
       addLog('warning', `Bot auto-stopped: ${reason}`);
     }
-  }, [botRunning, canTrade, isDailyTargetHit, addLog]);
+  }, [botRunning, canTrade, isDailyTargetHit, addLog, overrideDailyLimits]);
+
+  useEffect(() => {
+    if (canTrade && overrideDailyLimits) {
+      setOverrideDailyLimits(false);
+    }
+  }, [canTrade, overrideDailyLimits]);
 
   // Check if we need to reset daily P&L (new UTC day)
   useEffect(() => {
@@ -140,6 +150,8 @@ export default function Home() {
         setDailyPnL(0);
         setSessionPnL(0);
         setTrades([]);
+        tradesRef.current = [];
+        setOverrideDailyLimits(false);
       }
     };
     
@@ -613,6 +625,9 @@ export default function Home() {
             setApiMode((config.api_mode as 'demo' | 'live') || 'demo');
             setApiKey(config.api_key || '');
             setApiSecret(config.api_secret || '');
+            setConnectionStatus('idle');
+            setConnectionMessage(null);
+            setWalletInfo(null);
             
             addLog('success', `Bot config loaded: ${config.symbol}, ${config.garch_mode} mode, k%: ${config.custom_k_pct ? (Number(config.custom_k_pct) * 100).toFixed(2) + '%' : 'auto'}`);
           }
@@ -859,14 +874,11 @@ export default function Home() {
   const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
 
   const handleStartBot = async () => {
-    if (!canTrade) {
-      const errorMsg = isDailyTargetHit
-        ? `Daily target reached (${dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}). Reset to continue.`
-        : `Daily stop loss hit (${dailyPnL.toFixed(2)}). Reset to continue.`;
-      setError(errorMsg);
-      addLog('error', `Cannot start bot: ${errorMsg}`);
-      return;
-    }
+    setOverrideDailyLimits(!canTrade);
+    setTrades([]);
+    tradesRef.current = [];
+    setSessionPnL(0);
+    setError(null);
 
     // Check if phases are completed before starting (Phase 1 and Phase 2 must be completed)
     try {
@@ -874,6 +886,7 @@ export default function Home() {
         const errorMsg = 'Live mode requires Bybit API key and secret.';
         setError(errorMsg);
         addLog('error', errorMsg);
+        setOverrideDailyLimits(false);
         return;
       }
 
@@ -891,12 +904,14 @@ export default function Home() {
         const errorMsg = 'Cannot start bot: Daily setup not completed. Please wait for Phase 1 & 2 to finish.';
         setError(errorMsg);
         addLog('error', errorMsg);
+        setOverrideDailyLimits(false);
         return;
       }
     } catch (err) {
       const errorMsg = 'Cannot start bot: Unable to verify daily setup completion.';
       setError(errorMsg);
       addLog('error', errorMsg);
+      setOverrideDailyLimits(false);
       return;
     }
     
@@ -915,6 +930,7 @@ export default function Home() {
       const errorMsg = err instanceof Error ? err.message : 'Failed to start bot';
       setError(errorMsg);
       addLog('error', errorMsg);
+      setOverrideDailyLimits(false);
     }
   };
 
@@ -932,6 +948,7 @@ export default function Home() {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
+      setOverrideDailyLimits(false);
       addLog('warning', 'Bot stopped');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to stop bot';
@@ -982,6 +999,64 @@ export default function Home() {
       const errorMsg = err instanceof Error ? err.message : 'Failed to save settings';
       setError(errorMsg);
       addLog('error', errorMsg);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    const key = apiKey.trim();
+    const secret = apiSecret.trim();
+
+    if (!key || !secret) {
+      const message = 'Please provide both API key and secret before testing.';
+      setConnectionStatus('error');
+      setConnectionMessage(message);
+      setWalletInfo(null);
+      addLog('error', message);
+      return;
+    }
+
+    try {
+      setConnectionStatus('loading');
+      setConnectionMessage(null);
+      setWalletInfo(null);
+
+      const res = await fetch('/api/bybit/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: key,
+          apiSecret: secret,
+          mode: apiMode,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Connection failed');
+      }
+
+      const balances = Array.isArray(data.wallet?.list)
+        ? data.wallet.list.flatMap((wallet: any) =>
+            (wallet.coin || []).map((coin: any) => ({
+              coin: coin.coin,
+              equity: Number(coin.equity || 0),
+              availableToWithdraw: Number(coin.availableToWithdraw || 0),
+            }))
+          )
+          .filter((wallet: { equity: number; availableToWithdraw: number }) => wallet.equity > 0 || wallet.availableToWithdraw > 0)
+        : [];
+
+      setWalletInfo(balances);
+      setConnectionStatus('success');
+      setConnectionMessage('Connection successful.');
+      addLog('success', `Bybit ${apiMode} connection successful.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to test connection';
+      setConnectionStatus('error');
+      setConnectionMessage(message);
+      setWalletInfo(null);
+      addLog('error', message);
     }
   };
 
@@ -1052,6 +1127,10 @@ export default function Home() {
         setApiKey={setApiKey}
         apiSecret={apiSecret}
         setApiSecret={setApiSecret}
+        onTestConnection={handleTestConnection}
+        connectionStatus={connectionStatus}
+        connectionMessage={connectionMessage}
+        walletInfo={walletInfo}
       />
 
       {/* Main Content */}
