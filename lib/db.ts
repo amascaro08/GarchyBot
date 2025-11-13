@@ -68,7 +68,7 @@ export interface Trade {
   bot_config_id: string;
   symbol: string;
   side: 'LONG' | 'SHORT';
-  status: 'open' | 'tp' | 'sl' | 'breakeven' | 'cancelled';
+  status: 'pending' | 'open' | 'tp' | 'sl' | 'breakeven' | 'cancelled';
   entry_price: number;
   tp_price: number;
   sl_price: number;
@@ -350,6 +350,29 @@ export async function getOpenTrades(userId: string, botConfigId?: string): Promi
     return result.rows;
   } catch (error) {
     console.error('Error getting open trades:', error);
+    throw error;
+  }
+}
+
+export async function getPendingTrades(userId: string, botConfigId?: string): Promise<Trade[]> {
+  try {
+    const result = botConfigId
+      ? await sql<Trade>`
+          SELECT * FROM trades
+          WHERE user_id = ${userId}
+          AND bot_config_id = ${botConfigId}
+          AND status = 'pending'
+          ORDER BY entry_time DESC
+        `
+      : await sql<Trade>`
+          SELECT * FROM trades
+          WHERE user_id = ${userId}
+          AND status = 'pending'
+          ORDER BY entry_time DESC
+        `;
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting pending trades:', error);
     throw error;
   }
 }

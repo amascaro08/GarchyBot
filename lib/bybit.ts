@@ -368,6 +368,7 @@ export async function placeOrder(params: {
   testnet?: boolean;
   apiKey?: string | null;
   apiSecret?: string | null;
+  timeInForce?: 'GoodTillCancel' | 'ImmediateOrCancel' | 'FillOrKill' | 'PostOnly';
 }): Promise<any> {
   const {
     symbol,
@@ -377,6 +378,7 @@ export async function placeOrder(params: {
     testnet = true,
     apiKey: overrideApiKey,
     apiSecret: overrideApiSecret,
+    timeInForce = 'GoodTillCancel',
   } = params;
 
   const apiKey = overrideApiKey || process.env.BYBIT_API_KEY;
@@ -399,6 +401,7 @@ export async function placeOrder(params: {
     qty: qty.toString(),
     timestamp,
     recvWindow,
+    timeInForce,
   };
 
   if (price !== undefined) {

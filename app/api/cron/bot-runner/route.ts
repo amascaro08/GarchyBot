@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getRunningBots,
   getOpenTrades,
+  getPendingTrades,
   createTrade,
   closeTrade,
   addActivityLog,
@@ -170,6 +171,39 @@ export async function POST(request: NextRequest) {
             dnLevels: storedLevels.dn_levels,
           };
 
+          const lastCandle = candles[candles.length - 1];
+          const pendingTrades = await getPendingTrades(botConfig.user_id, botConfig.id);
+          const nowMs = Date.now();
+          const pendingDelayMs = 5000;
+
+          for (const trade of pendingTrades) {
+            const entryPrice = Number(trade.entry_price);
+            const placedAtMs = trade.entry_time ? new Date(trade.entry_time).getTime() : nowMs;
+            if (nowMs - placedAtMs < pendingDelayMs) {
+              continue;
+            }
+
+            const retest = trade.side === 'LONG'
+              ? lastCandle.low <= entryPrice
+              : lastCandle.high >= entryPrice;
+
+            if (retest) {
+              await updateTrade(trade.id, {
+                status: 'open',
+                entry_time: new Date(),
+                entry_price: entryPrice,
+              } as any);
+
+              await addActivityLog(
+                botConfig.user_id,
+                'success',
+                `Limit order filled: ${trade.side} ${trade.symbol} @ $${entryPrice.toFixed(2)}`,
+                null,
+                botConfig.id
+              );
+            }
+          }
+
           // Check for immediate bias change closure first
           const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
           for (const trade of openTrades) {
@@ -328,7 +362,7 @@ export async function POST(request: NextRequest) {
                       bot_config_id: botConfig.id,
                       symbol: botConfig.symbol,
                       side: signal.signal,
-                      status: 'open',
+                      status: 'pending',
                       entry_price: signal.touchedLevel,
                       tp_price: signal.tp,
                       sl_price: signal.sl,
@@ -353,12 +387,13 @@ export async function POST(request: NextRequest) {
                         testnet: botConfig.api_mode !== 'live',
                         apiKey: botConfig.api_key,
                         apiSecret: botConfig.api_secret,
+                        timeInForce: 'PostOnly',
                       });
 
                       await addActivityLog(
                         botConfig.user_id,
                         'success',
-                        `Order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}`,
+                        `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}`,
                         null,
                         botConfig.id
                       );
@@ -376,7 +411,7 @@ export async function POST(request: NextRequest) {
                     await addActivityLog(
                       botConfig.user_id,
                       'success',
-                      `Trade opened: ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
+                      `Limit order placed: ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
                       { signal, positionSize },
                       botConfig.id
                     );

@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
       bot_config_id: botConfig.id,
       symbol: payload.symbol,
       side: payload.side,
-      status: 'open',
+      status: 'pending',
       entry_price: payload.entry,
       tp_price: payload.tp,
       sl_price: payload.sl,
@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
     await addActivityLog(
       userId,
       'success',
-      `Trade opened: ${payload.side} @ $${payload.entry.toFixed(2)}, TP $${payload.tp.toFixed(2)}, SL $${payload.sl.toFixed(2)}`,
+      `Limit order placed: ${payload.side} @ $${payload.entry.toFixed(2)}, TP $${payload.tp.toFixed(2)}, SL $${payload.sl.toFixed(2)}`,
       {
         symbol: payload.symbol,
         positionSize: payload.positionSize,
@@ -127,12 +127,13 @@ export async function POST(request: NextRequest) {
           testnet: botConfig.api_mode !== 'live',
           apiKey: botConfig.api_key,
           apiSecret: botConfig.api_secret,
+          timeInForce: 'PostOnly',
         });
 
         await addActivityLog(
           userId,
           'success',
-          `Order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}`,
+          `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}`,
           { orderResult },
           botConfig.id
         );

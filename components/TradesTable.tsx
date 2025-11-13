@@ -63,6 +63,7 @@ export default function TradesTable({
   };
 
   const getOutcome = (trade: Trade): string => {
+    if (trade.status === 'pending') return 'Pending';
     if (trade.status === 'open') return 'Active';
     if (trade.status === 'tp') return 'Win';
     if (trade.status === 'sl') return 'Loss';
@@ -73,6 +74,8 @@ export default function TradesTable({
 
   const getOutcomeColor = (outcome: string) => {
     switch (outcome) {
+      case 'Pending':
+        return 'text-purple-300';
       case 'Win':
         return 'text-green-400';
       case 'Loss':
@@ -117,9 +120,15 @@ export default function TradesTable({
     );
   }
 
+  const statusPriority = (status: Trade['status']) => {
+    if (status === 'open') return 0;
+    if (status === 'pending') return 1;
+    return 2;
+  };
+
   const sortedTrades = [...trades].sort((a, b) => {
-    if (a.status === 'open' && b.status !== 'open') return -1;
-    if (a.status !== 'open' && b.status === 'open') return 1;
+    const priorityDiff = statusPriority(a.status) - statusPriority(b.status);
+    if (priorityDiff !== 0) return priorityDiff;
     return new Date(b.time).getTime() - new Date(a.time).getTime();
   });
 
@@ -156,7 +165,11 @@ export default function TradesTable({
                 <tr
                   key={trade.id}
                   className={`border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors ${
-                    trade.status === 'open' ? 'bg-blue-500/5' : ''
+                    trade.status === 'open'
+                      ? 'bg-blue-500/5'
+                      : trade.status === 'pending'
+                        ? 'bg-purple-500/5'
+                        : ''
                   }`}
                 >
                   <td className="py-3 px-4 text-sm font-medium text-white">

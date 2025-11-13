@@ -11,7 +11,7 @@ export interface Trade {
   sl: number;
   initialSl: number;
   reason: string;
-  status?: 'open' | 'tp' | 'sl' | 'breakeven' | 'cancelled';
+  status: 'pending' | 'open' | 'tp' | 'sl' | 'breakeven' | 'cancelled';
   exitPrice?: number;
   symbol?: string;
   leverage?: number;
@@ -41,28 +41,28 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    const badges = {
+  const getStatusBadge = (status: Trade['status']) => {
+    const badges: Record<Trade['status'], string> = {
+      pending: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
       open: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
       tp: 'bg-green-500/20 text-green-400 border-green-500/30',
       sl: 'bg-red-500/20 text-red-400 border-red-500/30',
       breakeven: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
       cancelled: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
     };
-    return badges[status as keyof typeof badges] || badges.open;
+    return badges[status];
   };
 
-  const openTrades = trades.filter(t => t.status === 'open');
-  const closedTrades = trades.filter(t => t.status !== 'open');
+  const pendingTrades = trades.filter((t) => t.status === 'pending');
+  const openTrades = trades.filter((t) => t.status === 'open');
+  const closedTrades = trades.filter((t) => ['tp', 'sl', 'breakeven', 'cancelled'].includes(t.status));
   const totalUnrealizedPnL = openTrades.reduce((sum, trade) => {
     const pnl = calculateUnrealizedPnL(trade);
     return sum + (pnl || 0);
   }, 0);
 
-  // Calculate win rate
-  const eligibleClosedTrades = closedTrades.filter(
-    (t) => t.status !== 'breakeven' && t.status !== 'cancelled'
-  );
+  // Calculate win rate (exclude breakeven/cancelled)
+  const eligibleClosedTrades = closedTrades.filter((t) => t.status !== 'breakeven' && t.status !== 'cancelled');
   const winRate = eligibleClosedTrades.length > 0
     ? (eligibleClosedTrades.filter(t => t.status === 'tp').length / eligibleClosedTrades.length) * 100
     : 0;
@@ -88,7 +88,7 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         <div className="glass-effect rounded-lg p-4 border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/15 transition-all duration-300">
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-gray-400 font-medium">Unrealized P&L</div>
@@ -109,15 +109,23 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
           <div className="text-xl font-bold text-yellow-400">{openTrades.length}</div>
         </div>
 
+        <div className="glass-effect rounded-lg p-4 border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/15 transition-all duration-300">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs text-gray-400 font-medium">Pending Orders</div>
+            <div className="w-2 h-2 rounded-full bg-purple-400"></div>
+          </div>
+          <div className="text-xl font-bold text-purple-300">{pendingTrades.length}</div>
+        </div>
+
         <div className="glass-effect rounded-lg p-4 border border-gray-500/30 bg-gray-500/10 hover:bg-gray-500/15 transition-all duration-300">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-400 font-medium">Total Trades</div>
+            <div className="text-xs text-gray-400 font-medium">Closed Trades</div>
             <div className="w-2 h-2 rounded-full bg-gray-400"></div>
           </div>
           <div className="text-xl font-bold text-gray-300">{closedTrades.length}</div>
         </div>
 
-        <div className="glass-effect rounded-lg p-4 border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/15 transition-all duration-300">
+        <div className="glass-effect rounded-lg p-4 border border-green-500/30 bg-green-500/10 hover:bg-green-500/15 transition-all duration-300">
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-gray-400 font-medium">Win Rate</div>
             <div className={`w-2 h-2 rounded-full ${winRate >= 50 ? 'bg-green-400' : 'bg-red-400'}`}></div>
@@ -175,7 +183,7 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
         <div className="flex items-center justify-between text-sm">
           <span className="text-gray-400">Trades Today</span>
           <span className="text-cyan-400 font-medium">
-            {trades.filter(t => t.status !== 'open').length}
+            {trades.filter(t => ['tp', 'sl', 'breakeven', 'cancelled'].includes(t.status)).length}
           </span>
         </div>
       </div>

@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS trades (
   -- Trade details
   symbol VARCHAR(20) NOT NULL,
   side VARCHAR(10) NOT NULL, -- 'LONG' or 'SHORT'
-  status VARCHAR(20) NOT NULL DEFAULT 'open', -- 'open', 'tp', 'sl', 'breakeven', 'cancelled'
+  status VARCHAR(20) NOT NULL DEFAULT 'pending', -- 'pending', 'open', 'tp', 'sl', 'breakeven', 'cancelled'
   
   -- Prices
   entry_price DECIMAL(20, 8) NOT NULL,

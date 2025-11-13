@@ -30,6 +30,24 @@ export default function TradeDetailsModal({
 }: TradeDetailsModalProps) {
   if (!isOpen || !trade) return null;
 
+  const statusColorMap: Record<Trade['status'], string> = {
+    pending: 'text-purple-300',
+    open: 'text-blue-400',
+    tp: 'text-green-400',
+    sl: 'text-red-400',
+    breakeven: 'text-yellow-400',
+    cancelled: 'text-gray-400',
+  };
+
+  const statusLabelMap: Record<Trade['status'], string> = {
+    pending: 'Limit Pending',
+    open: 'Active',
+    tp: 'Take Profit',
+    sl: 'Stop Loss',
+    breakeven: 'Breakeven',
+    cancelled: 'Cancelled',
+  };
+
   const calculatePnL = () => {
     if (trade.status === 'open') {
       if (!currentPrice) return null;
@@ -109,16 +127,8 @@ export default function TradeDetailsModal({
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-300">Status:</span>
-                <span className={`font-semibold ${
-                  trade.status === 'open' ? 'text-blue-400' :
-                  trade.status === 'tp' ? 'text-green-400' :
-                  trade.status === 'sl' ? 'text-red-400' :
-                  'text-yellow-400'
-                }`}>
-                  {trade.status === 'open' ? 'Active' :
-                   trade.status === 'tp' ? 'Take Profit' :
-                   trade.status === 'sl' ? 'Stop Loss' :
-                   'Breakeven'}
+                <span className={`font-semibold ${statusColorMap[trade.status]}`}>
+                  {statusLabelMap[trade.status]}
                 </span>
               </div>
               <div className="flex items-center justify-between">

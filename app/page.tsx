@@ -17,6 +17,7 @@ import { io, Socket } from 'socket.io-client';
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = 'BTCUSDT';
 const POLL_INTERVAL = 12000; // 12 seconds
+const PENDING_FILL_DELAY_MS = 5000; // wait 5s before considering pending orders fillable
 const SUBDIVISIONS = 5;
 const NO_TRADE_BAND_PCT = 0.001;
 const DEFAULT_MAX_TRADES = 3;
@@ -297,6 +298,31 @@ export default function Home() {
     }
   }, [replaceTradeInState, addLog, symbol]);
 
+  const fillTradeOnServer = useCallback(async (trade: Trade, fillPrice: number) => {
+    try {
+      const res = await fetch(`/api/trades/${trade.id}/fill`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fillPrice }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to mark trade as filled');
+      }
+
+      const updatedTrade = data.trade as Trade;
+      replaceTradeInState(updatedTrade);
+      addLog('success', `Limit order filled: ${updatedTrade.side} @ $${updatedTrade.entry.toFixed(2)}`);
+      return updatedTrade;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to mark trade as filled';
+      addLog('error', message);
+      setError(message);
+      return null;
+    }
+  }, [replaceTradeInState, addLog]);
+
   const openTradeOnServer = useCallback(async (params: {
     entry: number;
     tp: number;
@@ -328,7 +354,7 @@ export default function Home() {
       }
 
       addTradeToState(data.trade);
-      addLog('success', `Trade opened: ${params.side} @ $${params.entry.toFixed(2)}, TP $${params.tp.toFixed(2)}, SL $${params.sl.toFixed(2)}`);
+      addLog('success', `Limit order placed: ${params.side} @ $${params.entry.toFixed(2)}, TP $${params.tp.toFixed(2)}, SL $${params.sl.toFixed(2)}`);
       return data.trade as Trade;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to persist trade';
@@ -463,14 +489,14 @@ export default function Home() {
         }
 
         if (approved) {
-          const openTradesForSymbol = tradesRef.current.filter(
-            (t) => t.status === 'open' && t.symbol === symbol
+          const activeTradesForSymbol = tradesRef.current.filter(
+            (t) => (t.status === 'open' || t.status === 'pending') && t.symbol === symbol
           );
 
-          if (openTradesForSymbol.length >= maxTrades) {
+          if (activeTradesForSymbol.length >= maxTrades) {
             addLog('warning', `Max trades limit reached (${maxTrades}). Skipping signal.`);
           } else {
-            const duplicateTrade = openTradesForSymbol.find(
+            const duplicateTrade = activeTradesForSymbol.find(
               (t) =>
                 t.side === signalData.signal &&
                 Math.abs(t.entry - signalData.touchedLevel!) < 0.01
@@ -509,6 +535,31 @@ export default function Home() {
         addLog('warning', 'Trading paused: Daily limit reached');
       } else if (!botRunning && signalData && signalData.signal) {
         addLog('info', `Signal detected but bot is stopped: ${signalData.signal} @ $${signalData.touchedLevel!.toFixed(2)}`);
+      }
+
+      // Fill pending limit orders when price retests the entry
+      if (candlesData.length > 0) {
+        const pendingTradesSnapshot = tradesRef.current.filter(
+          (trade) => trade.status === 'pending' && trade.symbol === symbol
+        );
+
+        for (const trade of pendingTradesSnapshot) {
+          const placedAt = new Date(trade.time).getTime();
+          if (Date.now() - placedAt < PENDING_FILL_DELAY_MS) {
+            continue;
+          }
+
+          const retest = trade.side === 'LONG'
+            ? lastCandle.low <= trade.entry
+            : lastCandle.high >= trade.entry;
+
+          if (retest) {
+            const filled = await fillTradeOnServer(trade, trade.entry);
+            if (filled) {
+              trade.status = 'open';
+            }
+          }
+        }
       }
 
       // Simulate TP/SL checks for open trades
@@ -1165,8 +1216,8 @@ export default function Home() {
               <div className="flex items-center gap-3">
                 <div className="w-3 h-3 bg-cyan-400 rounded-full opacity-80"></div>
                 <div className="text-xs">
-                  <div className="text-gray-400 font-medium">Open Trades</div>
-                  <div className="text-cyan-300 font-bold text-sm">{trades.filter(t => t.status === 'open').length}/{maxTrades}</div>
+                  <div className="text-gray-400 font-medium">Active Orders</div>
+                  <div className="text-cyan-300 font-bold text-sm">{trades.filter(t => t.status === 'open' || t.status === 'pending').length}/{maxTrades}</div>
                 </div>
               </div>
             </div>

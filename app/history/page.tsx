@@ -353,6 +353,7 @@ export default function HistoryPage() {
 
                   const getStatusColor = (status: string | undefined) => {
                     switch (status) {
+                      case 'pending': return 'text-purple-300';
                       case 'tp': return 'text-green-400';
                       case 'sl': return 'text-red-400';
                       case 'breakeven': return 'text-yellow-400';
@@ -363,10 +364,12 @@ export default function HistoryPage() {
 
                   const getStatusText = (status: string | undefined) => {
                     switch (status) {
+                      case 'pending': return 'Pending';
                       case 'tp': return 'Win';
                       case 'sl': return 'Loss';
                       case 'breakeven': return 'Breakeven';
                       case 'open': return 'Open';
+                      case 'cancelled': return 'Cancelled';
                       default: return status || 'Unknown';
                     }
                   };
