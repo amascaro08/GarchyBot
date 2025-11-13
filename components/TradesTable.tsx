@@ -1,6 +1,7 @@
 'use client';
 
 import { Trade } from './TradeLog';
+import type { Candle, LevelsResponse } from '@/lib/types';
 import { formatCurrencyNoSymbol } from '@/lib/format';
 import { useState } from 'react';
 import TradeDetailsModal from './TradeDetailsModal';
@@ -9,9 +10,21 @@ interface TradesTableProps {
   trades: Trade[];
   currentPrice: number | null;
   onCloseTrade?: (trade: Trade) => void;
+  candles: Candle[];
+  symbol: string;
+  interval: string;
+  levels?: LevelsResponse | null;
 }
 
-export default function TradesTable({ trades, currentPrice, onCloseTrade }: TradesTableProps) {
+export default function TradesTable({
+  trades,
+  currentPrice,
+  onCloseTrade,
+  candles,
+  symbol,
+  interval,
+  levels,
+}: TradesTableProps) {
   const [closingTradeId, setClosingTradeId] = useState<string | null>(null);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -237,6 +250,10 @@ export default function TradesTable({ trades, currentPrice, onCloseTrade }: Trad
           setSelectedTrade(null);
         }}
         currentPrice={currentPrice}
+        candles={candles}
+        symbol={symbol}
+        interval={interval}
+        levels={levels}
       />
     </div>
   );

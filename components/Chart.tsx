@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine } from 'lightweight-charts';
 import type { Candle } from '@/lib/types';
-import { getCachedMarketData } from '@/lib/websocket';
 import { useWebSocket } from '@/lib/useWebSocket';
 
 interface ChartProps {
@@ -30,6 +29,7 @@ interface ChartProps {
     sl: number;
     side: 'LONG' | 'SHORT';
   }>;
+  height?: number;
 }
 
 export default function Chart({
@@ -44,7 +44,8 @@ export default function Chart({
   symbol = 'BTCUSDT',
   interval = '5',
   markers = [],
-  openTrades = []
+  openTrades = [],
+  height = 600
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -53,6 +54,7 @@ export default function Chart({
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastProcessedRef = useRef<string>('');
   const lastCandleRef = useRef<Candle | null>(null);
+  const hasInitialFitRef = useRef<boolean>(false);
 
   // Use WebSocket hook for real-time data, initialize with static candles
   const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, interval, candles);
@@ -68,7 +70,7 @@ export default function Chart({
           textColor: '#d1d5db',
         },
         width: chartContainerRef.current.clientWidth,
-        height: 600,
+        height,
         grid: {
           vertLines: { color: '#2a2a2a' },
           horzLines: { color: '#2a2a2a' },
@@ -135,6 +137,16 @@ export default function Chart({
     }
   }, []);
 
+  useEffect(() => {
+    if (chartRef.current) {
+      chartRef.current.applyOptions({ height });
+    }
+  }, [height]);
+
+  useEffect(() => {
+    hasInitialFitRef.current = false;
+  }, [symbol, interval]);
+
 
   // Use only websocket candles when available, otherwise fall back to static candles
   const displayCandles = useMemo(() => {
@@ -167,15 +179,9 @@ export default function Chart({
 
     seriesRef.current.setData(candlestickData);
 
-    // After setting data, fit the chart to show all candles properly
-    if (chartRef.current && displayCandles.length > 0) {
-      // Small delay to ensure data is processed
-      setTimeout(() => {
-        if (chartRef.current) {
-          // Fit content to show all candles, but allow user interaction
-          chartRef.current.timeScale().fitContent();
-        }
-      }, 200);
+    if (!hasInitialFitRef.current && chartRef.current && displayCandles.length > 0) {
+      chartRef.current.timeScale().fitContent();
+      hasInitialFitRef.current = true;
     }
 
     // Create a signature of price line data to prevent duplicate processing
@@ -257,8 +263,7 @@ export default function Chart({
         color: '#8b5cf6', // Purple to distinguish from other green lines
         lineWidth: 3,
         lineStyle: 0, // Solid
-        axisLabelVisible: true,
-        title: `VWAP: ${vwap.toFixed(2)}`,
+        axisLabelVisible: false,
       });
       priceLinesRef.current.push(line);
     }
@@ -272,8 +277,7 @@ export default function Chart({
             color: '#14b8a6',
             lineWidth: 2,
             lineStyle: 2, // Dashed
-            axisLabelVisible: true,
-            title: `U${idx + 1}`,
+            axisLabelVisible: false,
           });
           priceLinesRef.current.push(line);
         }
@@ -289,8 +293,7 @@ export default function Chart({
             color: '#f97316',
             lineWidth: 2,
             lineStyle: 2, // Dashed
-            axisLabelVisible: true,
-            title: `D${idx + 1}`,
+            axisLabelVisible: false,
           });
           priceLinesRef.current.push(line);
         }
@@ -412,5 +415,5 @@ export default function Chart({
     }
   }, [displayCandles, vwapLine, vwap]);
 
-  return <div ref={chartContainerRef} className="w-full h-[600px]" />;
+  return <div ref={chartContainerRef} className="w-full" style={{ height }} />;
 }

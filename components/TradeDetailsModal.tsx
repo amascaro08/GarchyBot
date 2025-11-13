@@ -1,27 +1,33 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import { Trade } from './TradeLog';
 import { formatCurrencyNoSymbol } from '@/lib/format';
+import type { Candle, LevelsResponse } from '@/lib/types';
+import dynamic from 'next/dynamic';
+
+const Chart = dynamic(() => import('./Chart'), { ssr: false });
 
 interface TradeDetailsModalProps {
   trade: Trade | null;
   isOpen: boolean;
   onClose: () => void;
   currentPrice?: number | null;
+  candles: Candle[];
+  symbol: string;
+  interval: string;
+  levels?: LevelsResponse | null;
 }
 
-export default function TradeDetailsModal({ trade, isOpen, onClose, currentPrice }: TradeDetailsModalProps) {
-  const [screenshot, setScreenshot] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (trade && isOpen) {
-      // Generate a mock screenshot URL (in real implementation, this would capture or load actual chart screenshot)
-      // For now, we'll create a placeholder
-      setScreenshot(`https://via.placeholder.com/800x400/1a1a2e/00d4ff?text=Screenshot+at+${new Date(trade.time).toLocaleString()}`);
-    }
-  }, [trade, isOpen]);
-
+export default function TradeDetailsModal({
+  trade,
+  isOpen,
+  onClose,
+  currentPrice,
+  candles,
+  symbol,
+  interval,
+  levels,
+}: TradeDetailsModalProps) {
   if (!isOpen || !trade) return null;
 
   const calculatePnL = () => {
@@ -227,20 +233,43 @@ export default function TradeDetailsModal({ trade, isOpen, onClose, currentPrice
             </div>
           </div>
 
-          {/* Screenshot */}
-          {screenshot && (
+          {/* Chart Preview */}
+          {candles.length > 0 && (
             <div className="mb-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Chart Screenshot at Entry</h3>
-              <div className="rounded-lg overflow-hidden border border-slate-600">
-                <img
-                  src={screenshot}
-                  alt={`Chart screenshot at ${new Date(trade.time).toLocaleString()}`}
-                  className="w-full h-auto"
+              <h3 className="text-lg font-semibold text-white mb-4">Price Action</h3>
+              <div className="glass-effect rounded-xl border border-slate-700/60 overflow-hidden">
+                <Chart
+                  key={trade.id}
+                  candles={candles}
+                  dOpen={levels?.dOpen ?? null}
+                  vwap={levels?.vwap ?? null}
+                  vwapLine={levels?.vwapLine}
+                  upLevels={levels?.upLevels ?? []}
+                  dnLevels={levels?.dnLevels ?? []}
+                  upper={levels?.upper ?? null}
+                  lower={levels?.lower ?? null}
+                  symbol={symbol}
+                  interval={interval}
+                  openTrades={[
+                    {
+                      entry: trade.entry,
+                      tp: trade.tp,
+                      sl: trade.sl,
+                      side: trade.side,
+                    },
+                  ]}
+                  markers={[
+                    {
+                      time: Math.floor(new Date(trade.time).getTime() / 1000),
+                      position: trade.side === 'LONG' ? 'belowBar' : 'aboveBar',
+                      color: trade.side === 'LONG' ? '#10b981' : '#ef4444',
+                      shape: trade.side === 'LONG' ? 'arrowUp' : 'arrowDown',
+                      text: `${trade.side} entry`,
+                    },
+                  ]}
+                  height={400}
                 />
               </div>
-              <p className="text-gray-400 text-sm mt-2">
-                Screenshot captured at trade entry time showing price action and level touches
-              </p>
             </div>
           )}
 

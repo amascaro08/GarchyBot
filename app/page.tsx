@@ -1249,7 +1249,15 @@ export default function Home() {
               View Full History →
             </Link>
           </div>
-          <TradesTable trades={trades} currentPrice={currentPrice} onCloseTrade={handleManualCloseTrade} />
+          <TradesTable
+            trades={trades}
+            currentPrice={currentPrice}
+            onCloseTrade={handleManualCloseTrade}
+            candles={candles}
+            symbol={symbol}
+            interval={candleInterval}
+            levels={levels}
+          />
         </div>
         </div>
       </div>
