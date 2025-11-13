@@ -58,7 +58,7 @@ export default function Chart({
   const lastCandleRef = useRef<Candle | null>(null);
   const hasInitialFitRef = useRef<boolean>(false);
   const lastNotifiedPriceRef = useRef<number | null>(null);
-  const onPriceUpdateRef = useRef<typeof onPriceUpdate>();
+  const onPriceUpdateRef = useRef<typeof onPriceUpdate | null>(null);
 
   useEffect(() => {
     onPriceUpdateRef.current = onPriceUpdate;
