@@ -1380,35 +1380,30 @@ export default function Home() {
 
           {/* Main layout */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            {/* Chart - takes 2 columns */}
-            <div className="xl:col-span-2 space-y-6">
-              <div className="glass-effect rounded-2xl p-5 sm:p-7 shadow-2xl card-hover border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
-                <div className="mb-5">
-                  <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-2">Price Chart</h2>
-                  <p className="text-sm text-gray-300 font-medium">Real-time candlestick data with trading levels</p>
-                </div>
-                <Chart
-                  candles={candles}
-                  dOpen={levels?.dOpen ?? null}
-                  vwap={levels?.vwap ?? null}
-                  vwapLine={levels?.vwapLine}
-                  upLevels={levels?.upLevels ?? []}
-                  dnLevels={levels?.dnLevels ?? []}
-                  upper={levels?.upper ?? null}
-                  lower={levels?.lower ?? null}
-                  symbol={symbol}
-                  interval={candleInterval}
-                  markers={chartMarkers}
-                  openTrades={openTrades}
-                  onPriceUpdate={setCurrentPrice}
-                />
+            {/* Chart spans full width */}
+            <div className="xl:col-span-3 glass-effect rounded-2xl p-5 sm:p-7 shadow-2xl card-hover border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
+              <div className="mb-5">
+                <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-2">Price Chart</h2>
+                <p className="text-sm text-gray-300 font-medium">Real-time candlestick data with trading levels</p>
               </div>
-
-              {/* Order Book Visualization - Temporarily hidden */}
-              {/* <OrderBook symbol={symbol} currentPrice={currentPrice} /> */}
+              <Chart
+                candles={candles}
+                dOpen={levels?.dOpen ?? null}
+                vwap={levels?.vwap ?? null}
+                vwapLine={levels?.vwapLine}
+                upLevels={levels?.upLevels ?? []}
+                dnLevels={levels?.dnLevels ?? []}
+                upper={levels?.upper ?? null}
+                lower={levels?.lower ?? null}
+                symbol={symbol}
+                interval={candleInterval}
+                markers={chartMarkers}
+                openTrades={openTrades}
+                onPriceUpdate={setCurrentPrice}
+              />
             </div>
 
-            {/* Right sidebar - Cards, Trade Log, and Activity Log */}
+            {/* Trade statistics & activity */}
             <div className="space-y-6">
               <Cards
                 price={currentPrice}
@@ -1418,29 +1413,31 @@ export default function Home() {
                 upper={levels?.upper ?? null}
                 lower={levels?.lower ?? null}
               />
-              <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} />
+              <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} walletInfo={walletInfo} />
               <ActivityLog logs={activityLogs} maxLogs={50} />
             </div>
-          </div>
 
-        {/* Trades Table */}
-        <div className="mt-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold text-white">Recent Trades</h2>
-            <Link href="/history" className="text-cyan-400 hover:text-cyan-300 transition-colors text-sm">
-              View Full History →
-            </Link>
+            {/* Trades Table */}
+            <div className="xl:col-span-2 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <h2 className="text-xl font-bold text-white">Recent Trades</h2>
+                <Link href="/history" className="text-cyan-400 hover:text-cyan-300 transition-colors text-sm">
+                  View Full History →
+                </Link>
+              </div>
+              <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50 bg-slate-900/70 backdrop-blur-xl">
+                <TradesTable
+                  trades={trades}
+                  currentPrice={currentPrice}
+                  onCloseTrade={handleManualCloseTrade}
+                  candles={candles}
+                  symbol={symbol}
+                  interval={candleInterval}
+                  levels={levels}
+                />
+              </div>
+            </div>
           </div>
-          <TradesTable
-            trades={trades}
-            currentPrice={currentPrice}
-            onCloseTrade={handleManualCloseTrade}
-            candles={candles}
-            symbol={symbol}
-            interval={candleInterval}
-            levels={levels}
-          />
-        </div>
         </div>
       </div>
     </div>

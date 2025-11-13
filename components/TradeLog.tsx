@@ -18,13 +18,20 @@ export interface Trade {
   positionSize?: number;
 }
 
+interface WalletSummary {
+  coin: string;
+  equity: number;
+  availableToWithdraw: number;
+}
+
 interface TradeLogProps {
   trades: Trade[];
   sessionPnL: number;
   currentPrice: number | null;
+  walletInfo?: WalletSummary[] | null;
 }
 
-export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogProps) {
+export default function TradeLog({ trades, sessionPnL, currentPrice, walletInfo }: TradeLogProps) {
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -43,12 +50,12 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
 
   const getStatusBadge = (status: Trade['status']) => {
     const badges: Record<Trade['status'], string> = {
-      pending: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
-      open: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-      tp: 'bg-green-500/20 text-green-400 border-green-500/30',
-      sl: 'bg-red-500/20 text-red-400 border-red-500/30',
-      breakeven: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
-      cancelled: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+      pending: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
+      open: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+      tp: 'bg-green-500/20 text-green-400 border border-green-500/30',
+      sl: 'bg-red-500/20 text-red-400 border border-red-500/30',
+      breakeven: 'bg-gray-500/20 text-gray-400 border border-gray-500/30',
+      cancelled: 'bg-gray-500/20 text-gray-400 border border-gray-500/30',
     };
     return badges[status];
   };
@@ -61,131 +68,141 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
     return sum + (pnl || 0);
   }, 0);
 
-  // Calculate win rate (exclude breakeven/cancelled)
   const eligibleClosedTrades = closedTrades.filter((t) => t.status !== 'breakeven' && t.status !== 'cancelled');
   const winRate = eligibleClosedTrades.length > 0
     ? (eligibleClosedTrades.filter(t => t.status === 'tp').length / eligibleClosedTrades.length) * 100
     : 0;
 
+  const totalEquity = walletInfo?.reduce((sum, wallet) => sum + (wallet.equity || 0), 0) ?? 0;
+  const totalAvailable = walletInfo?.reduce((sum, wallet) => sum + (wallet.availableToWithdraw || 0), 0) ?? 0;
+
   return (
-    <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50">
-      <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-700/50">
+    <div className="glass-effect rounded-xl p-5 sm:p-6 shadow-2xl border border-slate-700/50 bg-slate-900/70 backdrop-blur-xl space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-700/40 pb-4">
         <div>
           <h3 className="text-xl font-bold text-white mb-1">Trading Performance</h3>
           <p className="text-xs text-gray-400">Real-time portfolio overview</p>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className={`text-2xl sm:text-3xl font-bold px-6 py-3 rounded-xl ${
+        <div className="text-right">
+          <div className={`inline-flex items-center gap-2 text-base sm:text-lg font-bold px-4 py-2 rounded-lg border ${
             sessionPnL >= 0
-              ? 'bg-gradient-to-r from-green-500/20 to-emerald-500/20 text-green-400 border border-green-500/30'
-              : 'bg-gradient-to-r from-red-500/20 to-rose-500/20 text-red-400 border border-red-500/30'
+              ? 'bg-green-500/10 border-green-500/40 text-green-300'
+              : 'bg-red-500/10 border-red-500/40 text-red-300'
           }`}>
-            {sessionPnL >= 0 ? '+' : ''}{formatCurrency(sessionPnL).replace('$', '')}
+            <span>{sessionPnL >= 0 ? '+' : ''}{formatCurrency(sessionPnL)}</span>
           </div>
-          <div className="text-xs text-gray-400">
-            Session P&L
-          </div>
+          <div className="text-xs text-gray-400 mt-1">Session P&L</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-        <div className="glass-effect rounded-lg p-4 border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/15 transition-all duration-300">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-400 font-medium">Unrealized P&L</div>
-            <div className={`w-2 h-2 rounded-full ${totalUnrealizedPnL >= 0 ? 'bg-green-400' : 'bg-red-400'}`}></div>
+      {walletInfo && walletInfo.length > 0 && (
+        <div className="glass-effect rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-cyan-200 uppercase tracking-wider">Wallet Balances</div>
+              <div className="text-sm text-cyan-100">{walletInfo.length} asset{walletInfo.length === 1 ? '' : 's'}</div>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:gap-6 text-sm text-cyan-100">
+              <div>
+                <span className="text-xs uppercase tracking-wider text-cyan-300 block">Total Equity</span>
+                <span className="font-semibold">{formatCurrency(totalEquity)}</span>
+              </div>
+              <div>
+                <span className="text-xs uppercase tracking-wider text-cyan-300 block">Available</span>
+                <span className="font-semibold">{formatCurrency(totalAvailable)}</span>
+              </div>
+            </div>
           </div>
-          <div className={`text-xl font-bold ${
-            totalUnrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'
-          }`}>
-            {totalUnrealizedPnL >= 0 ? '+' : ''}{formatCurrency(totalUnrealizedPnL).replace('$', '')}
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-cyan-100">
+            {walletInfo.map((wallet) => (
+              <div key={wallet.coin} className="flex items-center justify-between bg-slate-900/40 rounded-lg px-3 py-2">
+                <span className="font-semibold">{wallet.coin}</span>
+                <span className="font-mono text-xs sm:text-sm">
+                  {wallet.equity.toFixed(4)} <span className="text-cyan-300">(Avail {wallet.availableToWithdraw.toFixed(4)})</span>
+                </span>
+              </div>
+            ))}
           </div>
         </div>
+      )}
 
-        <div className="glass-effect rounded-lg p-4 border border-yellow-500/30 bg-yellow-500/10 hover:bg-yellow-500/15 transition-all duration-300">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-400 font-medium">Active Positions</div>
-            <div className="w-2 h-2 rounded-full bg-yellow-400"></div>
-          </div>
-          <div className="text-xl font-bold text-yellow-400">{openTrades.length}</div>
-        </div>
-
-        <div className="glass-effect rounded-lg p-4 border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/15 transition-all duration-300">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-400 font-medium">Pending Orders</div>
-            <div className="w-2 h-2 rounded-full bg-purple-400"></div>
-          </div>
-          <div className="text-xl font-bold text-purple-300">{pendingTrades.length}</div>
-        </div>
-
-        <div className="glass-effect rounded-lg p-4 border border-gray-500/30 bg-gray-500/10 hover:bg-gray-500/15 transition-all duration-300">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-400 font-medium">Closed Trades</div>
-            <div className="w-2 h-2 rounded-full bg-gray-400"></div>
-          </div>
-          <div className="text-xl font-bold text-gray-300">{closedTrades.length}</div>
-        </div>
-
-        <div className="glass-effect rounded-lg p-4 border border-green-500/30 bg-green-500/10 hover:bg-green-500/15 transition-all duration-300">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-400 font-medium">Win Rate</div>
-            <div className={`w-2 h-2 rounded-full ${winRate >= 50 ? 'bg-green-400' : 'bg-red-400'}`}></div>
-          </div>
-          <div className={`text-xl font-bold ${winRate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
-            {winRate.toFixed(0)}%
-          </div>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <StatTile label="Unrealized P&L" value={formatCurrency(totalUnrealizedPnL)} tone={totalUnrealizedPnL >= 0 ? 'positive' : 'negative'} />
+        <StatTile label="Active Positions" value={openTrades.length} />
+        <StatTile label="Pending Orders" value={pendingTrades.length} />
+        <StatTile label="Closed Trades" value={closedTrades.length} />
+        <StatTile label="Win Rate" value={`${winRate.toFixed(0)}%`} tone={winRate >= 50 ? 'positive' : undefined} />
+        <StatTile label="Trades Today" value={trades.filter(t => t.status !== 'open' && t.status !== 'pending').length} />
       </div>
 
-      {/* Performance indicators */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-400">Avg Trade Size</span>
-          <span className="text-white font-medium">
-            {closedTrades.length > 0
-              ? formatCurrency(closedTrades.reduce((sum, t) => sum + (t.positionSize || 0), 0) / closedTrades.length)
-              : '$0'
-            }
-          </span>
-        </div>
+        {trades.length === 0 && (
+          <div className="text-center text-gray-400 text-sm py-4">No trades yet today.</div>
+        )}
+        {trades.slice(0, 5).map((trade) => {
+          const unrealizedPnL = calculateUnrealizedPnL(trade);
+          const formattedPnL = unrealizedPnL !== null ? `${unrealizedPnL >= 0 ? '+' : ''}${formatCurrency(unrealizedPnL)}` : '—';
 
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-400">Max Drawdown</span>
-          <span className="text-red-400 font-medium">
-            {/* Calculate max drawdown from closed trades */}
-            {(() => {
-              if (closedTrades.length === 0) return '$0';
+          return (
+            <div key={trade.id} className="glass-effect rounded-lg border border-slate-700/40 bg-slate-900/40 p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
+                <div className="flex items-center gap-3">
+                  <span className={`px-2 py-1 rounded text-xs font-semibold ${getStatusBadge(trade.status)}`}>{trade.status.toUpperCase()}</span>
+                  <span className="text-white font-semibold">{trade.symbol}</span>
+                  <span className="text-gray-400 font-mono text-xs">{formatTime(trade.time)}</span>
+                </div>
+                <div className="text-sm text-gray-300">
+                  {trade.side === 'LONG' ? 'Long' : 'Short'} @ <span className="font-semibold text-white">{formatCurrency(trade.entry)}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-gray-300">
+                <div>
+                  <div className="uppercase tracking-wider text-gray-500">TP</div>
+                  <div className="text-green-400 font-semibold">{formatCurrency(trade.tp)}</div>
+                </div>
+                <div>
+                  <div className="uppercase tracking-wider text-gray-500">SL</div>
+                  <div className="text-red-400 font-semibold">{formatCurrency(trade.sl)}</div>
+                </div>
+                <div>
+                  <div className="uppercase tracking-wider text-gray-500">Size</div>
+                  <div className="font-semibold text-white">{trade.positionSize ? formatCurrency(trade.positionSize) : '—'}</div>
+                </div>
+                <div>
+                  <div className="uppercase tracking-wider text-gray-500">Unrealized</div>
+                  <div className={`font-semibold ${unrealizedPnL !== null ? (unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400') : 'text-gray-400'}`}>{formattedPnL}</div>
+                </div>
+              </div>
+              {trade.reason && (
+                <div className="mt-3 text-xs text-gray-400">{trade.reason}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-              let maxDrawdown = 0;
-              let peak = 0;
-              let cumulative = 0;
+interface StatTileProps {
+  label: string;
+  value: number | string;
+  tone?: 'positive' | 'negative';
+}
 
-              for (const trade of closedTrades) {
-                const pnl = (trade.status === 'tp' && trade.side === 'LONG') ||
-                           (trade.status === 'sl' && trade.side === 'SHORT') ||
-                           (trade.status === 'tp' && trade.side === 'SHORT') ||
-                           (trade.status === 'sl' && trade.side === 'LONG')
-                           ? (trade.positionSize || 0)
-                           : -(trade.positionSize || 0);
+function StatTile({ label, value, tone }: StatTileProps) {
+  const base = 'glass-effect rounded-lg px-4 py-3 border backdrop-blur-xl flex flex-col gap-1';
+  const toneClass = tone === 'positive'
+    ? 'border-green-500/30 bg-green-500/5 text-green-300'
+    : tone === 'negative'
+      ? 'border-red-500/30 bg-red-500/5 text-red-300'
+      : 'border-slate-700/40 bg-slate-900/40 text-gray-200';
 
-                cumulative += pnl;
-                if (cumulative > peak) {
-                  peak = cumulative;
-                } else if (peak - cumulative > maxDrawdown) {
-                  maxDrawdown = peak - cumulative;
-                }
-              }
-
-              return formatCurrency(maxDrawdown).replace('$', '');
-            })()}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-400">Trades Today</span>
-          <span className="text-cyan-400 font-medium">
-            {trades.filter(t => ['tp', 'sl', 'breakeven', 'cancelled'].includes(t.status)).length}
-          </span>
-        </div>
+  return (
+    <div className={`${base} ${toneClass}`}>
+      <div className="text-xs uppercase tracking-wider text-gray-400">{label}</div>
+      <div className="text-xl font-semibold">
+        {typeof value === 'number' && !Number.isNaN(value) ? value : value}
       </div>
     </div>
   );
