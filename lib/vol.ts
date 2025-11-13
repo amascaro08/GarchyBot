@@ -547,21 +547,15 @@ function fitGarchModel(
   if (returnsPct.length < 120) {
     // Not enough data, use default parameters
     // Parameters are for percentage returns (returns * 100)
-    const defaultParams = {
-      garch: { alpha0: 1e-4, alpha1: 0.10, beta1: 0.85 }, // alpha0 scaled for percentage returns
-      gjr: { omega: 1e-4, alpha: 0.05, gamma: 0.05, beta: 0.9 }, // omega scaled for percentage returns
-      egarch: { omega: -0.1, alpha: 0.1, gamma: 0.1, beta: 0.9 }, // omega for EGARCH is in log space, no scaling needed
-    };
-    
-    const params = defaultParams[modelType];
     let sigma2 = initializeVariance(returnsPct);
     const conditionalVol: number[] = [];
     
-    // Run recurrence to get conditional volatility
+    // Run recurrence to get conditional volatility based on model type
     if (modelType === 'garch') {
+      const params = { alpha0: 1e-4, alpha1: 0.10, beta1: 0.85 }; // alpha0 scaled for percentage returns
       for (let i = 1; i < returnsPct.length; i++) {
         const rPrevSquared = returnsPct[i - 1] ** 2;
-        sigma2 = params.alpha0! + params.alpha1! * rPrevSquared + params.beta1! * sigma2;
+        sigma2 = params.alpha0 + params.alpha1 * rPrevSquared + params.beta1 * sigma2;
         sigma2 = Math.max(sigma2, 1e-8);
         conditionalVol.push(Math.sqrt(sigma2));
       }
@@ -573,11 +567,12 @@ function fitGarchModel(
         conditionalVolatility: conditionalVol,
       };
     } else if (modelType === 'gjr') {
+      const params = { omega: 1e-4, alpha: 0.05, gamma: 0.05, beta: 0.9 }; // omega scaled for percentage returns
       for (let i = 1; i < returnsPct.length; i++) {
         const rPrev = returnsPct[i - 1];
         const rPrevSquared = rPrev ** 2;
         const leverageTerm = rPrev < 0 ? rPrevSquared : 0;
-        sigma2 = params.omega! + params.alpha! * rPrevSquared + params.gamma! * leverageTerm + params.beta! * sigma2;
+        sigma2 = params.omega + params.alpha * rPrevSquared + params.gamma * leverageTerm + params.beta * sigma2;
         sigma2 = Math.max(sigma2, 1e-8);
         conditionalVol.push(Math.sqrt(sigma2));
       }
@@ -589,13 +584,14 @@ function fitGarchModel(
         conditionalVolatility: conditionalVol,
       };
     } else { // egarch
+      const params = { omega: -0.1, alpha: 0.1, gamma: 0.1, beta: 0.9 }; // omega for EGARCH is in log space, no scaling needed
       let lnSigma2 = Math.log(initializeVariance(returnsPct));
       for (let i = 1; i < returnsPct.length; i++) {
         const rPrev = returnsPct[i - 1];
         const sigmaPrev = Math.exp(lnSigma2 / 2);
         const epsilonPrev = rPrev / sigmaPrev;
         const absEpsilonPrev = Math.abs(epsilonPrev);
-        lnSigma2 = params.omega! + params.alpha! * epsilonPrev + params.gamma! * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + params.beta! * lnSigma2;
+        lnSigma2 = params.omega + params.alpha * epsilonPrev + params.gamma * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + params.beta * lnSigma2;
         sigma2 = Math.exp(lnSigma2);
         conditionalVol.push(Math.sqrt(sigma2));
       }
@@ -645,20 +641,14 @@ function fitGarchModel(
   // Default parameter fitting (can be enhanced with calibration for GJR and EGARCH)
   // Parameters are for percentage returns (returns * 100)
   // For percentage returns, alpha0/omega needs to be scaled by ~10000 compared to decimal returns
-  const defaultParams = {
-    garch: { alpha0: 1e-4, alpha1: 0.10, beta1: 0.85 }, // alpha0 scaled for percentage returns
-    gjr: { omega: 1e-4, alpha: 0.05, gamma: 0.05, beta: 0.9 }, // omega scaled for percentage returns
-    egarch: { omega: -0.1, alpha: 0.1, gamma: 0.1, beta: 0.9 }, // omega for EGARCH is in log space, no scaling needed
-  };
-  
-  const params = defaultParams[modelType];
   let sigma2 = initializeVariance(returnsPct);
   const conditionalVol: number[] = [];
   
   if (modelType === 'garch') {
+    const params = { alpha0: 1e-4, alpha1: 0.10, beta1: 0.85 }; // alpha0 scaled for percentage returns
     for (let i = 1; i < returnsPct.length; i++) {
       const rPrevSquared = returnsPct[i - 1] ** 2;
-      sigma2 = params.alpha0! + params.alpha1! * rPrevSquared + params.beta1! * sigma2;
+      sigma2 = params.alpha0 + params.alpha1 * rPrevSquared + params.beta1 * sigma2;
       sigma2 = Math.max(sigma2, 1e-8);
       conditionalVol.push(Math.sqrt(sigma2));
     }
@@ -670,11 +660,12 @@ function fitGarchModel(
       conditionalVolatility: conditionalVol,
     };
   } else if (modelType === 'gjr') {
+    const params = { omega: 1e-4, alpha: 0.05, gamma: 0.05, beta: 0.9 }; // omega scaled for percentage returns
     for (let i = 1; i < returnsPct.length; i++) {
       const rPrev = returnsPct[i - 1];
       const rPrevSquared = rPrev ** 2;
       const leverageTerm = rPrev < 0 ? rPrevSquared : 0;
-      sigma2 = params.omega! + params.alpha! * rPrevSquared + params.gamma! * leverageTerm + params.beta! * sigma2;
+      sigma2 = params.omega + params.alpha * rPrevSquared + params.gamma * leverageTerm + params.beta * sigma2;
       sigma2 = Math.max(sigma2, 1e-8);
       conditionalVol.push(Math.sqrt(sigma2));
     }
@@ -686,13 +677,14 @@ function fitGarchModel(
       conditionalVolatility: conditionalVol,
     };
   } else { // egarch
+    const params = { omega: -0.1, alpha: 0.1, gamma: 0.1, beta: 0.9 }; // omega for EGARCH is in log space, no scaling needed
     let lnSigma2 = Math.log(initializeVariance(returnsPct));
     for (let i = 1; i < returnsPct.length; i++) {
       const rPrev = returnsPct[i - 1];
       const sigmaPrev = Math.exp(lnSigma2 / 2);
       const epsilonPrev = rPrev / sigmaPrev;
       const absEpsilonPrev = Math.abs(epsilonPrev);
-      lnSigma2 = params.omega! + params.alpha! * epsilonPrev + params.gamma! * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + params.beta! * lnSigma2;
+      lnSigma2 = params.omega + params.alpha * epsilonPrev + params.gamma * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + params.beta * lnSigma2;
       sigma2 = Math.exp(lnSigma2);
       conditionalVol.push(Math.sqrt(sigma2));
     }
