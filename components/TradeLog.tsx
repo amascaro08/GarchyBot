@@ -60,9 +60,11 @@ export default function TradeLog({ trades, sessionPnL, currentPrice }: TradeLogP
   }, 0);
 
   // Calculate win rate
-  const winRate = closedTrades.length > 0
-    ? (closedTrades.filter(t => (t.status === 'tp' && t.side === 'LONG') || (t.status === 'sl' && t.side === 'SHORT') ||
-                               (t.status === 'tp' && t.side === 'SHORT') || (t.status === 'sl' && t.side === 'LONG')).length / closedTrades.length) * 100
+  const eligibleClosedTrades = closedTrades.filter(
+    (t) => t.status !== 'breakeven' && t.status !== 'cancelled'
+  );
+  const winRate = eligibleClosedTrades.length > 0
+    ? (eligibleClosedTrades.filter(t => t.status === 'tp').length / eligibleClosedTrades.length) * 100
     : 0;
 
   return (

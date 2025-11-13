@@ -9,6 +9,7 @@ import {
   BotConfig,
   Trade as DbTrade,
 } from '@/lib/db';
+import { placeOrder } from '@/lib/bybit';
 
 const CreateTradeSchema = z.object({
   symbol: z.string(),
@@ -114,9 +115,42 @@ export async function POST(request: NextRequest) {
       botConfig.id
     );
 
+    let orderResult: any = null;
+    if (botConfig.api_key && botConfig.api_secret && payload.positionSize > 0) {
+      try {
+        orderResult = await placeOrder({
+          symbol: payload.symbol,
+          side: payload.side === 'LONG' ? 'Buy' : 'Sell',
+          qty: payload.positionSize,
+          price: payload.entry,
+          testnet: botConfig.api_mode !== 'live',
+          apiKey: botConfig.api_key,
+          apiSecret: botConfig.api_secret,
+        });
+
+        await addActivityLog(
+          userId,
+          'success',
+          `Order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}`,
+          { orderResult },
+          botConfig.id
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error placing order';
+        await addActivityLog(
+          userId,
+          'error',
+          `Bybit order failed: ${message}`,
+          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize },
+          botConfig.id
+        );
+      }
+    }
+
     return NextResponse.json({
       success: true,
       trade: serializeTrade(tradeRecord),
+      orderResult,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

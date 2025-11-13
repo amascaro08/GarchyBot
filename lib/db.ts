@@ -54,6 +54,9 @@ export interface BotConfig {
   use_daily_open_entry: boolean;
   subdivisions: number;
   no_trade_band_pct: number;
+  api_mode: 'demo' | 'live';
+  api_key: string | null;
+  api_secret: string | null;
   created_at: Date;
   updated_at: Date;
   last_polled_at: Date | null;
@@ -195,7 +198,8 @@ export async function createBotConfig(userId: string, config: Partial<BotConfig>
         user_id, symbol, candle_interval, is_running, max_trades, leverage,
         capital, risk_amount, risk_type, daily_target_type, daily_target_amount,
         daily_stop_type, daily_stop_amount, garch_mode, custom_k_pct,
-        use_orderbook_confirm, use_daily_open_entry, subdivisions, no_trade_band_pct
+        use_orderbook_confirm, use_daily_open_entry, subdivisions, no_trade_band_pct,
+        api_mode, api_key, api_secret
       ) VALUES (
         ${userId},
         ${config.symbol || 'BTCUSDT'},
@@ -215,7 +219,10 @@ export async function createBotConfig(userId: string, config: Partial<BotConfig>
         ${config.use_orderbook_confirm !== false},
         ${config.use_daily_open_entry !== false},
         ${config.subdivisions || 5},
-        ${config.no_trade_band_pct || 0.001}
+        ${config.no_trade_band_pct || 0.001},
+        ${config.api_mode || 'demo'},
+        ${config.api_key || null},
+        ${config.api_secret || null}
       )
       RETURNING *
     `;

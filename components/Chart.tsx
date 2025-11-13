@@ -362,35 +362,19 @@ export default function Chart({
     // This handles cases where candles might be filtered or updated
     if (vwapLine && vwapLine.length > 0) {
       const vwapData: LineData<Time>[] = [];
-      
-      // Create a map of candle timestamps for faster lookup
-      const candleTimeMap = new Map<number, Candle>();
-      candles.forEach(candle => {
-        candleTimeMap.set(candle.ts, candle);
-      });
-      
-      // Try to match vwapLine to candles by index first (most common case)
-      const minLength = Math.min(candles.length, vwapLine.length);
-      let matchedByIndex = true;
-      
+
+      const sourceCandles = displayCandles;
+
+      const minLength = Math.min(sourceCandles.length, vwapLine.length);
       for (let idx = 0; idx < minLength; idx++) {
         const vwapValue = vwapLine[idx];
         if (vwapValue !== null && !isNaN(vwapValue) && vwapValue > 0) {
-          // Check if this index matches a valid candle
-          if (idx < candles.length) {
-            vwapData.push({
-              time: (candles[idx].ts / 1000) as Time,
-              value: vwapValue,
-            });
-          } else {
-            matchedByIndex = false;
-            break;
-          }
+          vwapData.push({
+            time: (sourceCandles[idx].ts / 1000) as Time,
+            value: vwapValue,
+          });
         }
       }
-      
-      // If index matching didn't work well, try to match by finding candles from the levels API
-      // For now, we'll use index matching as it should work if candles come from the same source
       
       if (vwapData.length > 0) {
         vwapSeriesRef.current.setData(vwapData);

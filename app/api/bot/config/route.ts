@@ -61,7 +61,8 @@ export async function POST(request: NextRequest) {
       'symbol', 'candle_interval', 'max_trades', 'leverage', 'capital',
       'risk_amount', 'risk_type', 'daily_target_type', 'daily_target_amount',
       'daily_stop_type', 'daily_stop_amount', 'garch_mode', 'custom_k_pct',
-      'use_orderbook_confirm', 'use_daily_open_entry', 'subdivisions', 'no_trade_band_pct'
+      'use_orderbook_confirm', 'use_daily_open_entry', 'subdivisions', 'no_trade_band_pct',
+      'api_mode', 'api_key', 'api_secret'
     ];
 
     for (const field of safeFields) {

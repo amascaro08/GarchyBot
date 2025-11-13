@@ -44,6 +44,12 @@ interface SidebarProps {
   setGarchMode: (m: 'auto' | 'custom') => void;
   customKPct: number;
   setCustomKPct: (n: number) => void;
+  apiMode: 'demo' | 'live';
+  setApiMode: (m: 'demo' | 'live') => void;
+  apiKey: string;
+  setApiKey: (value: string) => void;
+  apiSecret: string;
+  setApiSecret: (value: string) => void;
 }
 
 export default function Sidebar({
@@ -87,6 +93,12 @@ export default function Sidebar({
   setGarchMode,
   customKPct,
   setCustomKPct,
+  apiMode,
+  setApiMode,
+  apiKey,
+  setApiKey,
+  apiSecret,
+  setApiSecret,
 }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -239,6 +251,70 @@ export default function Sidebar({
                     Stop Bot
                   </button>
                 )}
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold mb-2 text-green-300 uppercase tracking-wider">Account Mode</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setApiMode('demo')}
+                      className={`px-4 py-3 rounded-xl border-2 transition-all duration-300 text-sm font-semibold ${
+                        apiMode === 'demo'
+                          ? 'bg-green-500/20 border-green-500/60 text-green-200 shadow-lg shadow-green-500/20'
+                          : 'bg-slate-900/70 border-slate-700/50 text-gray-300 hover:border-green-500/40 hover:shadow-green-500/10'
+                      }`}
+                    >
+                      Demo (Testnet)
+                    </button>
+                    <button
+                      onClick={() => setApiMode('live')}
+                      className={`px-4 py-3 rounded-xl border-2 transition-all duration-300 text-sm font-semibold ${
+                        apiMode === 'live'
+                          ? 'bg-red-500/20 border-red-500/60 text-red-200 shadow-lg shadow-red-500/20'
+                          : 'bg-slate-900/70 border-slate-700/50 text-gray-300 hover:border-red-500/40 hover:shadow-red-500/10'
+                      }`}
+                    >
+                      Live (Mainnet)
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">
+                    Demo mode uses Bybit Testnet credentials. Live mode sends orders to production – double-check your API keys before enabling.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-2 text-green-300 uppercase tracking-wider">
+                    Bybit API Key
+                  </label>
+                  <input
+                    type="text"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="Enter your Bybit API key"
+                    className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-green-500/50 hover:shadow-lg hover:shadow-green-500/20 focus:outline-none focus:ring-2 focus:ring-green-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-2 text-green-300 uppercase tracking-wider">
+                    Bybit API Secret
+                  </label>
+                  <input
+                    type="password"
+                    value={apiSecret}
+                    onChange={(e) => setApiSecret(e.target.value)}
+                    placeholder="Enter your Bybit API secret"
+                    className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-green-500/50 hover:shadow-lg hover:shadow-green-500/20 focus:outline-none focus:ring-2 focus:ring-green-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <p className="text-xs text-yellow-400 mt-2">
+                    Keys are stored encrypted in the bot configuration and used when trades are executed. Leave blank to rely on environment variables instead.
+                  </p>
+                </div>
               </div>
 
               {/* Save Settings Button */}

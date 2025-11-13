@@ -358,17 +358,29 @@ export async function getKlines(
 
 /**
  * Place order on Bybit (Testnet or Mainnet)
- * Requires BYBIT_API_KEY and BYBIT_API_SECRET env vars
+ * Requires BYBIT_API_KEY and BYBIT_API_SECRET env vars unless apiKey/apiSecret are provided
  */
-export async function placeOrder(
-  symbol: string,
-  side: 'Buy' | 'Sell',
-  qty: number,
-  price?: number,
-  testnet: boolean = true
-): Promise<any> {
-  const apiKey = process.env.BYBIT_API_KEY;
-  const apiSecret = process.env.BYBIT_API_SECRET;
+export async function placeOrder(params: {
+  symbol: string;
+  side: 'Buy' | 'Sell';
+  qty: number;
+  price?: number;
+  testnet?: boolean;
+  apiKey?: string | null;
+  apiSecret?: string | null;
+}): Promise<any> {
+  const {
+    symbol,
+    side,
+    qty,
+    price,
+    testnet = true,
+    apiKey: overrideApiKey,
+    apiSecret: overrideApiSecret,
+  } = params;
+
+  const apiKey = overrideApiKey || process.env.BYBIT_API_KEY;
+  const apiSecret = overrideApiSecret || process.env.BYBIT_API_SECRET;
 
   if (!apiKey || !apiSecret) {
     throw new Error('BYBIT_API_KEY and BYBIT_API_SECRET must be set');
@@ -379,7 +391,7 @@ export async function placeOrder(
   const timestamp = Date.now();
   const recvWindow = 5000;
 
-  const params: Record<string, any> = {
+  const payload: Record<string, any> = {
     category: 'linear',
     symbol,
     side,
@@ -389,14 +401,14 @@ export async function placeOrder(
     recvWindow,
   };
 
-  if (price) {
-    params.price = price.toString();
+  if (price !== undefined) {
+    payload.price = price.toString();
   }
 
   // Sort params for signature
-  const sortedParams = Object.keys(params)
+  const sortedParams = Object.keys(payload)
     .sort()
-    .map((key) => `${key}=${params[key]}`)
+    .map((key) => `${key}=${payload[key]}`)
     .join('&');
 
   const signature = crypto

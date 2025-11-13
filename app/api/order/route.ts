@@ -20,13 +20,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Place order
-    const result = await placeOrder(
-      validated.symbol,
-      validated.side,
-      validated.qty,
-      validated.price,
-      validated.testnet
-    );
+    const result = await placeOrder({
+      symbol: validated.symbol,
+      side: validated.side,
+      qty: validated.qty,
+      price: validated.price,
+      testnet: validated.testnet,
+      apiKey,
+      apiSecret,
+    });
 
     return NextResponse.json({
       ok: true,

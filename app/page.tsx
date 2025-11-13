@@ -70,6 +70,9 @@ export default function Home() {
   const [activityLogs, setActivityLogs] = useState<LogEntry[]>([]);
   const [garchMode, setGarchMode] = useState<'auto' | 'custom'>('auto');
   const [customKPct, setCustomKPct] = useState<number>(0.03); // Default 3% (0.03 as decimal)
+  const [apiMode, setApiMode] = useState<'demo' | 'live'>('demo');
+  const [apiKey, setApiKey] = useState<string>('');
+  const [apiSecret, setApiSecret] = useState<string>('');
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const tradesRef = useRef<Trade[]>([]);
   
@@ -607,6 +610,9 @@ export default function Home() {
             
             // Load other settings
             setUseOrderBookConfirm(config.use_orderbook_confirm !== false);
+            setApiMode((config.api_mode as 'demo' | 'live') || 'demo');
+            setApiKey(config.api_key || '');
+            setApiSecret(config.api_secret || '');
             
             addLog('success', `Bot config loaded: ${config.symbol}, ${config.garch_mode} mode, k%: ${config.custom_k_pct ? (Number(config.custom_k_pct) * 100).toFixed(2) + '%' : 'auto'}`);
           }
@@ -929,6 +935,8 @@ export default function Home() {
 
   const handleSaveSettings = async () => {
     try {
+      const sanitizedKey = apiKey.trim();
+      const sanitizedSecret = apiSecret.trim();
       const settingsToSave = {
         symbol,
         candle_interval: candleInterval,
@@ -944,6 +952,9 @@ export default function Home() {
         garch_mode: garchMode,
         custom_k_pct: customKPct,
         use_orderbook_confirm: useOrderBookConfirm,
+        api_mode: apiMode,
+        api_key: sanitizedKey.length > 0 ? sanitizedKey : null,
+        api_secret: sanitizedSecret.length > 0 ? sanitizedSecret : null,
       };
 
       const res = await fetch('/api/bot/config', {
@@ -1028,6 +1039,12 @@ export default function Home() {
         setGarchMode={setGarchMode}
         customKPct={customKPct}
         setCustomKPct={setCustomKPct}
+        apiMode={apiMode}
+        setApiMode={setApiMode}
+        apiKey={apiKey}
+        setApiKey={setApiKey}
+        apiSecret={apiSecret}
+        setApiSecret={setApiSecret}
       />
 
       {/* Main Content */}

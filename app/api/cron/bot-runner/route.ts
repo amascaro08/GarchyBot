@@ -15,6 +15,7 @@ import {
   updateTrade,
 } from '@/lib/db';
 import { computeTrailingBreakeven } from '@/lib/strategy';
+import { placeOrder } from '@/lib/bybit';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import type { Candle } from '@/lib/types';
 
@@ -322,8 +323,7 @@ export async function POST(request: NextRequest) {
                   } else {
                     console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Risk: $${riskPerTrade.toFixed(2)}, Position size: ${positionSize.toFixed(4)}`);
 
-                    // Create trade
-                    await createTrade({
+                  const tradeRecord = await createTrade({
                       user_id: botConfig.user_id,
                       bot_config_id: botConfig.id,
                       symbol: botConfig.symbol,
@@ -341,6 +341,36 @@ export async function POST(request: NextRequest) {
                       entry_time: new Date(),
                       exit_time: null,
                     });
+
+                  if (botConfig.api_key && botConfig.api_secret && positionSize > 0) {
+                    try {
+                      await placeOrder({
+                        symbol: botConfig.symbol,
+                        side: signal.signal === 'LONG' ? 'Buy' : 'Sell',
+                        qty: positionSize,
+                        price: signal.touchedLevel,
+                        testnet: botConfig.api_mode !== 'live',
+                        apiKey: botConfig.api_key,
+                        apiSecret: botConfig.api_secret,
+                      });
+
+                      await addActivityLog(
+                        botConfig.user_id,
+                        'success',
+                        `Order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${positionSize.toFixed(4)}`,
+                        null,
+                        botConfig.id
+                      );
+                    } catch (error) {
+                      await addActivityLog(
+                        botConfig.user_id,
+                        'error',
+                        `Bybit order failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                        null,
+                        botConfig.id
+                      );
+                    }
+                  }
 
                     await addActivityLog(
                       botConfig.user_id,
