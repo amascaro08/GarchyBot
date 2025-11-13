@@ -14,8 +14,8 @@ import { computeTrailingBreakeven } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
-const DEFAULT_SYMBOL = 'BTCUSDT';
+const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+const DEFAULT_SYMBOL = DEFAULT_SYMBOLS[0];
 const POLL_INTERVAL = 12000; // 12 seconds
 const PENDING_FILL_DELAY_MS = 5000; // wait 5s before considering pending orders fillable
 const SUBDIVISIONS = 5;
@@ -41,6 +41,8 @@ const INTERVALS = [
 const DEFAULT_INTERVAL = '5';
 
 export default function Home() {
+  const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
+  const [symbolsLoading, setSymbolsLoading] = useState<boolean>(true);
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [levels, setLevels] = useState<LevelsResponse | null>(null);
@@ -96,6 +98,36 @@ export default function Home() {
   useEffect(() => {
     tradesRef.current = trades;
   }, [trades]);
+
+  useEffect(() => {
+    const loadSymbols = async () => {
+      try {
+        setSymbolsLoading(true);
+        const res = await fetch('/api/symbols');
+        const data = await res.json();
+
+        if (res.ok && data.success && Array.isArray(data.symbols) && data.symbols.length > 0) {
+          setSymbols(data.symbols);
+          setSymbol((prev) => (data.symbols.includes(prev) ? prev : data.symbols[0]));
+          addLog('info', `Loaded ${data.symbols.length} Bybit symbols`);
+        } else {
+          const errorMsg = data.error || 'Unknown error';
+          addLog('warning', `Failed to load Bybit symbols: ${errorMsg}. Using defaults.`);
+          setSymbols(DEFAULT_SYMBOLS);
+          setSymbol((prev) => (DEFAULT_SYMBOLS.includes(prev) ? prev : DEFAULT_SYMBOL));
+        }
+      } catch (error) {
+        console.error('Failed to load symbols:', error);
+        addLog('warning', 'Failed to load Bybit symbols, using defaults.');
+        setSymbols(DEFAULT_SYMBOLS);
+        setSymbol((prev) => (DEFAULT_SYMBOLS.includes(prev) ? prev : DEFAULT_SYMBOL));
+      } finally {
+        setSymbolsLoading(false);
+      }
+    };
+
+    loadSymbols();
+  }, [addLog, setSymbol]);
 
   // Calculate daily limits
   const dailyTargetValue = useMemo(() => {
@@ -1193,7 +1225,8 @@ export default function Home() {
         onStartBot={handleStartBot}
         onStopBot={handleStopBot}
         onSaveSettings={handleSaveSettings}
-        symbols={SYMBOLS}
+        symbols={symbols}
+        symbolsLoading={symbolsLoading}
         intervals={INTERVALS}
         garchMode={garchMode}
         setGarchMode={setGarchMode}

@@ -357,6 +357,43 @@ export async function getKlines(
 }
 
 /**
+ * Fetch tradable linear instruments from Bybit
+ */
+export async function fetchLinearInstruments(testnet: boolean = true): Promise<string[]> {
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = `${baseUrl}/v5/market/instruments-info?category=linear&limit=1000`;
+
+  try {
+    const response = await fetch(endpoint, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new BybitError(response.status, `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (data.retCode !== 0) {
+      throw new BybitError(data.retCode, data.retMsg || 'Failed to fetch instruments');
+    }
+
+    const list: Array<{ symbol: string; status: string }> = data.result?.list ?? [];
+    return list
+      .filter((instrument) => instrument.symbol && instrument.status?.toLowerCase() === 'trading')
+      .map((instrument) => instrument.symbol);
+  } catch (error) {
+    if (error instanceof BybitError) {
+      throw error;
+    }
+    throw new BybitError(-1, error instanceof Error ? error.message : 'Unknown error fetching instruments');
+  }
+}
+
+/**
  * Place order on Bybit (Testnet or Mainnet)
  * Requires BYBIT_API_KEY and BYBIT_API_SECRET env vars unless apiKey/apiSecret are provided
  */

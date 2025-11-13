@@ -39,6 +39,7 @@ interface SidebarProps {
   onStopBot: () => void;
   onSaveSettings: () => void;
   symbols: string[];
+  symbolsLoading?: boolean;
   intervals: Array<{ value: string; label: string }>;
   garchMode: 'auto' | 'custom';
   setGarchMode: (m: 'auto' | 'custom') => void;
@@ -93,6 +94,7 @@ export default function Sidebar(props: SidebarProps) {
     onStopBot,
     onSaveSettings,
     symbols,
+    symbolsLoading = false,
     intervals,
     garchMode,
     setGarchMode,
@@ -134,13 +136,20 @@ export default function Sidebar(props: SidebarProps) {
             <select
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
-              className="glass-effect rounded-xl px-4 py-3 text-white font-semibold cursor-pointer transition-all duration-300 hover:border-cyan-500/50 hover:shadow-lg hover:shadow-cyan-500/20 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 w-full bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+              disabled={symbols.length === 0}
+              className="glass-effect rounded-xl px-4 py-3 text-white font-semibold cursor-pointer transition-all duration-300 hover:border-cyan-500/50 hover:shadow-lg hover:shadow-cyan-500/20 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 w-full bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {symbols.map((s) => (
-                <option key={s} value={s} className="bg-slate-900">
-                  {s}
+              {symbols.length === 0 ? (
+                <option value="" className="bg-slate-900">
+                  {symbolsLoading ? 'Loading symbols…' : 'No symbols available'}
                 </option>
-              ))}
+              ) : (
+                symbols.map((s) => (
+                  <option key={s} value={s} className="bg-slate-900">
+                    {s}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
