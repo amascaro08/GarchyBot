@@ -986,16 +986,26 @@ export function calculateAverageVolatility(
   // This is a heuristic - proper MLE would be better but computationally expensive
   const { alpha0 = 1e-4, alpha1 = 0.10, beta1 = 0.85 } = garchModel.params;
   
+  // Debug: Log fitted GARCH parameters
+  if (symbol && timeframe) {
+    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe} - Fitted GARCH parameters:`);
+    console.log(`  alpha0: ${alpha0.toFixed(8)}, alpha1: ${alpha1.toFixed(4)}, beta1: ${beta1.toFixed(4)}`);
+  }
+  
   // Estimate GJR parameters from GARCH (split alpha into alpha + gamma)
-  const gjrAlpha = alpha1 * 0.5; // Split alpha for symmetric and asymmetric parts
-  const gjrGamma = alpha1 * 0.5; // Asymmetric leverage term
+  // For GJR, we typically have alpha (symmetric) + gamma (asymmetric), so split alpha1
+  // But keep more of the original alpha1 for symmetric part, less for asymmetric
+  const gjrAlpha = alpha1 * 0.6; // More weight to symmetric part
+  const gjrGamma = alpha1 * 0.4; // Asymmetric leverage term
   const gjrOmega = alpha0; // Same long-term variance
   
   // Estimate EGARCH parameters from GARCH (approximate conversion)
   // EGARCH omega in log space: omega ≈ log(alpha0) - mean adjustment
-  const egarchOmega = Math.log(Math.max(alpha0, 1e-6)) - 2.0; // Approximate conversion to log space
-  const egarchAlpha = alpha1 * 0.5; // Asymmetric response
-  const egarchGamma = alpha1 * 0.5; // Symmetric response
+  // For percentage returns, typical EGARCH omega is around -0.5 to -2.0
+  // Scale based on the magnitude of alpha0
+  const egarchOmega = Math.log(Math.max(alpha0, 1e-6)) - 1.5; // Adjusted conversion
+  const egarchAlpha = alpha1 * 0.6; // Asymmetric response (slightly higher)
+  const egarchGamma = alpha1 * 0.4; // Symmetric response
   
   // Create models with estimated parameters
   const gjrModel = fitGarchModelWithParams(returnsPct, 'gjr', { 
@@ -1032,10 +1042,11 @@ export function calculateAverageVolatility(
   if (symbol && timeframe) {
     console.log(`[GARCH-DEBUG] ${symbol} ${timeframe}:`);
     console.log(`  Historical std dev: ${returnsStdDevPct.toFixed(4)}%`);
-    console.log(`  GARCH forecasts (h=${horizon}):`, garchForecasts.map(f => f.toFixed(4)).join(', '));
-    console.log(`  GJR forecasts (h=${horizon}):`, gjrForecasts.map(f => f.toFixed(4)).join(', '));
-    console.log(`  EGARCH forecasts (h=${horizon}):`, egarchForecasts.map(f => f.toFixed(4)).join(', '));
+    console.log(`  GARCH forecasts (h=${horizon}):`, garchForecasts.map(f => f.toFixed(4)).join(', '), '%');
+    console.log(`  GJR forecasts (h=${horizon}):`, gjrForecasts.map(f => f.toFixed(4)).join(', '), '%');
+    console.log(`  EGARCH forecasts (h=${horizon}):`, egarchForecasts.map(f => f.toFixed(4)).join(', '), '%');
     console.log(`  Prom GARCH: ${promGarch.toFixed(4)}%, Prom GJR: ${promGjr.toFixed(4)}%, Prom EGARCH: ${promEgarch.toFixed(4)}%`);
+    console.log(`  Prom Global (avg of three): ${((promGarch + promGjr + promEgarch) / 3).toFixed(4)}%`);
   }
 
   // Average the three model averages (prom_global in Python script)
