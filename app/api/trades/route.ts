@@ -116,12 +116,13 @@ export async function POST(request: NextRequest) {
     );
 
     let orderResult: any = null;
-    if (botConfig.api_key && botConfig.api_secret && payload.positionSize > 0) {
+    const orderQty = Math.max(0, Number(payload.positionSize));
+    if (botConfig.api_key && botConfig.api_secret && orderQty > 0) {
       try {
         orderResult = await placeOrder({
           symbol: payload.symbol,
           side: payload.side === 'LONG' ? 'Buy' : 'Sell',
-          qty: payload.positionSize,
+          qty: orderQty,
           price: payload.entry,
           testnet: botConfig.api_mode !== 'live',
           apiKey: botConfig.api_key,

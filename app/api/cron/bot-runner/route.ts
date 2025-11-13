@@ -343,11 +343,12 @@ export async function POST(request: NextRequest) {
                     });
 
                   if (botConfig.api_key && botConfig.api_secret && positionSize > 0) {
+                    const orderQty = Math.max(0, Number(positionSize));
                     try {
                       await placeOrder({
                         symbol: botConfig.symbol,
                         side: signal.signal === 'LONG' ? 'Buy' : 'Sell',
-                        qty: positionSize,
+                        qty: orderQty,
                         price: signal.touchedLevel,
                         testnet: botConfig.api_mode !== 'live',
                         apiKey: botConfig.api_key,
@@ -357,7 +358,7 @@ export async function POST(request: NextRequest) {
                       await addActivityLog(
                         botConfig.user_id,
                         'success',
-                        `Order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${positionSize.toFixed(4)}`,
+                        `Order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}`,
                         null,
                         botConfig.id
                       );

@@ -870,6 +870,13 @@ export default function Home() {
 
     // Check if phases are completed before starting (Phase 1 and Phase 2 must be completed)
     try {
+      if (apiMode === 'live' && (!apiKey.trim() || !apiSecret.trim())) {
+        const errorMsg = 'Live mode requires Bybit API key and secret.';
+        setError(errorMsg);
+        addLog('error', errorMsg);
+        return;
+      }
+
       const levelsRes = await fetch('/api/levels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
