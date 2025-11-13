@@ -53,6 +53,26 @@ async function testDailySetup() {
       const errorText = await response.text();
       console.error('❌ Error response:', response.status, response.statusText);
       console.error('Response body:', errorText);
+      
+      // If it's HTML, the server might not be running or endpoint doesn't exist
+      if (errorText.trim().startsWith('<!DOCTYPE') || errorText.trim().startsWith('<html')) {
+        console.error('\n💡 This looks like an HTML error page. Possible causes:');
+        console.error('   1. Dev server is not running - run "npm run dev" first');
+        console.error('   2. Endpoint path is incorrect');
+        console.error('   3. Next.js is showing an error page\n');
+      }
+      process.exit(1);
+    }
+    
+    // Check if response is actually JSON before parsing
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      const text = await response.text();
+      console.error('❌ Expected JSON but got:', contentType);
+      console.error('Response body (first 500 chars):', text.substring(0, 500));
+      if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+        console.error('\n💡 Server returned HTML instead of JSON. Is the dev server running?\n');
+      }
       process.exit(1);
     }
     
@@ -69,11 +89,41 @@ async function testDailySetup() {
       data.results.forEach((result, idx) => {
         if (result.success) {
           console.log(`\n  ${result.symbol || `Symbol ${idx + 1}`}:`);
-          console.log(`    Volatility: ${((result.volatility || 0) * 100).toFixed(4)}%`);
+          console.log(`    Volatility (kPct): ${((result.volatility || 0) * 100).toFixed(4)}%`);
           console.log(`    Daily Open: $${(result.dailyOpenPrice || 0).toFixed(2)}`);
           console.log(`    Upper Range: $${(result.upperRange || 0).toFixed(2)}`);
           console.log(`    Lower Range: $${(result.lowerRange || 0).toFixed(2)}`);
           console.log(`    Data Points: ${result.dataPoints || 0} days`);
+          
+          // Show GARCH debug info if available
+          if (result.debugInfo) {
+            const dbg = result.debugInfo;
+            console.log(`\n    🔍 GARCH Debug Info:`);
+            if (dbg.historicalStdDev !== undefined) {
+              console.log(`      Historical Std Dev: ${dbg.historicalStdDev.toFixed(4)}%`);
+            }
+            if (dbg.garchForecasts && dbg.garchForecasts.length > 0) {
+              console.log(`      GARCH Forecasts (h=5): ${dbg.garchForecasts.map(f => f.toFixed(4)).join(', ')}%`);
+            }
+            if (dbg.gjrForecasts && dbg.gjrForecasts.length > 0) {
+              console.log(`      GJR Forecasts (h=5): ${dbg.gjrForecasts.map(f => f.toFixed(4)).join(', ')}%`);
+            }
+            if (dbg.egarchForecasts && dbg.egarchForecasts.length > 0) {
+              console.log(`      EGARCH Forecasts (h=5): ${dbg.egarchForecasts.map(f => f.toFixed(4)).join(', ')}%`);
+            }
+            if (dbg.promGarch !== undefined) {
+              console.log(`      Prom GARCH: ${dbg.promGarch.toFixed(4)}%`);
+            }
+            if (dbg.promGjr !== undefined) {
+              console.log(`      Prom GJR: ${dbg.promGjr.toFixed(4)}%`);
+            }
+            if (dbg.promEgarch !== undefined) {
+              console.log(`      Prom EGARCH: ${dbg.promEgarch.toFixed(4)}%`);
+            }
+            if (dbg.promGlobal !== undefined) {
+              console.log(`      Prom Global (before clamping): ${dbg.promGlobal.toFixed(4)}%`);
+            }
+          }
         } else {
           console.log(`\n  ${result.symbol || `Symbol ${idx + 1}`}: ❌ Failed - ${result.error || 'Unknown error'}`);
         }

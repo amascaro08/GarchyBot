@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
           console.log(`  GJR-GARCH(1,1): ${(volatilityResult.gjrgarch11.kPct * 100).toFixed(4)}% (vol: ${(volatilityResult.gjrgarch11.vol * 100).toFixed(4)}%)`);
           console.log(`  Averaged (global): ${(calculatedVolatility * 100).toFixed(4)}% (vol: ${(volatilityResult.averaged.vol * 100).toFixed(4)}%)`);
 
-          // Store debug info for response
+          // Store debug info for response (includes GARCH forecast details)
           debugInfo.volatility = calculatedVolatility;
           debugInfo.garch11_kPct = volatilityResult.garch11.kPct;
           debugInfo.garch11_vol = volatilityResult.garch11.vol;
@@ -132,6 +132,18 @@ export async function POST(request: NextRequest) {
           debugInfo.gjrgarch11_kPct = volatilityResult.gjrgarch11.kPct;
           debugInfo.gjrgarch11_vol = volatilityResult.gjrgarch11.vol;
           debugInfo.averaged_vol = volatilityResult.averaged.vol;
+          
+          // Include detailed GARCH debug info if available
+          if (volatilityResult.debugInfo) {
+            debugInfo.historicalStdDev = volatilityResult.debugInfo.historicalStdDev;
+            debugInfo.garchForecasts = volatilityResult.debugInfo.garchForecasts;
+            debugInfo.gjrForecasts = volatilityResult.debugInfo.gjrForecasts;
+            debugInfo.egarchForecasts = volatilityResult.debugInfo.egarchForecasts;
+            debugInfo.promGarch = volatilityResult.debugInfo.promGarch;
+            debugInfo.promGjr = volatilityResult.debugInfo.promGjr;
+            debugInfo.promEgarch = volatilityResult.debugInfo.promEgarch;
+            debugInfo.promGlobal = volatilityResult.debugInfo.promGlobal;
+          }
 
           // Store volatility data in database
           await saveVolatilityData(symbol, calculatedVolatility, volatilityResult, closes.length);

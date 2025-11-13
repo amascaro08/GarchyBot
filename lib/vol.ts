@@ -36,6 +36,17 @@ export interface VolatilityModelsResult {
   gjrgarch11: Garch11Result;
   /** Averaged volatility */
   averaged: Garch11Result;
+  /** Debug information for troubleshooting */
+  debugInfo?: {
+    historicalStdDev?: number;
+    garchForecasts?: number[];
+    gjrForecasts?: number[];
+    egarchForecasts?: number[];
+    promGarch?: number;
+    promGjr?: number;
+    promEgarch?: number;
+    promGlobal?: number;
+  };
 }
 
 /**
@@ -1089,12 +1100,28 @@ export function calculateAverageVolatility(
     kPct: kPct,
   };
 
-  return {
+  const result: VolatilityModelsResult = {
     garch11,
     egarch11,
     gjrgarch11,
     averaged,
   };
+
+  // Include debug info if symbol and timeframe are provided (for troubleshooting)
+  if (symbol && timeframe) {
+    result.debugInfo = {
+      historicalStdDev: returnsStdDevPct,
+      garchForecasts: garchForecasts.slice(),
+      gjrForecasts: gjrForecasts.slice(),
+      egarchForecasts: egarchForecasts.slice(),
+      promGarch,
+      promGjr,
+      promEgarch,
+      promGlobal,
+    };
+  }
+
+  return result;
 }
 
 /**
