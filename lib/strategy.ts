@@ -89,8 +89,8 @@ function findClosestGridLevels(
     const slCandidates = allLevels.filter(level => level < entry);
 
     // Use next available grid level, not closest
-    const tp = tpCandidates.length > 0 ? tpCandidates[0] : entry + (entry * 0.005); // 0.5% fallback
-    const sl = slCandidates.length > 0 ? slCandidates[slCandidates.length - 1] : entry - (entry * 0.005); // 0.5% fallback
+    const tp = tpCandidates.length > 0 ? roundLevel(tpCandidates[0]) : roundLevel(entry + (entry * 0.005)); // 0.5% fallback
+    const sl = slCandidates.length > 0 ? roundLevel(slCandidates[slCandidates.length - 1]) : roundLevel(entry - (entry * 0.005)); // 0.5% fallback
 
     return { tp, sl };
   } else {
@@ -99,8 +99,8 @@ function findClosestGridLevels(
     const slCandidates = allLevels.filter(level => level > entry);
 
     // Use next available grid level, not closest
-    const tp = tpCandidates.length > 0 ? tpCandidates[tpCandidates.length - 1] : entry - (entry * 0.005); // 0.5% fallback
-    const sl = slCandidates.length > 0 ? slCandidates[0] : entry + (entry * 0.005); // 0.5% fallback
+    const tp = tpCandidates.length > 0 ? roundLevel(tpCandidates[tpCandidates.length - 1]) : roundLevel(entry - (entry * 0.005)); // 0.5% fallback
+    const sl = slCandidates.length > 0 ? roundLevel(slCandidates[0]) : roundLevel(entry + (entry * 0.005)); // 0.5% fallback
 
     return { tp, sl };
   }

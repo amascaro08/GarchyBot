@@ -73,7 +73,12 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
   useEffect(() => {
     intervalRef.current = interval;
     setCandles(initialCandles.length > 0 ? initialCandles : []);
-  }, [interval]);
+    setOrderBook(null);
+    setTrades([]);
+    lastCandleRef.current = null;
+    setIsConnected(false);
+    setConnectionStatus('connecting');
+  }, [symbol, interval, initialCandles]);
   const [trades, setTrades] = useState<TradeData[]>([]);
 
   // Get WebSocket URL based on environment
