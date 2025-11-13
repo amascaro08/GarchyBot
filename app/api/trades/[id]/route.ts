@@ -66,13 +66,14 @@ function calculatePnl(trade: DbTrade, exitPrice: number): number {
   return (entry - exitPrice) * positionSize;
 }
 
-export async function PATCH(request: NextRequest, context: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { userId, botConfig } = await ensureUserContext();
     const payloadJson = await request.json();
     const payload: UpdateTradePayload = UpdateTradeSchema.parse(payloadJson);
 
-    const trade = await getTradeById(context.params.id);
+    const { id } = await context.params;
+    const trade = await getTradeById(id);
 
     if (!trade || trade.user_id !== userId) {
       return NextResponse.json({ success: false, error: 'Trade not found' }, { status: 404 });
