@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Update bot config
-    const botConfig = await updateBotConfig(user.id, allowedUpdates);
+    botConfig = await updateBotConfig(user.id, allowedUpdates);
     
     if (!botConfig || !botConfig.id) {
       return NextResponse.json(
