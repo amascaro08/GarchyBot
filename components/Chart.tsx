@@ -153,6 +153,9 @@ export default function Chart({
 
   useEffect(() => {
     hasInitialFitRef.current = false;
+    if (chartRef.current) {
+      chartRef.current.timeScale().fitContent();
+    }
   }, [symbol, interval]);
 
 

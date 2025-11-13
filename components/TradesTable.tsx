@@ -252,6 +252,15 @@ export default function TradesTable({
                         {closingTradeId === trade.id ? 'Closing...' : 'Close'}
                       </button>
                     )}
+                    {trade.status === 'pending' && (
+                      <button
+                        onClick={() => handleCloseTrade(trade)}
+                        disabled={closingTradeId === trade.id}
+                        className="px-2 py-1 text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded hover:bg-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {closingTradeId === trade.id ? 'Cancelling...' : 'Cancel'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

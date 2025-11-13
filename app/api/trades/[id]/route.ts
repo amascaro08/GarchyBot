@@ -13,7 +13,7 @@ import {
 
 const UpdateTradeSchema = z.object({
   status: z.enum(['tp', 'sl', 'breakeven', 'cancelled']),
-  exitPrice: z.number().positive(),
+  exitPrice: z.number().positive().optional(),
 });
 
 type UpdateTradePayload = z.infer<typeof UpdateTradeSchema>;
@@ -80,11 +80,32 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       return NextResponse.json({ success: false, error: 'Trade not found' }, { status: 404 });
     }
 
+    if (trade.status === 'pending') {
+      const updatedTrade = await updateTrade(trade.id, {
+        status: 'cancelled',
+        exit_time: new Date(),
+      } as any);
+
+      await addActivityLog(
+        userId,
+        'warning',
+        `Pending order cancelled: ${trade.side} ${trade.symbol} @ $${Number(trade.entry_price).toFixed(2)}`,
+        null,
+        botConfig.id
+      );
+
+      return NextResponse.json({
+        success: true,
+        trade: serializeTrade(updatedTrade),
+        pnlChange: 0,
+      });
+    }
+
     if (trade.status !== 'open') {
       return NextResponse.json({ success: false, error: 'Trade already closed' }, { status: 400 });
     }
 
-    const exitPrice = payload.exitPrice;
+    const exitPrice = payload.exitPrice ?? Number(trade.entry_price);
     const pnl = calculatePnl(trade, exitPrice);
     const updatedTrade = await closeTrade(trade.id, payload.status, exitPrice, pnl);
     await updateDailyPnL(userId, pnl);
