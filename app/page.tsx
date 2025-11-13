@@ -699,6 +699,34 @@ export default function Home() {
       // User is authenticated, load bot status
       try {
         setLoadingBotStatus(true);
+        
+        // Run daily setup first to see GARCH debug logs in console
+        try {
+          console.log('🚀 [INIT] Running daily setup to calculate GARCH volatility...');
+          const dailySetupRes = await fetch('/api/cron/daily-setup');
+          if (dailySetupRes.ok) {
+            const dailySetupData = await dailySetupRes.json();
+            console.log('✅ [INIT] Daily setup completed. Check logs above for GARCH debug info.');
+            if (dailySetupData.results && Array.isArray(dailySetupData.results)) {
+              dailySetupData.results.forEach((result: any) => {
+                if (result.success && result.debugInfo) {
+                  console.log(`\n📊 [INIT] ${result.symbol} GARCH Summary:`);
+                  console.log(`  Historical Std Dev: ${result.debugInfo.historicalStdDev?.toFixed(4)}%`);
+                  console.log(`  Prom GARCH: ${result.debugInfo.promGarch?.toFixed(4)}%`);
+                  console.log(`  Prom GJR: ${result.debugInfo.promGjr?.toFixed(4)}%`);
+                  console.log(`  Prom EGARCH: ${result.debugInfo.promEgarch?.toFixed(4)}%`);
+                  console.log(`  Prom Global: ${result.debugInfo.promGlobal?.toFixed(4)}%`);
+                  console.log(`  Final Volatility (kPct): ${((result.volatility || 0) * 100).toFixed(4)}%`);
+                }
+              });
+            }
+          } else {
+            console.warn('⚠️  [INIT] Daily setup failed (this is okay if database is not configured)');
+          }
+        } catch (err) {
+          console.warn('⚠️  [INIT] Daily setup error (this is okay):', err instanceof Error ? err.message : err);
+        }
+        
         const res = await fetch('/api/bot/status');
         
         if (res.ok) {
