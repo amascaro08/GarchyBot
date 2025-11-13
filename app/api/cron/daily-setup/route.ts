@@ -90,21 +90,23 @@ export async function POST(request: NextRequest) {
           }
 
           // Calculate volatility using all three models as per rules: GARCH(1,1), EGARCH(1,1), and GJR-GARCH(1,1)
+          // Uses forecasting approach: forecasts h days ahead (default 5), averages forecasted sigmas
           const volatilityResult = calculateAverageVolatility(closes, {
             clampPct: [1, 10],
             symbol,
             timeframe: '1d',
             day: new Date().toISOString().split('T')[0], // YYYY-MM-DD format
+            horizon: 5, // Forecast 5 days ahead, then average (matches Python script)
           });
 
           // Average the three volatility forecasts as per rules
           const calculatedVolatility = volatilityResult.averaged.kPct;
 
-          console.log(`[DAILY-SETUP] ${symbol} volatility calculated:`);
-          console.log(`  GARCH(1,1): ${(volatilityResult.garch11.kPct * 100).toFixed(2)}%`);
-          console.log(`  EGARCH(1,1): ${(volatilityResult.egarch11.kPct * 100).toFixed(2)}%`);
-          console.log(`  GJR-GARCH(1,1): ${(volatilityResult.gjrgarch11.kPct * 100).toFixed(2)}%`);
-          console.log(`  Averaged: ${(calculatedVolatility * 100).toFixed(2)}%`);
+          console.log(`[DAILY-SETUP] ${symbol} volatility calculated (forecasted 5 days ahead, averaged):`);
+          console.log(`  GARCH(1,1): ${(volatilityResult.garch11.kPct * 100).toFixed(4)}%`);
+          console.log(`  EGARCH(1,1): ${(volatilityResult.egarch11.kPct * 100).toFixed(4)}%`);
+          console.log(`  GJR-GARCH(1,1): ${(volatilityResult.gjrgarch11.kPct * 100).toFixed(4)}%`);
+          console.log(`  Averaged (global): ${(calculatedVolatility * 100).toFixed(4)}%`);
 
           // Store volatility data in database
           await saveVolatilityData(symbol, calculatedVolatility, volatilityResult, closes.length);

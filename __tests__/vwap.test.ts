@@ -67,7 +67,7 @@ describe('TradingView-accurate VWAP', () => {
     let totalVolume = 0;
     
     for (const candle of candles) {
-      const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+      const typicalPrice = (candle.high + candle.low) / 2;
       totalPriceVolume += typicalPrice * candle.volume;
       totalVolume += candle.volume;
     }
@@ -137,7 +137,7 @@ describe('TradingView-accurate VWAP', () => {
     let totalVolume = 0;
     
     for (const candle of day2Candles) {
-      const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+      const typicalPrice = (candle.high + candle.low) / 2;
       totalPriceVolume += typicalPrice * candle.volume;
       totalVolume += candle.volume;
     }
@@ -226,16 +226,16 @@ describe('TradingView-accurate VWAP', () => {
     
     // Should use the candle with volume (second candle)
     // VWAP = hlc3 of second candle since first has zero volume
-    // hlc3 = (101.5 + 99.5 + 101) / 3 = 100.6667
+    // hlc3 = (101.5 + 99.5) / 2 = 100.5
     expect(vwap).toBeGreaterThan(0);
-    expect(vwap).toBeCloseTo(100.6667, 1); // hlc3 of second candle
+    expect(vwap).toBeCloseTo(100.5, 1); // hlc3 of second candle
   });
 
   /**
-   * TradingView reference test
-   * Using known OHLCV data that matches TradingView output
+   * Custom hlc3 implementation: (high + low) / 2
+   * Note: This differs from TradingView's hlc3 which is (high + low + close) / 3
    */
-  it('should match TradingView Pine Script ta.vwap(hlc3) output', () => {
+  it('should calculate VWAP with custom hlc3 (high + low) / 2', () => {
     // Known test data that produces predictable VWAP
     const midnight = getUTCMidnight(Date.now());
     const candles: Candle[] = [
@@ -244,15 +244,15 @@ describe('TradingView-accurate VWAP', () => {
       { ts: midnight + 3 * 60 * 60 * 1000, open: 101.5, high: 102.5, low: 101, close: 102, volume: 1500 },
     ];
     
-    // TradingView calculation: hlc3 = (high + low + close) / 3
+    // Custom calculation: hlc3 = (high + low) / 2
     // VWAP = Σ(hlc3 * volume) / Σ(volume)
-    const hlc3_1 = (101 + 99 + 100.5) / 3; // 100.1667
-    const hlc3_2 = (102 + 100 + 101.5) / 3; // 101.1667
-    const hlc3_3 = (102.5 + 101 + 102) / 3; // 101.8333
+    const hlc3_1 = (101 + 99) / 2; // 100
+    const hlc3_2 = (102 + 100) / 2; // 101
+    const hlc3_3 = (102.5 + 101) / 2; // 101.75
     
     const totalPriceVolume = hlc3_1 * 1000 + hlc3_2 * 2000 + hlc3_3 * 1500;
     const totalVolume = 1000 + 2000 + 1500;
-    const expectedVWAP = totalPriceVolume / totalVolume; // ≈ 101.1667
+    const expectedVWAP = totalPriceVolume / totalVolume; // ≈ 100.9444
     
     const vwap = computeSessionAnchoredVWAP(candles, { source: 'hlc3' });
     
@@ -279,10 +279,10 @@ describe('TradingView-accurate VWAP', () => {
     // Close: (101*1000 + 102*1000) / 2000 = 101.5
     expect(vwapClose).toBeCloseTo(101.5, 4);
     
-    // HLC3: ((102+98+101)/3*1000 + (103+99+102)/3*1000) / 2000 ≈ 100.333
-    const hlc3_1 = (102 + 98 + 101) / 3;
-    const hlc3_2 = (103 + 99 + 102) / 3;
-    const expectedHlc3 = (hlc3_1 * 1000 + hlc3_2 * 1000) / 2000;
+    // HLC3: ((102+98)/2*1000 + (103+99)/2*1000) / 2000 = 100.5
+    const hlc3_1 = (102 + 98) / 2; // 100
+    const hlc3_2 = (103 + 99) / 2; // 101
+    const expectedHlc3 = (hlc3_1 * 1000 + hlc3_2 * 1000) / 2000; // 100.5
     expect(vwapHlc3).toBeCloseTo(expectedHlc3, 4);
     
     // OHLC4: ((100+102+98+101)/4*1000 + (101+103+99+102)/4*1000) / 2000

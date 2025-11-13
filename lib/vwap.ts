@@ -4,7 +4,7 @@
  * Equivalent to Pine Script v5: ta.vwap(src)
  * - Resets each daily session (UTC midnight by default for crypto)
  * - Supports source selection: close | hlc3 | ohlc4
- *   - 'hlc3' uses (high + low) / 2 in this build, per latest strategy tweak
+ *   - 'hlc3' uses (high + low) / 2 (midpoint)
  */
 
 import type { Candle } from './types';
@@ -74,7 +74,7 @@ function getSessionStartTimestamp(timestamp: number, anchor: VwapOptions['sessio
  * 
  * Where typicalPrice depends on source:
  * - 'close': close price
- * - 'hlc3': (high + low + close) / 3
+ * - 'hlc3': (high + low) / 2
  * - 'ohlc4': (open + high + low + close) / 4
  * 
  * Only includes candles from the current session (resets at session anchor)
