@@ -155,7 +155,7 @@ export default function Chart({
     hasInitialFitRef.current = false;
     if (chartRef.current) {
       chartRef.current.timeScale().fitContent();
-      chartRef.current.priceScale('right').applyOptions({ mode: PriceScaleMode.Automatic });
+      chartRef.current.priceScale('right').applyOptions({ mode: PriceScaleMode.Normal });
     }
   }, [symbol, interval]);
 
@@ -193,7 +193,7 @@ export default function Chart({
 
     const priceScale = seriesRef.current?.priceScale();
     if (priceScale) {
-      priceScale.applyOptions({ mode: PriceScaleMode.Automatic });
+      priceScale.applyOptions({ mode: PriceScaleMode.Normal });
     }
 
     const latestCandle = displayCandles[displayCandles.length - 1];
