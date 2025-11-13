@@ -8,6 +8,7 @@ import {
   getOrCreateUser,
   getTradeById,
   updateDailyPnL,
+  updateTrade,
   Trade as DbTrade,
 } from '@/lib/db';
 
