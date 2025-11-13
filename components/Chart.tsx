@@ -30,6 +30,7 @@ interface ChartProps {
     side: 'LONG' | 'SHORT';
   }>;
   height?: number;
+  onPriceUpdate?: (price: number) => void;
 }
 
 export default function Chart({
@@ -45,7 +46,8 @@ export default function Chart({
   interval = '5',
   markers = [],
   openTrades = [],
-  height = 600
+  height = 600,
+  onPriceUpdate,
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -55,6 +57,12 @@ export default function Chart({
   const lastProcessedRef = useRef<string>('');
   const lastCandleRef = useRef<Candle | null>(null);
   const hasInitialFitRef = useRef<boolean>(false);
+  const lastNotifiedPriceRef = useRef<number | null>(null);
+  const onPriceUpdateRef = useRef<typeof onPriceUpdate>();
+
+  useEffect(() => {
+    onPriceUpdateRef.current = onPriceUpdate;
+  }, [onPriceUpdate]);
 
   // Use WebSocket hook for real-time data, initialize with static candles
   const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, interval, candles);
@@ -178,6 +186,14 @@ export default function Chart({
     }));
 
     seriesRef.current.setData(candlestickData);
+
+    const latestCandle = displayCandles[displayCandles.length - 1];
+    if (latestCandle && latestCandle.close !== lastNotifiedPriceRef.current) {
+      lastNotifiedPriceRef.current = latestCandle.close;
+      if (onPriceUpdateRef.current) {
+        onPriceUpdateRef.current(latestCandle.close);
+      }
+    }
 
     if (!hasInitialFitRef.current && chartRef.current && displayCandles.length > 0) {
       chartRef.current.timeScale().fitContent();

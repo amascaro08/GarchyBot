@@ -77,6 +77,7 @@ export default function Home() {
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [walletInfo, setWalletInfo] = useState<Array<{ coin: string; equity: number; availableToWithdraw: number }> | null>(null);
   const [overrideDailyLimits, setOverrideDailyLimits] = useState<boolean>(false);
+  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const tradesRef = useRef<Trade[]>([]);
   
@@ -188,6 +189,8 @@ export default function Home() {
       }
       
       setCandles(data);
+      const latest = data[data.length - 1];
+      setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
       return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch klines';
@@ -421,6 +424,9 @@ export default function Home() {
       const lv = await fetchLevels();
       const lastCandle = candlesData[candlesData.length - 1];
       const lastClose = lastCandle?.close ?? NaN;
+      if (Number.isFinite(lastClose)) {
+        setCurrentPrice(lastClose);
+      }
       addLog('info', `VWAP: $${lv.vwap.toFixed(2)}, Price: $${lastClose.toFixed(2)}`);
 
       // Calculate signal using THE SAME kPct from levels
@@ -741,6 +747,7 @@ export default function Home() {
     // Reset signal and candles when symbol or interval changes
     setSignal(null);
     setCandles([]);
+    setCurrentPrice(null);
 
     // Create a function that uses current symbol/interval values
     const loadData = async () => {
@@ -772,6 +779,8 @@ export default function Home() {
         }
 
         setCandles(klinesData);
+        const latest = klinesData[klinesData.length - 1];
+        setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
 
         // Fetch levels for this symbol (may already be loading from symbol change useEffect)
         // This ensures we have levels even if symbol change useEffect hasn't completed
@@ -871,8 +880,6 @@ export default function Home() {
   }, [trades]);
 
   // Get current price
-  const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : null;
-
   const handleStartBot = async () => {
     setOverrideDailyLimits(!canTrade);
     setTrades([]);
@@ -1322,6 +1329,7 @@ export default function Home() {
                   interval={candleInterval}
                   markers={chartMarkers}
                   openTrades={openTrades}
+                  onPriceUpdate={setCurrentPrice}
                 />
               </div>
 
@@ -1332,7 +1340,7 @@ export default function Home() {
             {/* Right sidebar - Cards, Trade Log, and Activity Log */}
             <div className="space-y-6">
               <Cards
-                price={candles.length > 0 ? candles[candles.length - 1].close : null}
+                price={currentPrice}
                 garchPct={levels?.kPct ?? null}
                 vwap={levels?.vwap ?? null}
                 dOpen={levels?.dOpen ?? null}
