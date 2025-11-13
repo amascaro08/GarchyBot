@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserEmail, getUserId } from '@/lib/auth';
-import { getBotConfig, startBot, getOrCreateUser, addActivityLog } from '@/lib/db';
+import { getBotConfig, startBot, getOrCreateUser, addActivityLog, resetDailyPnLForUser } from '@/lib/db';
 
 /**
  * Start the trading bot for the authenticated user
@@ -17,6 +17,14 @@ export async function POST(request: NextRequest) {
 
     // Ensure user exists in database
     const user = await getOrCreateUser(userEmail, userId);
+
+    let overrideLimits = false;
+    try {
+      const body = await request.json();
+      overrideLimits = Boolean(body?.overrideDailyLimits);
+    } catch {
+      // no body provided
+    }
 
     // Get bot config
     let botConfig = await getBotConfig(user.id);
@@ -37,17 +45,24 @@ export async function POST(request: NextRequest) {
     const isDailyTargetHit = botConfig.daily_pnl >= dailyTargetValue && dailyTargetValue > 0;
     const isDailyStopHit = botConfig.daily_pnl <= -dailyStopValue && dailyStopValue > 0;
 
-    if (isDailyTargetHit) {
-      return NextResponse.json(
-        { error: 'Daily target reached. Cannot start bot.' },
-        { status: 400 }
-      );
-    }
+    if (isDailyTargetHit || isDailyStopHit) {
+      if (!overrideLimits) {
+        const errorMsg = isDailyTargetHit
+          ? 'Daily target reached. Cannot start bot.'
+          : 'Daily stop loss hit. Cannot start bot.';
+        return NextResponse.json(
+          { error: errorMsg },
+          { status: 400 }
+        );
+      }
 
-    if (isDailyStopHit) {
-      return NextResponse.json(
-        { error: 'Daily stop loss hit. Cannot start bot.' },
-        { status: 400 }
+      botConfig = await resetDailyPnLForUser(user.id);
+      await addActivityLog(
+        user.id,
+        'info',
+        `Daily limits reset manually. New session started with P&L = 0`,
+        null,
+        botConfig.id
       );
     }
 

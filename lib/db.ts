@@ -523,6 +523,23 @@ export async function resetDailyPnL(): Promise<void> {
   }
 }
 
+export async function resetDailyPnLForUser(userId: string): Promise<BotConfig> {
+  try {
+    const result = await sql<BotConfig>`
+      UPDATE bot_configs
+      SET daily_pnl = 0,
+          daily_start_date = CURRENT_DATE,
+          updated_at = NOW()
+      WHERE user_id = ${userId}
+      RETURNING *
+    `;
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error resetting daily P&L for user:', error);
+    throw error;
+  }
+}
+
 // ============================================
 // HELPER FUNCTIONS
 // ============================================

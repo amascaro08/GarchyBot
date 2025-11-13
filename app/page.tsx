@@ -973,7 +973,8 @@ export default function Home() {
 
   // Get current price
   const handleStartBot = async () => {
-    setOverrideDailyLimits(!canTrade);
+    const overrideLimits = !canTrade;
+    setOverrideDailyLimits(overrideLimits);
     setTrades([]);
     tradesRef.current = [];
     setSessionPnL(0);
@@ -1015,7 +1016,11 @@ export default function Home() {
     }
     
     try {
-      const res = await fetch('/api/bot/start', { method: 'POST' });
+      const res = await fetch('/api/bot/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overrideDailyLimits: overrideLimits }),
+      });
       const data = await res.json();
       
       if (!res.ok) {
@@ -1024,6 +1029,11 @@ export default function Home() {
       
       setBotRunning(true);
       setError(null);
+      if (overrideLimits) {
+        setDailyPnL(0);
+        setDailyStartDate(new Date().toISOString().split('T')[0]);
+      }
+      setOverrideDailyLimits(false);
       addLog('success', `Bot started for ${symbol} - running in background`);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to start bot';
