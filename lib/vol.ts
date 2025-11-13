@@ -988,7 +988,7 @@ export function calculateAverageVolatility(
   
   // Debug: Log fitted GARCH parameters
   if (symbol && timeframe) {
-    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe} - Fitted GARCH parameters:`);
+    console.log(`🔧 [GARCH-DEBUG] ${symbol} ${timeframe} - Fitted GARCH parameters:`);
     console.log(`  alpha0: ${alpha0.toFixed(8)}, alpha1: ${alpha1.toFixed(4)}, beta1: ${beta1.toFixed(4)}`);
   }
   
@@ -1038,15 +1038,20 @@ export function calculateAverageVolatility(
   const promGjr = gjrForecasts.reduce((a, b) => a + b, 0) / gjrForecasts.length;
   const promEgarch = egarchForecasts.reduce((a, b) => a + b, 0) / egarchForecasts.length;
 
-  // Debug logging (can be removed in production)
+  // Debug logging - print prominently to console
   if (symbol && timeframe) {
-    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe}:`);
+    console.log('\n' + '='.repeat(80));
+    console.log(`🔍 [GARCH-DEBUG] ${symbol} ${timeframe}`);
+    console.log('='.repeat(80));
     console.log(`  Historical std dev: ${returnsStdDevPct.toFixed(4)}%`);
     console.log(`  GARCH forecasts (h=${horizon}):`, garchForecasts.map(f => f.toFixed(4)).join(', '), '%');
     console.log(`  GJR forecasts (h=${horizon}):`, gjrForecasts.map(f => f.toFixed(4)).join(', '), '%');
     console.log(`  EGARCH forecasts (h=${horizon}):`, egarchForecasts.map(f => f.toFixed(4)).join(', '), '%');
-    console.log(`  Prom GARCH: ${promGarch.toFixed(4)}%, Prom GJR: ${promGjr.toFixed(4)}%, Prom EGARCH: ${promEgarch.toFixed(4)}%`);
-    console.log(`  Prom Global (avg of three): ${((promGarch + promGjr + promEgarch) / 3).toFixed(4)}%`);
+    console.log(`  📊 Prom GARCH: ${promGarch.toFixed(4)}%`);
+    console.log(`  📊 Prom GJR: ${promGjr.toFixed(4)}%`);
+    console.log(`  📊 Prom EGARCH: ${promEgarch.toFixed(4)}%`);
+    console.log(`  ⭐ Prom Global (avg of three): ${((promGarch + promGjr + promEgarch) / 3).toFixed(4)}%`);
+    console.log('='.repeat(80) + '\n');
   }
 
   // Average the three model averages (prom_global in Python script)
@@ -1055,7 +1060,7 @@ export function calculateAverageVolatility(
 
   // Debug logging
   if (symbol && timeframe) {
-    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe} - Final averaging:`);
+    console.log(`⚙️  [GARCH-DEBUG] ${symbol} ${timeframe} - Final averaging:`);
     console.log(`  promGlobal (before conversion): ${promGlobal.toFixed(4)}%`);
   }
 
@@ -1070,11 +1075,11 @@ export function calculateAverageVolatility(
 
   // Debug logging
   if (symbol && timeframe) {
-    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe} - After conversion and clamping:`);
+    console.log(`✅ [GARCH-DEBUG] ${symbol} ${timeframe} - After conversion and clamping:`);
     console.log(`  promGlobalDecimal: ${promGlobalDecimal.toFixed(6)}`);
     console.log(`  promGlobalCapped: ${promGlobalCapped.toFixed(6)}`);
     console.log(`  kPctPercent: ${kPctPercent.toFixed(4)}%`);
-    console.log(`  Final kPct (decimal): ${kPct.toFixed(6)}`);
+    console.log(`  🎯 Final kPct (decimal): ${kPct.toFixed(6)} (${(kPct * 100).toFixed(4)}%)`);
   }
 
   // Calculate individual model results for reporting (convert to decimal, don't clamp aggressively)

@@ -19,7 +19,7 @@ function reconnectOrderBook(symbol: string, attempt: number = 1) {
   const delay = Math.min(1000 * Math.pow(2, attempt), MAX_RECONNECT_DELAY);
   
   reconnectTimers[symbol] = setTimeout(() => {
-    console.log(`Reconnecting order book for ${symbol}, attempt ${attempt}`);
+    // console.log(`Reconnecting order book for ${symbol}, attempt ${attempt}`); // Disabled to reduce console spam
     startOrderBook(symbol);
   }, delay);
 }
@@ -63,7 +63,7 @@ export function startOrderBook(symbol: string) {
     sockets[symbol] = ws;
 
     ws.onopen = () => {
-      console.log(`Order book WebSocket opened for ${symbol}`);
+      // console.log(`Order book WebSocket opened for ${symbol}`); // Disabled to reduce console spam
       // Clear any reconnect timer
       if (reconnectTimers[symbol]) {
         clearTimeout(reconnectTimers[symbol]);
@@ -73,7 +73,7 @@ export function startOrderBook(symbol: string) {
       // Subscribe to order book - ensure symbol is uppercase
       const normalizedSymbol = symbol.toUpperCase();
       const sub = { op: 'subscribe', args: [`orderbook.50.${normalizedSymbol}`] };
-      console.log(`Subscribing to order book for ${normalizedSymbol}`);
+      // console.log(`Subscribing to order book for ${normalizedSymbol}`); // Disabled to reduce console spam
       ws.send(JSON.stringify(sub));
       
       // Start ping interval to keep connection alive
@@ -148,7 +148,7 @@ export function startOrderBook(symbol: string) {
     };
 
     ws.onclose = (event) => {
-      console.log(`Order book WebSocket closed for ${symbol}, code: ${event.code}, reason: ${event.reason}`);
+      // console.log(`Order book WebSocket closed for ${symbol}, code: ${event.code}, reason: ${event.reason}`); // Disabled to reduce console spam
       
       // Clear ping timer
       if (pingTimers[symbol]) {

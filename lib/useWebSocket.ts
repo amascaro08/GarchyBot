@@ -121,7 +121,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
     const delay = Math.min(1000 * Math.pow(2, attempt), 30000); // Max 30 seconds
 
     reconnectTimeoutRef.current = setTimeout(() => {
-      console.log(`Reconnecting WebSocket for ${symbol}, attempt ${attempt}`);
+      // console.log(`Reconnecting WebSocket for ${symbol}, attempt ${attempt}`); // Disabled to reduce console spam
       connect();
     }, delay);
   }, [symbol]);
@@ -139,7 +139,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log(`WebSocket connected for ${symbol}`);
+        // console.log(`WebSocket connected for ${symbol}`); // Disabled to reduce console spam
         setIsConnected(true);
         setConnectionStatus('connected');
 
@@ -177,11 +177,11 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
 
           // Handle subscription confirmation
           if (message.op === 'subscribe' || message.op === 'unsubscribe') {
-            if (message.success) {
-              console.log(`${message.op === 'subscribe' ? 'Subscribed' : 'Unsubscribed'} to ${symbol} streams`);
-            } else {
+            if (!message.success) {
+              // Only log errors, not successful subscriptions
               console.error(`${message.op === 'subscribe' ? 'Subscription' : 'Unsubscription'} failed for ${symbol}:`, message.retMsg);
             }
+            // console.log(`${message.op === 'subscribe' ? 'Subscribed' : 'Unsubscribed'} to ${symbol} streams`); // Disabled to reduce console spam
             return;
           }
 
@@ -213,7 +213,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
       };
 
       ws.onclose = (event) => {
-        console.log(`WebSocket closed for ${symbol}, code: ${event.code}, reason: ${event.reason}`);
+        // console.log(`WebSocket closed for ${symbol}, code: ${event.code}, reason: ${event.reason}`); // Disabled to reduce console spam
         setIsConnected(false);
         setConnectionStatus('disconnected');
 
