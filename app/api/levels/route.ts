@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { LevelsRequestSchema } from '@/lib/types';
 import { getKlines } from '@/lib/bybit';
-import { dailyOpenUTC, vwapFromOHLCV, vwapLineFromOHLCV, gridLevels } from '@/lib/strategy';
+import { dailyOpenUTC, gridLevels } from '@/lib/strategy';
+import { computeSessionAnchoredVWAP, computeSessionAnchoredVWAPLine } from '@/lib/vwap';
 import { estimateKPercent } from '@/lib/vol';
 
 export async function POST(request: NextRequest) {
@@ -46,8 +47,10 @@ export async function POST(request: NextRequest) {
 
     // Calculate levels (this endpoint still calculates dynamically for frontend/API calls)
     const dOpen = dailyOpenUTC(intradayAsc);
-    const vwap = vwapFromOHLCV(intradayAsc);
-    const vwapLine = vwapLineFromOHLCV(intradayAsc);
+    // Use all candles for VWAP to match TradingView VWAP AA with Auto anchor
+    // This uses all available data instead of session-anchored (resets at UTC midnight)
+    const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hlc3', useAllCandles: true });
+    const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hlc3', useAllCandles: true });
     const { upper, lower, upLevels, dnLevels } = gridLevels(dOpen, kPct, validated.subdivisions);
 
     return NextResponse.json({

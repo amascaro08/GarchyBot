@@ -903,39 +903,49 @@ export function calculateAverageVolatility(
   const egarchForecasts = forecastVolatility(egarchModel, horizon);
 
   // Average the forecasted sigmas over h days for each model (in percentage units)
+  // These are already in percentage units (e.g., 2.5 means 2.5%)
   const promGarch = garchForecasts.reduce((a, b) => a + b, 0) / garchForecasts.length;
   const promGjr = gjrForecasts.reduce((a, b) => a + b, 0) / gjrForecasts.length;
   const promEgarch = egarchForecasts.reduce((a, b) => a + b, 0) / egarchForecasts.length;
 
   // Average the three model averages (prom_global in Python script)
+  // DO NOT clamp individual models before averaging - this matches Python script
   const promGlobal = (promGarch + promGjr + promEgarch) / 3;
 
-  // Convert from percentage units back to decimal units and clamp
-  const promGlobalDecimal = promGlobal / 100.0; // Convert from % to decimal
-  const promGlobalCapped = Math.min(promGlobalDecimal, 0.1); // Cap at 10% daily volatility
+  // Convert from percentage units to decimal units (e.g., 2.5% -> 0.025)
+  const promGlobalDecimal = promGlobal / 100.0;
+  
+  // Apply clamping to final result only (not to individual models)
+  // Clamp to reasonable bounds but don't cap too aggressively
+  const promGlobalCapped = Math.min(promGlobalDecimal, 0.15); // Allow up to 15% daily volatility
   const kPctPercent = Math.max(clampPct[0], Math.min(clampPct[1], promGlobalCapped * 100));
   const kPct = kPctPercent / 100; // Convert to decimal form (0.01-0.10)
 
-  // Calculate individual model results for reporting
-  const garchKPct = Math.max(clampPct[0], Math.min(clampPct[1], promGarch)) / 100;
-  const gjrKPct = Math.max(clampPct[0], Math.min(clampPct[1], promGjr)) / 100;
-  const egarchKPct = Math.max(clampPct[0], Math.min(clampPct[1], promEgarch)) / 100;
+  // Calculate individual model results for reporting (convert to decimal, don't clamp aggressively)
+  const garchVolDecimal = promGarch / 100.0;
+  const gjrVolDecimal = promGjr / 100.0;
+  const egarchVolDecimal = promEgarch / 100.0;
+
+  // For individual models, clamp for display but keep reasonable values
+  const garchKPct = Math.max(clampPct[0] / 100, Math.min(0.15, garchVolDecimal));
+  const gjrKPct = Math.max(clampPct[0] / 100, Math.min(0.15, gjrVolDecimal));
+  const egarchKPct = Math.max(clampPct[0] / 100, Math.min(0.15, egarchVolDecimal));
 
   const garch11: Garch11Result = {
-    vol: promGarch / 100.0,
-    var: (promGarch / 100.0) ** 2,
+    vol: garchVolDecimal,
+    var: garchVolDecimal ** 2,
     kPct: garchKPct,
   };
 
   const gjrgarch11: Garch11Result = {
-    vol: promGjr / 100.0,
-    var: (promGjr / 100.0) ** 2,
+    vol: gjrVolDecimal,
+    var: gjrVolDecimal ** 2,
     kPct: gjrKPct,
   };
 
   const egarch11: Garch11Result = {
-    vol: promEgarch / 100.0,
-    var: (promEgarch / 100.0) ** 2,
+    vol: egarchVolDecimal,
+    var: egarchVolDecimal ** 2,
     kPct: egarchKPct,
   };
 

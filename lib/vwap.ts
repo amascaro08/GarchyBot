@@ -14,8 +14,13 @@ export type VwapSource = 'close' | 'hlc3' | 'ohlc4';
 export interface VwapOptions {
   /** Session anchor: 'utc-midnight' or timezone string (e.g., 'America/New_York') */
   sessionAnchor?: 'utc-midnight' | { tz: string };
-  /** Price source: 'close', 'hlc3' (high+low+close)/3, or 'ohlc4' (open+high+low+close)/4 */
+  /** Price source: 'close', 'hlc3' (high+low)/2, or 'ohlc4' (open+high+low+close)/4 */
   source?: VwapSource;
+  /** If provided, use fixed lookback period (number of candles) instead of session anchor. 
+   * This matches TradingView VWAP AA with fixed anchor period. */
+  lookbackPeriod?: number;
+  /** If true, use all available candles instead of session-anchored (matches TradingView VWAP AA with Auto anchor) */
+  useAllCandles?: boolean;
 }
 
 /**
@@ -87,9 +92,50 @@ export function computeSessionAnchoredVWAP(
     throw new Error('No candles provided');
   }
 
-  const { sessionAnchor = 'utc-midnight', source = 'hlc3' } = opts;
+  const { sessionAnchor = 'utc-midnight', source = 'hlc3', lookbackPeriod, useAllCandles = false } = opts;
 
-  // Get session start timestamp (for the most recent candle)
+  // If useAllCandles is true, use all available candles (matches TradingView VWAP AA with Auto anchor)
+  if (useAllCandles) {
+    let cumulativePriceVolume = 0;
+    let cumulativeVolume = 0;
+
+    for (const candle of ohlcv) {
+      const typicalPrice = getTypicalPrice(candle, source);
+      cumulativePriceVolume += typicalPrice * candle.volume;
+      cumulativeVolume += candle.volume;
+    }
+
+    if (cumulativeVolume === 0) {
+      return ohlcv[ohlcv.length - 1].close;
+    }
+
+    return cumulativePriceVolume / cumulativeVolume;
+  }
+
+  // If lookback period is specified, use fixed lookback (matches TradingView VWAP AA with fixed period)
+  if (lookbackPeriod !== undefined && lookbackPeriod > 0) {
+    const candlesToUse = ohlcv.slice(-lookbackPeriod);
+    if (candlesToUse.length === 0) {
+      return ohlcv[ohlcv.length - 1].close;
+    }
+
+    let cumulativePriceVolume = 0;
+    let cumulativeVolume = 0;
+
+    for (const candle of candlesToUse) {
+      const typicalPrice = getTypicalPrice(candle, source);
+      cumulativePriceVolume += typicalPrice * candle.volume;
+      cumulativeVolume += candle.volume;
+    }
+
+    if (cumulativeVolume === 0) {
+      return candlesToUse[candlesToUse.length - 1].close;
+    }
+
+    return cumulativePriceVolume / cumulativeVolume;
+  }
+
+  // Otherwise use session-anchored VWAP
   const lastCandle = ohlcv[ohlcv.length - 1];
   const sessionStartTs = getSessionStartTimestamp(lastCandle.ts, sessionAnchor);
 
@@ -133,9 +179,56 @@ export function computeSessionAnchoredVWAPLine(
     return [];
   }
 
-  const { sessionAnchor = 'utc-midnight', source = 'hlc3' } = opts;
+  const { sessionAnchor = 'utc-midnight', source = 'hlc3', lookbackPeriod, useAllCandles = false } = opts;
 
   const vwapValues: (number | null)[] = [];
+
+  // If useAllCandles is true, use cumulative VWAP from start (matches TradingView VWAP AA with Auto anchor)
+  if (useAllCandles) {
+    let cumulativePriceVolume = 0;
+    let cumulativeVolume = 0;
+
+    for (const candle of ohlcv) {
+      const typicalPrice = getTypicalPrice(candle, source);
+      cumulativePriceVolume += typicalPrice * candle.volume;
+      cumulativeVolume += candle.volume;
+
+      if (cumulativeVolume === 0) {
+        vwapValues.push(candle.close);
+      } else {
+        vwapValues.push(cumulativePriceVolume / cumulativeVolume);
+      }
+    }
+
+    return vwapValues;
+  }
+
+  // If lookback period is specified, use rolling window VWAP
+  if (lookbackPeriod !== undefined && lookbackPeriod > 0) {
+    for (let i = 0; i < ohlcv.length; i++) {
+      const startIdx = Math.max(0, i - lookbackPeriod + 1);
+      const windowCandles = ohlcv.slice(startIdx, i + 1);
+
+      let cumulativePriceVolume = 0;
+      let cumulativeVolume = 0;
+
+      for (const candle of windowCandles) {
+        const typicalPrice = getTypicalPrice(candle, source);
+        cumulativePriceVolume += typicalPrice * candle.volume;
+        cumulativeVolume += candle.volume;
+      }
+
+      if (cumulativeVolume === 0) {
+        vwapValues.push(ohlcv[i].close);
+      } else {
+        vwapValues.push(cumulativePriceVolume / cumulativeVolume);
+      }
+    }
+
+    return vwapValues;
+  }
+
+  // Otherwise use session-anchored VWAP
   let cumulativePriceVolume = 0;
   let cumulativeVolume = 0;
   let currentSessionTs: number | null = null;

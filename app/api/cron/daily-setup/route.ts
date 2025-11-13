@@ -103,10 +103,11 @@ export async function POST(request: NextRequest) {
           const calculatedVolatility = volatilityResult.averaged.kPct;
 
           console.log(`[DAILY-SETUP] ${symbol} volatility calculated (forecasted 5 days ahead, averaged):`);
-          console.log(`  GARCH(1,1): ${(volatilityResult.garch11.kPct * 100).toFixed(4)}%`);
-          console.log(`  EGARCH(1,1): ${(volatilityResult.egarch11.kPct * 100).toFixed(4)}%`);
-          console.log(`  GJR-GARCH(1,1): ${(volatilityResult.gjrgarch11.kPct * 100).toFixed(4)}%`);
-          console.log(`  Averaged (global): ${(calculatedVolatility * 100).toFixed(4)}%`);
+          console.log(`  Data points used: ${closes.length} days`);
+          console.log(`  GARCH(1,1): ${(volatilityResult.garch11.kPct * 100).toFixed(4)}% (vol: ${(volatilityResult.garch11.vol * 100).toFixed(4)}%)`);
+          console.log(`  EGARCH(1,1): ${(volatilityResult.egarch11.kPct * 100).toFixed(4)}% (vol: ${(volatilityResult.egarch11.vol * 100).toFixed(4)}%)`);
+          console.log(`  GJR-GARCH(1,1): ${(volatilityResult.gjrgarch11.kPct * 100).toFixed(4)}% (vol: ${(volatilityResult.gjrgarch11.vol * 100).toFixed(4)}%)`);
+          console.log(`  Averaged (global): ${(calculatedVolatility * 100).toFixed(4)}% (vol: ${(volatilityResult.averaged.vol * 100).toFixed(4)}%)`);
 
           // Store volatility data in database
           await saveVolatilityData(symbol, calculatedVolatility, volatilityResult, closes.length);
