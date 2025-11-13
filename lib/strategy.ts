@@ -80,27 +80,56 @@ function findClosestGridLevels(
   dnLevels: number[],
   side: 'LONG' | 'SHORT'
 ): { tp: number; sl: number } {
-  // All grid levels sorted
-  const allLevels = [...dnLevels, dOpen, ...upLevels].sort((a, b) => a - b);
+  const allLevels = [...dnLevels, dOpen, ...upLevels]
+    .map(roundLevel)
+    .sort((a, b) => a - b);
+
+  const tolerance = Math.max(Math.abs(entry) * 1e-8, 1e-6);
+  const entryIndex = allLevels.findIndex(level => Math.abs(level - entry) <= tolerance);
+
+  const findNextIndex = () => {
+    if (entryIndex >= 0 && entryIndex < allLevels.length - 1) {
+      return entryIndex + 1;
+    }
+    for (let i = 0; i < allLevels.length; i++) {
+      if (allLevels[i] - entry > tolerance) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const findPrevIndex = () => {
+    if (entryIndex > 0) {
+      return entryIndex - 1;
+    }
+    for (let i = allLevels.length - 1; i >= 0; i--) {
+      if (entry - allLevels[i] > tolerance) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const fallbackLongTp = roundLevel(entry + entry * 0.005);
+  const fallbackLongSl = roundLevel(entry - entry * 0.005);
+  const fallbackShortTp = roundLevel(entry - entry * 0.005);
+  const fallbackShortSl = roundLevel(entry + entry * 0.005);
 
   if (side === 'LONG') {
-    // For LONG: TP should be next level up, SL should be next level down
-    const tpCandidates = allLevels.filter(level => level > entry);
-    const slCandidates = allLevels.filter(level => level < entry);
+    const nextIdx = findNextIndex();
+    const prevIdx = findPrevIndex();
 
-    // Use next available grid level, not closest
-    const tp = tpCandidates.length > 0 ? roundLevel(tpCandidates[0]) : roundLevel(entry + (entry * 0.005)); // 0.5% fallback
-    const sl = slCandidates.length > 0 ? roundLevel(slCandidates[slCandidates.length - 1]) : roundLevel(entry - (entry * 0.005)); // 0.5% fallback
+    const tp = nextIdx >= 0 ? allLevels[nextIdx] : fallbackLongTp;
+    const sl = prevIdx >= 0 ? allLevels[prevIdx] : fallbackLongSl;
 
     return { tp, sl };
   } else {
-    // For SHORT: TP should be next level down, SL should be next level up
-    const tpCandidates = allLevels.filter(level => level < entry);
-    const slCandidates = allLevels.filter(level => level > entry);
+    const nextIdx = findPrevIndex();
+    const prevIdx = findNextIndex();
 
-    // Use next available grid level, not closest
-    const tp = tpCandidates.length > 0 ? roundLevel(tpCandidates[tpCandidates.length - 1]) : roundLevel(entry - (entry * 0.005)); // 0.5% fallback
-    const sl = slCandidates.length > 0 ? roundLevel(slCandidates[0]) : roundLevel(entry + (entry * 0.005)); // 0.5% fallback
+    const tp = nextIdx >= 0 ? allLevels[nextIdx] : fallbackShortTp;
+    const sl = prevIdx >= 0 ? allLevels[prevIdx] : fallbackShortSl;
 
     return { tp, sl };
   }
