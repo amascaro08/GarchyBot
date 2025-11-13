@@ -30,6 +30,7 @@ function serializeTrade(record: DbTrade): {
   entry: number;
   tp: number;
   sl: number;
+  initialSl: number;
   reason: string;
   status: DbTrade['status'];
   symbol: string;
@@ -43,7 +44,8 @@ function serializeTrade(record: DbTrade): {
     side: record.side,
     entry: Number(record.entry_price),
     tp: Number(record.tp_price),
-    sl: Number(record.sl_price),
+    sl: Number(record.current_sl ?? record.sl_price),
+    initialSl: Number(record.sl_price),
     reason: record.reason || '',
     status: record.status,
     symbol: record.symbol,

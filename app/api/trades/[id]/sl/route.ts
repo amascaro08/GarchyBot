@@ -3,20 +3,16 @@ import { z } from 'zod';
 import { getUserEmail, getUserId } from '@/lib/auth';
 import {
   addActivityLog,
-  closeTrade,
   getBotConfig,
   getOrCreateUser,
   getTradeById,
-  updateDailyPnL,
+  updateTrade,
   Trade as DbTrade,
 } from '@/lib/db';
 
-const UpdateTradeSchema = z.object({
-  status: z.enum(['tp', 'sl', 'breakeven', 'cancelled']),
-  exitPrice: z.number().positive(),
+const UpdateStopSchema = z.object({
+  currentSl: z.number().positive(),
 });
-
-type UpdateTradePayload = z.infer<typeof UpdateTradeSchema>;
 
 function serializeTrade(record: DbTrade) {
   return {
@@ -54,24 +50,14 @@ async function ensureUserContext() {
   return { userId: user.id, botConfig };
 }
 
-function calculatePnl(trade: DbTrade, exitPrice: number): number {
-  const positionSize = Number(trade.position_size);
-  const entry = Number(trade.entry_price);
-
-  if (positionSize === 0) return 0;
-
-  if (trade.side === 'LONG') {
-    return (exitPrice - entry) * positionSize;
-  }
-
-  return (entry - exitPrice) * positionSize;
-}
-
-export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
   try {
     const { userId, botConfig } = await ensureUserContext();
     const payloadJson = await request.json();
-    const payload: UpdateTradePayload = UpdateTradeSchema.parse(payloadJson);
+    const payload = UpdateStopSchema.parse(payloadJson);
 
     const { id } = await context.params;
     const trade = await getTradeById(id);
@@ -84,33 +70,21 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       return NextResponse.json({ success: false, error: 'Trade already closed' }, { status: 400 });
     }
 
-    const exitPrice = payload.exitPrice;
-    const pnl = calculatePnl(trade, exitPrice);
-    const updatedTrade = await closeTrade(trade.id, payload.status, exitPrice, pnl);
-    await updateDailyPnL(userId, pnl);
+    const updatedTrade = await updateTrade(trade.id, {
+      current_sl: payload.currentSl,
+    } as any);
 
-    let logLevel: 'success' | 'warning' | 'error' = 'success';
-    if (payload.status === 'sl') logLevel = 'error';
-    if (payload.status === 'breakeven' || payload.status === 'cancelled') logLevel = 'warning';
-
-    const pnlFormatted = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
     await addActivityLog(
       userId,
-      logLevel,
-      `Trade ${payload.status}: ${trade.side} @ $${Number(trade.entry_price).toFixed(2)} → $${exitPrice.toFixed(2)} (P&L: ${pnlFormatted})`,
-      {
-        symbol: trade.symbol,
-        status: payload.status,
-        exitPrice,
-        pnl,
-      },
+      'info',
+      `Stop moved: ${trade.side} ${trade.symbol} SL → $${payload.currentSl.toFixed(2)}`,
+      { tradeId: trade.id, previousSl: trade.current_sl, newSl: payload.currentSl },
       botConfig.id
     );
 
     return NextResponse.json({
       success: true,
       trade: serializeTrade(updatedTrade),
-      pnlChange: pnl,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -128,9 +102,9 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       return NextResponse.json({ success: false, error: error.message }, { status: 404 });
     }
 
-    console.error('Error updating trade:', error);
+    console.error('Error updating stop loss:', error);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Failed to update trade' },
+      { success: false, error: error instanceof Error ? error.message : 'Failed to update stop loss' },
       { status: 500 }
     );
   }

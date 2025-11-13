@@ -11,9 +11,10 @@ import {
   getUserByEmail,
   getOrCreateUser,
   getDailyLevels,
-  checkPhase2Completed
+  checkPhase2Completed,
+  updateTrade,
 } from '@/lib/db';
-import { priceFlipAgainstVWAP } from '@/lib/strategy';
+import { shouldExitOnVWAPFlip, computeTrailingBreakeven } from '@/lib/strategy';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import type { Candle } from '@/lib/types';
 
@@ -171,73 +172,93 @@ export async function POST(request: NextRequest) {
           // Check for immediate bias change closure first
           const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
           for (const trade of openTrades) {
-            let shouldClose = false;
-            let closeReason = '';
-            let exitPrice = lastClose;
+            const entryPrice = Number(trade.entry_price);
+            const tpPrice = Number(trade.tp_price);
+            const initialSl = Number(trade.sl_price);
+            const currentSl = Number(trade.current_sl ?? trade.sl_price);
+            const positionSize = Number(trade.position_size);
 
-            // Immediate closure if bias changes (price crosses VWAP)
-            // Rules: If the bot is in a LONG trade and the price crosses below the VWAP,
-            // the setup is invalid and the trade should be closed immediately (and vice-versa for shorts)
-            if (priceFlipAgainstVWAP(lastClose, levels.vwap, trade.side as 'LONG' | 'SHORT')) {
-              shouldClose = true;
-              closeReason = trade.side === 'LONG'
-                ? 'Setup invalidated: LONG trade closed as price fell below VWAP'
-                : 'Setup invalidated: SHORT trade closed as price rose above VWAP';
-            }
+            if (
+              shouldExitOnVWAPFlip(
+                candles,
+                levels.vwap,
+                trade.side as 'LONG' | 'SHORT'
+              )
+            ) {
+              const pnl =
+                trade.side === 'LONG'
+                  ? (lastClose - entryPrice) * positionSize
+                  : (entryPrice - lastClose) * positionSize;
 
-            if (shouldClose) {
-              const pnl = trade.side === 'LONG'
-                ? (exitPrice - Number(trade.entry_price)) * Number(trade.position_size)
-                : (Number(trade.entry_price) - exitPrice) * Number(trade.position_size);
-
-              await closeTrade(trade.id, 'breakeven', exitPrice, pnl);
+              await closeTrade(trade.id, 'breakeven', lastClose, pnl);
               await updateDailyPnL(botConfig.user_id, pnl);
 
               await addActivityLog(
                 botConfig.user_id,
                 'warning',
-                `${closeReason}: ${trade.side} @ $${trade.entry_price} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`,
+                `VWAP invalidation: ${trade.side} @ $${entryPrice} → $${lastClose.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`,
                 null,
                 botConfig.id
               );
-              continue; // Skip other trade management for this invalidated trade
+              continue;
             }
 
-            // Check if TP or SL hit
+            const trailingSl = computeTrailingBreakeven(
+              trade.side as 'LONG' | 'SHORT',
+              entryPrice,
+              initialSl,
+              currentSl,
+              lastClose
+            );
+
+            if (trailingSl !== null) {
+              await updateTrade(trade.id, { current_sl: trailingSl } as any);
+              await addActivityLog(
+                botConfig.user_id,
+                'info',
+                `Stop moved: ${trade.side} ${trade.symbol} SL → $${trailingSl.toFixed(2)}`,
+                null,
+                botConfig.id
+              );
+              continue;
+            }
+
             const lastCandle = candles[candles.length - 1];
+            let exitPrice = lastClose;
             let hitTP = false;
             let hitSL = false;
 
             if (trade.side === 'LONG') {
-              if (lastCandle.high >= Number(trade.tp_price)) {
+              if (lastCandle.high >= tpPrice) {
                 hitTP = true;
-                exitPrice = Number(trade.tp_price);
-              } else if (lastCandle.low <= Number(trade.sl_price)) {
+                exitPrice = tpPrice;
+              } else if (lastCandle.low <= currentSl) {
                 hitSL = true;
-                exitPrice = Number(trade.sl_price);
+                exitPrice = currentSl;
               }
             } else {
-              if (lastCandle.low <= Number(trade.tp_price)) {
+              if (lastCandle.low <= tpPrice) {
                 hitTP = true;
-                exitPrice = Number(trade.tp_price);
-              } else if (lastCandle.high >= Number(trade.sl_price)) {
+                exitPrice = tpPrice;
+              } else if (lastCandle.high >= currentSl) {
                 hitSL = true;
-                exitPrice = Number(trade.sl_price);
+                exitPrice = currentSl;
               }
             }
 
             if (hitTP || hitSL) {
-              const pnl = trade.side === 'LONG'
-                ? (exitPrice - Number(trade.entry_price)) * Number(trade.position_size)
-                : (Number(trade.entry_price) - exitPrice) * Number(trade.position_size);
+              const pnl =
+                trade.side === 'LONG'
+                  ? (exitPrice - entryPrice) * positionSize
+                  : (entryPrice - exitPrice) * positionSize;
 
               await closeTrade(trade.id, hitTP ? 'tp' : 'sl', exitPrice, pnl);
               await updateDailyPnL(botConfig.user_id, pnl);
 
               const logLevel = hitTP ? 'success' : 'error';
               const logMsg = hitTP
-                ? `Take profit hit: ${trade.side} @ $${trade.entry_price} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`
-                : `Stop loss hit: ${trade.side} @ $${trade.entry_price} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
+                ? `Take profit hit: ${trade.side} @ $${entryPrice} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`
+                : `Stop loss hit: ${trade.side} @ $${entryPrice} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
 
               await addActivityLog(botConfig.user_id, logLevel, logMsg, null, botConfig.id);
             }

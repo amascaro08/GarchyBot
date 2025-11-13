@@ -9,6 +9,7 @@ export interface Trade {
   entry: number;
   tp: number;
   sl: number;
+  initialSl: number;
   reason: string;
   status?: 'open' | 'tp' | 'sl' | 'breakeven' | 'cancelled';
   exitPrice?: number;

@@ -10,7 +10,7 @@ import Sidebar from '@/components/Sidebar';
 import OrderBook from '@/components/OrderBook';
 import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
-import { priceFlipAgainstVWAP } from '@/lib/strategy';
+import { shouldExitOnVWAPFlip, computeTrailingBreakeven } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
 
@@ -253,6 +253,32 @@ export default function Home() {
     });
   }, []);
 
+  const updateTradeStopOnServer = useCallback(async (trade: Trade, newSl: number) => {
+    try {
+      const res = await fetch(`/api/trades/${trade.id}/sl`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentSl: newSl }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to update stop loss');
+      }
+
+      const updatedTrade = data.trade as Trade;
+      replaceTradeInState(updatedTrade);
+      const tradeSymbol = trade.symbol ?? symbol;
+      addLog('info', `Stop moved to $${newSl.toFixed(2)} for ${trade.side} ${tradeSymbol}`);
+      return updatedTrade;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update stop loss';
+      addLog('error', message);
+      setError(message);
+      return null;
+    }
+  }, [replaceTradeInState, addLog, symbol]);
+
   const openTradeOnServer = useCallback(async (params: {
     entry: number;
     tp: number;
@@ -471,8 +497,11 @@ export default function Home() {
         );
 
         for (const trade of openTradesSnapshot) {
-          // VWAP invalidation check
-          if (Number.isFinite(lastClose) && priceFlipAgainstVWAP(lastClose, lv.vwap, trade.side)) {
+          if (!Number.isFinite(lastClose)) {
+            continue;
+          }
+
+          if (shouldExitOnVWAPFlip(candlesData, lv.vwap, trade.side)) {
             await closeTradeOnServer(
               trade,
               'breakeven',
@@ -480,6 +509,20 @@ export default function Home() {
               'warning',
               `VWAP invalidation: ${trade.side} @ $${trade.entry.toFixed(2)} closed at $${lastClose.toFixed(2)}`
             );
+            continue;
+          }
+
+          const initialSl = trade.initialSl ?? trade.sl;
+          const trailingSl = computeTrailingBreakeven(
+            trade.side,
+            trade.entry,
+            initialSl,
+            trade.sl,
+            lastClose
+          );
+
+          if (trailingSl !== null) {
+            await updateTradeStopOnServer(trade, trailingSl);
             continue;
           }
 
@@ -587,7 +630,8 @@ export default function Home() {
               side: t.side,
               entry: Number(t.entry_price),
               tp: Number(t.tp_price),
-              sl: Number(t.sl_price),
+              sl: Number(t.current_sl ?? t.sl_price),
+              initialSl: Number(t.sl_price),
               reason: t.reason || '',
               status: t.status,
               symbol: t.symbol,

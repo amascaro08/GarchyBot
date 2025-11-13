@@ -1,6 +1,10 @@
 import type { Candle } from './types';
 import { vwapFromOHLCV, vwapLineFromOHLCV } from './vwap';
 
+export const VWAP_FLIP_CONFIRM_CANDLES = 2;
+export const VWAP_FLIP_MIN_BPS = 5;
+export const TRAIL_STOP_OFFSET_BPS = 5;
+
 /**
  * Find daily open at UTC 00:00 boundary
  * Uses the first candle's open after the last UTC midnight boundary
@@ -322,6 +326,61 @@ export function priceFlipAgainstVWAP(
   if (side === 'LONG') return lastClose < vwap;
   if (side === 'SHORT') return lastClose > vwap;
   return false;
+}
+
+export function shouldExitOnVWAPFlip(
+  candles: Candle[],
+  vwap: number,
+  side: 'LONG' | 'SHORT',
+  confirmCandles: number = VWAP_FLIP_CONFIRM_CANDLES,
+  minBps: number = VWAP_FLIP_MIN_BPS
+): boolean {
+  if (candles.length < confirmCandles) {
+    return false;
+  }
+
+  const recent = candles.slice(-confirmCandles);
+  const threshold = vwap * (minBps / 10000);
+
+  if (side === 'LONG') {
+    return recent.every((candle) => candle.close < vwap - threshold);
+  }
+
+  return recent.every((candle) => candle.close > vwap + threshold);
+}
+
+export function computeTrailingBreakeven(
+  side: 'LONG' | 'SHORT',
+  entry: number,
+  initialSl: number,
+  currentSl: number,
+  lastClose: number,
+  offsetBps: number = TRAIL_STOP_OFFSET_BPS
+): number | null {
+  const risk = Math.abs(entry - initialSl);
+  if (risk <= 0 || !isFinite(risk)) {
+    return null;
+  }
+
+  const profit = side === 'LONG' ? lastClose - entry : entry - lastClose;
+  if (!isFinite(profit) || profit < risk) {
+    return null;
+  }
+
+  const offset = entry * (offsetBps / 10000);
+  const breakeven =
+    side === 'LONG'
+      ? Math.max(entry, entry + offset)
+      : Math.min(entry, entry - offset);
+
+  if (
+    (side === 'LONG' && currentSl >= breakeven) ||
+    (side === 'SHORT' && currentSl <= breakeven)
+  ) {
+    return null;
+  }
+
+  return breakeven;
 }
 
 /**
