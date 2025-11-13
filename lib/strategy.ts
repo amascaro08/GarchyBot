@@ -159,7 +159,7 @@ function findClosestGridLevels(
 
     // Check if bar touches D1 (first lower level - entry at D1)
     if (dnLevels.length > 0) {
-      const d1Level = dnLevels[0];
+      const d1Level = roundLevel(dnLevels[0]);
       if (low <= d1Level && d1Level <= high) {
         const entry = d1Level;
         const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
@@ -176,7 +176,7 @@ function findClosestGridLevels(
 
     // Check if bar touches daily open (entry at daily open, acting as support)
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
-      const entry = dOpen;
+      const entry = roundLevel(dOpen);
       const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
       return {
@@ -190,7 +190,7 @@ function findClosestGridLevels(
 
     // Check if bar touches U1 (entry at U1) - U1 is first upper level above daily open
     if (upLevels.length > 0) {
-      const u1Level = upLevels[0];
+      const u1Level = roundLevel(upLevels[0]);
       if (low <= u1Level && u1Level <= high) {
         const entry = u1Level;
         const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
@@ -207,7 +207,7 @@ function findClosestGridLevels(
 
     // Check if bar touches any other upper level (U2, U3, etc.)
     for (let i = 1; i < upLevels.length; i++) {
-      const level = upLevels[i];
+      const level = roundLevel(upLevels[i]);
       if (low <= level && level <= high) {
         const entry = level;
         const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
@@ -224,7 +224,7 @@ function findClosestGridLevels(
 
     // Check if bar touches any lower level below D1 (D2, D3, etc.)
     for (let i = 1; i < dnLevels.length; i++) {
-      const level = dnLevels[i];
+      const level = roundLevel(dnLevels[i]);
       if (low <= level && level <= high) {
         const entry = level;
         const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
@@ -246,7 +246,7 @@ function findClosestGridLevels(
 
     // Check if bar touches daily open (entry at daily open, acting as resistance)
     if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
-      const entry = dOpen;
+      const entry = roundLevel(dOpen);
       const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
       return {
@@ -260,7 +260,7 @@ function findClosestGridLevels(
 
     // Check if bar touches U1 (first upper level - entry at U1, acting as resistance)
     if (upLevels.length > 0) {
-      const u1Level = upLevels[0];
+      const u1Level = roundLevel(upLevels[0]);
       if (low <= u1Level && u1Level <= high) {
         const entry = u1Level;
         const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
@@ -277,7 +277,7 @@ function findClosestGridLevels(
 
     // Check if bar touches any lower level (D1, D2, etc.)
     for (let i = 0; i < dnLevels.length; i++) {
-      const level = dnLevels[i];
+      const level = roundLevel(dnLevels[i]);
       if (low <= level && level <= high) {
         const entry = level;
         const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
@@ -294,7 +294,7 @@ function findClosestGridLevels(
 
     // Check if bar touches any upper level between U1 and daily open
     for (let i = 1; i < upLevels.length; i++) {
-      const level = upLevels[i];
+      const level = roundLevel(upLevels[i]);
       if (low <= level && level <= high) {
         const entry = level;
         const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
@@ -406,3 +406,5 @@ export function breakevenStopOnVWAPFlip(
   }
   return sl;
 }
+
+const roundLevel = (value: number) => Number(value.toFixed(8));

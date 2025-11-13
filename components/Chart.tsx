@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useMemo } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine, PriceScaleMode } from 'lightweight-charts';
 import type { Candle } from '@/lib/types';
 import { useWebSocket } from '@/lib/useWebSocket';
 
@@ -155,6 +155,7 @@ export default function Chart({
     hasInitialFitRef.current = false;
     if (chartRef.current) {
       chartRef.current.timeScale().fitContent();
+      chartRef.current.priceScale('right').applyOptions({ mode: PriceScaleMode.Automatic });
     }
   }, [symbol, interval]);
 
@@ -189,6 +190,11 @@ export default function Chart({
     }));
 
     seriesRef.current.setData(candlestickData);
+
+    const priceScale = seriesRef.current?.priceScale();
+    if (priceScale) {
+      priceScale.applyOptions({ mode: PriceScaleMode.Automatic });
+    }
 
     const latestCandle = displayCandles[displayCandles.length - 1];
     if (latestCandle && latestCandle.close !== lastNotifiedPriceRef.current) {

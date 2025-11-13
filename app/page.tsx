@@ -1129,6 +1129,17 @@ export default function Home() {
 
   const handleManualCloseTrade = async (trade: Trade) => {
     try {
+      if (trade.status === 'pending') {
+        await closeTradeOnServer(
+          trade,
+          'cancelled',
+          trade.entry,
+          'warning',
+          `Pending order cancelled: ${trade.side} @ $${trade.entry.toFixed(2)}`
+        );
+        return;
+      }
+
       const exitPrice = currentPrice ?? trade.entry;
       await closeTradeOnServer(
         trade,
