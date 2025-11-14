@@ -91,6 +91,13 @@ export default function Home() {
   // Use WebSocket for real-time ticker data and candle updates (shared with Chart)
   const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected } = useWebSocket(symbol, candleInterval, candles);
   
+  // Update currentPrice from WebSocket ticker in real-time (for trade P&L calculations)
+  useEffect(() => {
+    if (wsTicker?.lastPrice && wsTicker.lastPrice > 0) {
+      setCurrentPrice(wsTicker.lastPrice);
+    }
+  }, [wsTicker?.lastPrice, wsTicker?.timestamp]);
+  
   // Helper function to add log entries (memoized to avoid dependency warnings)
   const addLog = useCallback((level: LogLevel, message: string) => {
     const logEntry: LogEntry = {
