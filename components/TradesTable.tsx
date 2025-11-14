@@ -41,8 +41,15 @@ export default function TradesTable({
   };
 
   const calculateUnrealizedPnL = (trade: Trade): number | null => {
-    if (trade.status !== 'open' || currentPrice === null) return null;
+    if (trade.status !== 'open') return null;
     
+    // Use stored P&L from Bybit if available (more accurate)
+    if (trade.pnl !== undefined && trade.pnl !== null) {
+      return trade.pnl;
+    }
+    
+    // Fallback to calculated P&L if stored value not available
+    if (currentPrice === null) return null;
     const positionSize = trade.positionSize || 0;
     if (trade.side === 'LONG') {
       return (currentPrice - trade.entry) * positionSize;
@@ -52,8 +59,15 @@ export default function TradesTable({
   };
 
   const calculateRealizedPnL = (trade: Trade): number | null => {
-    if (trade.status === 'open' || !trade.exitPrice) return null;
+    if (trade.status === 'open') return null;
     
+    // Use stored P&L from Bybit if available (more accurate for closed trades)
+    if (trade.pnl !== undefined && trade.pnl !== null) {
+      return trade.pnl;
+    }
+    
+    // Fallback to calculated P&L if stored value not available
+    if (!trade.exitPrice) return null;
     const positionSize = trade.positionSize || 0;
     if (trade.side === 'LONG') {
       return (trade.exitPrice - trade.entry) * positionSize;

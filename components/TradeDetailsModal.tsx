@@ -49,6 +49,12 @@ export default function TradeDetailsModal({
   };
 
   const calculatePnL = () => {
+    // Use stored P&L from Bybit if available (more accurate)
+    if (trade.pnl !== undefined && trade.pnl !== null) {
+      return trade.pnl;
+    }
+    
+    // Fallback to calculated P&L
     if (trade.status === 'open') {
       if (!currentPrice) return null;
       return trade.side === 'LONG'

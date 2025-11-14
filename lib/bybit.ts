@@ -854,6 +854,74 @@ export async function cancelOrder(params: {
 }
 
 /**
+ * Fetch order status from Bybit
+ * Returns order information including status, filled quantity, etc.
+ */
+export async function getOrderStatus(params: {
+  symbol: string;
+  orderId?: string;
+  orderLinkId?: string;
+  testnet?: boolean;
+  apiKey: string;
+  apiSecret: string;
+}): Promise<any> {
+  const {
+    symbol,
+    orderId,
+    orderLinkId,
+    testnet = true,
+    apiKey,
+    apiSecret,
+  } = params;
+
+  if (!orderId && !orderLinkId) {
+    throw new Error('Either orderId or orderLinkId must be provided');
+  }
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/order/history';
+  const recvWindow = '5000';
+  const timestamp = Date.now().toString();
+  let query = `category=linear&symbol=${symbol.toUpperCase()}`;
+  if (orderId) {
+    query += `&orderId=${orderId}`;
+  }
+  if (orderLinkId) {
+    query += `&orderLinkId=${orderLinkId}`;
+  }
+  query += '&limit=1';
+  
+  const prehash = `${timestamp}${apiKey}${recvWindow}${query}`;
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(prehash)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}?${query}`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'X-BAPI-API-KEY': apiKey,
+      'X-BAPI-SIGN': signature,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-RECV-WINDOW': recvWindow,
+    },
+  });
+
+  if (!response.ok) {
+    throw new BybitError(response.status, `HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.retCode !== 0) {
+    throw new BybitError(data.retCode, data.retMsg || 'Failed to fetch order status');
+  }
+
+  return data;
+}
+
+/**
  * Fetch position information from Bybit
  * Returns the actual position size and unrealized P&L from Bybit
  */

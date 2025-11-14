@@ -270,73 +270,294 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          // Check for immediate bias change closure first
-          const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
-          for (const trade of openTrades) {
-            const entryPrice = Number(trade.entry_price);
-            const tpPrice = Number(trade.tp_price);
-            const initialSl = Number(trade.sl_price);
-            const currentSl = Number(trade.current_sl ?? trade.sl_price);
-            const positionSize = Number(trade.position_size);
+          // Sync trades with Bybit's actual data (for live mode only)
+          if (botConfig.api_mode === 'live' && botConfig.api_key && botConfig.api_secret) {
+            const { fetchPosition, getOrderStatus } = await import('@/lib/bybit');
+            const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
+            
+            for (const trade of openTrades) {
+              try {
+                // Check if trade has an order ID (pending or open)
+                if (trade.order_id) {
+                  // Check order status for pending trades
+                  if (trade.status === 'pending') {
+                    try {
+                      const orderStatus = await getOrderStatus({
+                        symbol: trade.symbol,
+                        orderId: trade.order_id,
+                        testnet: false,
+                        apiKey: botConfig.api_key,
+                        apiSecret: botConfig.api_secret,
+                      });
+                      
+                      const order = orderStatus.result?.list?.[0];
+                      if (order) {
+                        const orderStatusStr = order.orderStatus?.toLowerCase();
+                        if (orderStatusStr === 'filled') {
+                          // Order was filled, update trade to open
+                          await updateTrade(trade.id, {
+                            status: 'open',
+                            entry_price: parseFloat(order.avgPrice || order.price || trade.entry_price),
+                            position_size: parseFloat(order.executedQty || trade.position_size),
+                          } as any);
+                          await addActivityLog(
+                            botConfig.user_id,
+                            'success',
+                            `Order filled on Bybit: ${trade.side} ${trade.symbol} @ $${parseFloat(order.avgPrice || order.price).toFixed(2)}`,
+                            { orderId: trade.order_id, filledQty: order.executedQty },
+                            botConfig.id
+                          );
+                        } else if (orderStatusStr === 'cancelled' || orderStatusStr === 'rejected') {
+                          // Order was cancelled/rejected, update trade
+                          await updateTrade(trade.id, {
+                            status: 'cancelled',
+                            exit_time: new Date(),
+                          } as any);
+                          await addActivityLog(
+                            botConfig.user_id,
+                            'warning',
+                            `Order ${orderStatusStr} on Bybit: ${trade.side} ${trade.symbol}`,
+                            { orderId: trade.order_id, orderStatus: orderStatusStr },
+                            botConfig.id
+                          );
+                        }
+                      }
+                    } catch (orderError) {
+                      console.error(`[CRON] Error checking order status for trade ${trade.id}:`, orderError);
+                    }
+                  }
+                  
+                  // Check position status for open trades
+                  if (trade.status === 'open') {
+                    try {
+                      const positionData = await fetchPosition({
+                        symbol: trade.symbol,
+                        testnet: false,
+                        apiKey: botConfig.api_key,
+                        apiSecret: botConfig.api_secret,
+                        positionIdx: 0,
+                      });
+                      
+                      const position = positionData.result?.list?.find((p: any) => 
+                        p.symbol === trade.symbol.toUpperCase() && 
+                        parseFloat(p.size || '0') !== 0
+                      );
+                      
+                      if (!position || parseFloat(position.size || '0') === 0) {
+                        // Position doesn't exist on Bybit - trade was closed
+                        // Try to get the actual exit price and P&L from order history
+                        try {
+                          const orderStatus = await getOrderStatus({
+                            symbol: trade.symbol,
+                            orderId: trade.order_id,
+                            testnet: false,
+                            apiKey: botConfig.api_key,
+                            apiSecret: botConfig.api_secret,
+                          });
+                          
+                          // Look for closed orders - find orders that closed the position
+                          const allOrders = orderStatus.result?.list || [];
+                          // Find the most recent filled order that might be a close order
+                          const closeOrder = allOrders.find((o: any) => 
+                            o.orderStatus?.toLowerCase() === 'filled' &&
+                            (o.side === (trade.side === 'LONG' ? 'Sell' : 'Buy')) // Opposite side = closing order
+                          );
+                          
+                          // Calculate P&L from close order or use fallback
+                          let exitPrice = parseFloat(closeOrder?.avgPrice || trade.entry_price);
+                          const entryPrice = Number(trade.entry_price);
+                          const positionSize = Number(trade.position_size);
+                          let actualPnl = trade.side === 'LONG'
+                            ? (exitPrice - entryPrice) * positionSize
+                            : (entryPrice - exitPrice) * positionSize;
+                          
+                          // If no close order found, use mark price as fallback
+                          if (!closeOrder) {
+                            exitPrice = lastClose;
+                            actualPnl = trade.side === 'LONG'
+                              ? (exitPrice - entryPrice) * positionSize
+                              : (entryPrice - exitPrice) * positionSize;
+                          }
+                          
+                          // Determine if it was TP or SL based on exit price vs TP/SL levels
+                          const tpPrice = Number(trade.tp_price);
+                          const slPrice = Number(trade.current_sl ?? trade.sl_price);
+                          const isTP = trade.side === 'LONG' 
+                            ? exitPrice >= tpPrice * 0.99 // Within 1% of TP
+                            : exitPrice <= tpPrice * 1.01;
+                          const isSL = trade.side === 'LONG'
+                            ? exitPrice <= slPrice * 1.01
+                            : exitPrice >= slPrice * 0.99;
+                          
+                          const closeStatus = isTP ? 'tp' : (isSL ? 'sl' : 'tp'); // Default to TP if unclear
+                          
+                          await closeTrade(trade.id, closeStatus, exitPrice, actualPnl);
+                          await updateDailyPnL(botConfig.user_id, actualPnl);
+                          await addActivityLog(
+                            botConfig.user_id,
+                            'success',
+                            `Position closed on Bybit: ${trade.side} ${trade.symbol} @ $${exitPrice.toFixed(2)} (P&L: ${actualPnl >= 0 ? '+' : ''}$${actualPnl.toFixed(2)})`,
+                            { orderId: trade.order_id, exitPrice, pnl: actualPnl, closeStatus },
+                            botConfig.id
+                          );
+                        } catch (err) {
+                          console.error(`[CRON] Error checking closed order for trade ${trade.id}:`, err);
+                          // Mark as cancelled if we can't determine what happened
+                          await updateTrade(trade.id, {
+                            status: 'cancelled',
+                            exit_time: new Date(),
+                          } as any);
+                          await addActivityLog(
+                            botConfig.user_id,
+                            'warning',
+                            `Position not found on Bybit (may have been closed manually): ${trade.side} ${trade.symbol}`,
+                            { orderId: trade.order_id },
+                            botConfig.id
+                          );
+                        }
+                      } else {
+                        // Position exists - update with actual data from Bybit
+                        const actualSize = parseFloat(position.size || '0');
+                        const actualEntryPrice = parseFloat(position.avgPrice || trade.entry_price);
+                        const unrealizedPnl = parseFloat(position.unrealisedPnl || '0');
+                        const markPrice = parseFloat(position.markPrice || lastClose);
+                        
+                        // Update position size, entry price, and P&L from Bybit's actual data
+                        const needsUpdate = 
+                          Math.abs(actualSize - Number(trade.position_size)) > 0.0001 || 
+                          Math.abs(actualEntryPrice - Number(trade.entry_price)) > 0.01;
+                        
+                        if (needsUpdate) {
+                          await updateTrade(trade.id, {
+                            position_size: actualSize,
+                            entry_price: actualEntryPrice,
+                            pnl: unrealizedPnl, // Store Bybit's actual unrealized P&L
+                          } as any);
+                          console.log(`[CRON] Updated trade ${trade.id} with actual Bybit data: size=${actualSize}, entry=${actualEntryPrice}, unrealizedPnl=${unrealizedPnl.toFixed(2)}`);
+                        } else if (Math.abs(unrealizedPnl - Number(trade.pnl || 0)) > 0.01) {
+                          // Update P&L even if size/entry haven't changed
+                          await updateTrade(trade.id, {
+                            pnl: unrealizedPnl,
+                          } as any);
+                          console.log(`[CRON] Updated trade ${trade.id} P&L from Bybit: ${unrealizedPnl.toFixed(2)}`);
+                        }
+                        
+                        // Update trailing stop based on VWAP (still use this logic)
+                        const entryPrice = Number(trade.entry_price);
+                        const initialSl = Number(trade.sl_price);
+                        const currentSl = Number(trade.current_sl ?? trade.sl_price);
+                        
+                        const trailingSl = computeTrailingBreakeven(
+                          trade.side as 'LONG' | 'SHORT',
+                          entryPrice,
+                          initialSl,
+                          currentSl,
+                          markPrice
+                        );
+                        
+                        if (trailingSl !== null && Math.abs(trailingSl - currentSl) > 0.01) {
+                          await updateTrade(trade.id, { current_sl: trailingSl } as any);
+                          // Also update on Bybit
+                          try {
+                            const { setTakeProfitStopLoss } = await import('@/lib/bybit');
+                            await setTakeProfitStopLoss({
+                              symbol: trade.symbol,
+                              stopLoss: trailingSl,
+                              testnet: false,
+                              apiKey: botConfig.api_key,
+                              apiSecret: botConfig.api_secret,
+                              positionIdx: 0,
+                            });
+                            await addActivityLog(
+                              botConfig.user_id,
+                              'info',
+                              `Stop moved: ${trade.side} ${trade.symbol} SL → $${trailingSl.toFixed(2)}`,
+                              null,
+                              botConfig.id
+                            );
+                          } catch (slError) {
+                            console.error(`[CRON] Failed to update SL on Bybit:`, slError);
+                          }
+                        }
+                      }
+                    } catch (positionError) {
+                      console.error(`[CRON] Error checking position for trade ${trade.id}:`, positionError);
+                    }
+                  }
+                }
+              } catch (error) {
+                console.error(`[CRON] Error syncing trade ${trade.id} with Bybit:`, error);
+              }
+            }
+          } else {
+            // For demo/testnet mode, use chart-based checking (fallback)
+            const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
+            for (const trade of openTrades) {
+              const entryPrice = Number(trade.entry_price);
+              const tpPrice = Number(trade.tp_price);
+              const initialSl = Number(trade.sl_price);
+              const currentSl = Number(trade.current_sl ?? trade.sl_price);
+              const positionSize = Number(trade.position_size);
 
-            const trailingSl = computeTrailingBreakeven(
-              trade.side as 'LONG' | 'SHORT',
-              entryPrice,
-              initialSl,
-              currentSl,
-              lastClose
-            );
-
-            if (trailingSl !== null) {
-              await updateTrade(trade.id, { current_sl: trailingSl } as any);
-              await addActivityLog(
-                botConfig.user_id,
-                'info',
-                `Stop moved: ${trade.side} ${trade.symbol} SL → $${trailingSl.toFixed(2)}`,
-                null,
-                botConfig.id
+              const trailingSl = computeTrailingBreakeven(
+                trade.side as 'LONG' | 'SHORT',
+                entryPrice,
+                initialSl,
+                currentSl,
+                lastClose
               );
-              continue;
-            }
 
-            const lastCandle = candles[candles.length - 1];
-            let exitPrice = lastClose;
-            let hitTP = false;
-            let hitSL = false;
-
-            if (trade.side === 'LONG') {
-              if (lastCandle.high >= tpPrice) {
-                hitTP = true;
-                exitPrice = tpPrice;
-              } else if (lastCandle.low <= currentSl) {
-                hitSL = true;
-                exitPrice = currentSl;
+              if (trailingSl !== null) {
+                await updateTrade(trade.id, { current_sl: trailingSl } as any);
+                await addActivityLog(
+                  botConfig.user_id,
+                  'info',
+                  `Stop moved: ${trade.side} ${trade.symbol} SL → $${trailingSl.toFixed(2)}`,
+                  null,
+                  botConfig.id
+                );
+                continue;
               }
-            } else {
-              if (lastCandle.low <= tpPrice) {
-                hitTP = true;
-                exitPrice = tpPrice;
-              } else if (lastCandle.high >= currentSl) {
-                hitSL = true;
-                exitPrice = currentSl;
+
+              const lastCandle = candles[candles.length - 1];
+              let exitPrice = lastClose;
+              let hitTP = false;
+              let hitSL = false;
+
+              if (trade.side === 'LONG') {
+                if (lastCandle.high >= tpPrice) {
+                  hitTP = true;
+                  exitPrice = tpPrice;
+                } else if (lastCandle.low <= currentSl) {
+                  hitSL = true;
+                  exitPrice = currentSl;
+                }
+              } else {
+                if (lastCandle.low <= tpPrice) {
+                  hitTP = true;
+                  exitPrice = tpPrice;
+                } else if (lastCandle.high >= currentSl) {
+                  hitSL = true;
+                  exitPrice = currentSl;
+                }
               }
-            }
 
-            if (hitTP || hitSL) {
-              const pnl =
-                trade.side === 'LONG'
-                  ? (exitPrice - entryPrice) * positionSize
-                  : (entryPrice - exitPrice) * positionSize;
+              if (hitTP || hitSL) {
+                const pnl =
+                  trade.side === 'LONG'
+                    ? (exitPrice - entryPrice) * positionSize
+                    : (entryPrice - exitPrice) * positionSize;
 
-              await closeTrade(trade.id, hitTP ? 'tp' : 'sl', exitPrice, pnl);
-              await updateDailyPnL(botConfig.user_id, pnl);
+                await closeTrade(trade.id, hitTP ? 'tp' : 'sl', exitPrice, pnl);
+                await updateDailyPnL(botConfig.user_id, pnl);
 
-              const logLevel = hitTP ? 'success' : 'error';
-              const logMsg = hitTP
-                ? `Take profit hit: ${trade.side} @ $${entryPrice} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`
-                : `Stop loss hit: ${trade.side} @ $${entryPrice} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
+                const logLevel = hitTP ? 'success' : 'error';
+                const logMsg = hitTP
+                  ? `Take profit hit: ${trade.side} @ $${entryPrice} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`
+                  : `Stop loss hit: ${trade.side} @ $${entryPrice} → $${exitPrice.toFixed(2)} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
 
-              await addActivityLog(botConfig.user_id, logLevel, logMsg, null, botConfig.id);
+                await addActivityLog(botConfig.user_id, logLevel, logMsg, null, botConfig.id);
+              }
             }
           }
 

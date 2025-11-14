@@ -38,6 +38,7 @@ function serializeTrade(record: DbTrade): {
   leverage: number;
   positionSize: number;
   exitPrice?: number;
+  pnl?: number;
 } {
   return {
     id: record.id,
@@ -53,6 +54,7 @@ function serializeTrade(record: DbTrade): {
     leverage: Number(record.leverage),
     positionSize: Number(record.position_size),
     exitPrice: record.exit_price !== null ? Number(record.exit_price) : undefined,
+    pnl: record.pnl !== null && record.pnl !== undefined ? Number(record.pnl) : undefined,
   };
 }
 

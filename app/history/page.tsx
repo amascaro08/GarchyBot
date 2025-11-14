@@ -55,6 +55,7 @@ export default function HistoryPage() {
             leverage: t.leverage,
             positionSize: Number(t.position_size),
             exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
+            pnl: t.pnl !== null && t.pnl !== undefined ? Number(t.pnl) : undefined,
           }));
           setTrades(formattedTrades);
         } else {

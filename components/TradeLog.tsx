@@ -16,6 +16,7 @@ export interface Trade {
   symbol?: string;
   leverage?: number;
   positionSize?: number;
+  pnl?: number; // Stored P&L from Bybit (for open trades: unrealized, for closed: realized)
 }
 
 interface WalletSummary {
@@ -38,8 +39,15 @@ export default function TradeLog({ trades, sessionPnL, currentPrice, walletInfo 
   };
 
   const calculateUnrealizedPnL = (trade: Trade): number | null => {
-    if (trade.status !== 'open' || currentPrice === null) return null;
+    if (trade.status !== 'open') return null;
     
+    // Use stored P&L from Bybit if available (more accurate)
+    if (trade.pnl !== undefined && trade.pnl !== null) {
+      return trade.pnl;
+    }
+    
+    // Fallback to calculated P&L if stored value not available
+    if (currentPrice === null) return null;
     const positionSize = trade.positionSize || 0;
     if (trade.side === 'LONG') {
       return (currentPrice - trade.entry) * positionSize;
