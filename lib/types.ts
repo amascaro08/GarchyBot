@@ -40,10 +40,17 @@ export type LevelsResponse = z.infer<typeof LevelsResponseSchema>;
 // Signal request/response
 export const SignalRequestSchema = z.object({
   symbol: z.string(),
-  kPct: z.number().min(0.01).max(0.1),
-  subdivisions: z.number().int().min(1).max(50),
-  noTradeBandPct: z.number().min(0).max(0.01).default(0.001),
+  kPct: z.coerce.number().min(0.01).max(0.1), // Coerce string to number (from database)
+  subdivisions: z.coerce.number().int().min(1).max(50), // Coerce string to number
+  noTradeBandPct: z.coerce.number().min(0).max(0.01).default(0.001), // Coerce string to number
   candles: z.array(CandleSchema),
+  // Optional fields that may be passed
+  dOpen: z.number().optional(),
+  upperLevels: z.array(z.number()).optional(),
+  lowerLevels: z.array(z.number()).optional(),
+  vwap: z.number().optional(),
+  useDailyOpenEntry: z.boolean().optional(),
+  realtimePrice: z.number().optional(),
 });
 
 export type SignalRequest = z.infer<typeof SignalRequestSchema>;
