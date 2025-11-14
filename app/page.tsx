@@ -16,7 +16,8 @@ import { io, Socket } from 'socket.io-client';
 
 const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = DEFAULT_SYMBOLS[0];
-const POLL_INTERVAL = 12000; // 12 seconds
+const POLL_INTERVAL = 12000; // 12 seconds (reduced frequency for levels recalculation)
+const LEVELS_RECALC_INTERVAL = 60000; // 60 seconds - levels only need periodic recalculation
 const PENDING_FILL_DELAY_MS = 5000; // wait 5s before considering pending orders fillable
 const SUBDIVISIONS = 5;
 const NO_TRADE_BAND_PCT = 0.001;
@@ -82,7 +83,91 @@ export default function Home() {
   const [overrideDailyLimits, setOverrideDailyLimits] = useState<boolean>(false);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const levelsRecalcIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const tradesRef = useRef<Trade[]>([]);
+  const wsDataRef = useRef<{ candles: Candle[]; ticker: any; lastCandleCloseTime: number | null } | null>(null);
+  
+  // Use WebSocket for real-time ticker data and candle updates (shared with Chart)
+  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected } = useWebSocket(symbol, candleInterval, candles);
+  
+  // Real-time TP/SL checks using ticker data (faster than waiting for candle close)
+  useEffect(() => {
+    if (!botRunning || !wsTicker?.lastPrice || wsTicker.lastPrice <= 0) {
+      return;
+    }
+
+    const checkTPSL = async () => {
+      const openTradesSnapshot = tradesRef.current.filter(
+        (trade) => trade.status === 'open' && trade.symbol === symbol
+      );
+
+      for (const trade of openTradesSnapshot) {
+        const currentPrice = wsTicker.lastPrice;
+        
+        // Check TP/SL with current price (more responsive than waiting for candle close)
+        if (trade.side === 'LONG') {
+          if (currentPrice >= trade.tp) {
+            await closeTradeOnServer(
+              trade,
+              'tp',
+              trade.tp,
+              'success',
+              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
+            );
+            continue;
+          }
+          if (currentPrice <= trade.sl) {
+            await closeTradeOnServer(
+              trade,
+              'sl',
+              trade.sl,
+              'error',
+              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
+            );
+            continue;
+          }
+        } else {
+          // SHORT
+          if (currentPrice <= trade.tp) {
+            await closeTradeOnServer(
+              trade,
+              'tp',
+              trade.tp,
+              'success',
+              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
+            );
+            continue;
+          }
+          if (currentPrice >= trade.sl) {
+            await closeTradeOnServer(
+              trade,
+              'sl',
+              trade.sl,
+              'error',
+              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
+            );
+            continue;
+          }
+        }
+
+        // Update trailing stop loss using current price
+        const initialSl = trade.initialSl ?? trade.sl;
+        const trailingSl = computeTrailingBreakeven(
+          trade.side,
+          trade.entry,
+          initialSl,
+          trade.sl,
+          currentPrice
+        );
+
+        if (trailingSl !== null && trailingSl !== trade.sl) {
+          await updateTradeStopOnServer(trade, trailingSl);
+        }
+      }
+    };
+
+    checkTPSL();
+  }, [wsTicker?.lastPrice, wsTicker?.timestamp, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer]);
   
   // Helper function to add log entries (memoized to avoid dependency warnings)
   const addLog = useCallback((level: LogLevel, message: string) => {
@@ -605,23 +690,24 @@ export default function Home() {
       }
 
       // Simulate TP/SL checks for open trades
-      if (candlesData.length > 0) {
+      // Use ticker data if available (more real-time), otherwise use candle data
+      const priceForChecks = wsTicker?.lastPrice && wsTicker.lastPrice > 0 
+        ? wsTicker.lastPrice 
+        : (candlesData.length > 0 ? lastClose : null);
+      
+      if (priceForChecks && Number.isFinite(priceForChecks)) {
         const openTradesSnapshot = tradesRef.current.filter(
           (trade) => trade.status === 'open' && trade.symbol === symbol
         );
 
         for (const trade of openTradesSnapshot) {
-          if (!Number.isFinite(lastClose)) {
-            continue;
-          }
-
           const initialSl = trade.initialSl ?? trade.sl;
           const trailingSl = computeTrailingBreakeven(
             trade.side,
             trade.entry,
             initialSl,
             trade.sl,
-            lastClose
+            priceForChecks
           );
 
           if (trailingSl !== null) {
@@ -630,7 +716,11 @@ export default function Home() {
           }
 
           if (trade.side === 'LONG') {
-            if (lastCandle.high >= trade.tp) {
+            // Use candle high/low for accurate execution, ticker provides real-time price
+            const highPrice = candlesData.length > 0 ? lastCandle.high : priceForChecks;
+            const lowPrice = candlesData.length > 0 ? lastCandle.low : priceForChecks;
+              
+            if (highPrice >= trade.tp) {
               await closeTradeOnServer(
                 trade,
                 'tp',
@@ -640,7 +730,7 @@ export default function Home() {
               );
               continue;
             }
-            if (lastCandle.low <= trade.sl) {
+            if (lowPrice <= trade.sl) {
               await closeTradeOnServer(
                 trade,
                 'sl',
@@ -650,7 +740,11 @@ export default function Home() {
               );
             }
           } else {
-            if (lastCandle.low <= trade.tp) {
+            // SHORT - use candle high/low for accurate execution
+            const highPrice = candlesData.length > 0 ? lastCandle.high : priceForChecks;
+            const lowPrice = candlesData.length > 0 ? lastCandle.low : priceForChecks;
+              
+            if (lowPrice <= trade.tp) {
               await closeTradeOnServer(
                 trade,
                 'tp',
@@ -660,7 +754,7 @@ export default function Home() {
               );
               continue;
             }
-            if (lastCandle.high >= trade.sl) {
+            if (highPrice >= trade.sl) {
               await closeTradeOnServer(
                 trade,
                 'sl',

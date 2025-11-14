@@ -52,6 +52,7 @@ interface WebSocketHook {
   candles: Candle[];
   trades: TradeData[];
   ticker: TickerData | null;
+  lastCandleCloseTime: number | null; // Timestamp of last candle close event
 
   // Controls
   connect: () => void;
@@ -78,6 +79,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
   const [orderBook, setOrderBook] = useState<OrderBookData | null>(null);
   const [candles, setCandles] = useState<Candle[]>(initialCandles);
   const [ticker, setTicker] = useState<TickerData | null>(null);
+  const [lastCandleCloseTime, setLastCandleCloseTime] = useState<number | null>(null);
 
   // Update candles state when initialCandles changes (but don't reset if we already have WS data)
   useEffect(() => {
@@ -419,6 +421,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
         setCandles(prevCandles => {
           // Check if this is an update to the last candle or a new one
           const lastCandle = prevCandles[prevCandles.length - 1];
+          const isNewCandle = !lastCandle || lastCandle.ts !== candle.ts;
 
           if (lastCandle && lastCandle.ts === candle.ts) {
             // Update the last candle
@@ -428,6 +431,13 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
           } else {
             // Add new candle, keep only last 200
             const newCandles = [...prevCandles, candle];
+            
+            // If this is a new candle (not an update), record the close time
+            if (isNewCandle && prevCandles.length > 0) {
+              // Previous candle just closed, record its close time
+              setLastCandleCloseTime(Date.now());
+            }
+            
             return newCandles.slice(-200);
           }
         });
@@ -487,6 +497,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
     candles,
     trades,
     ticker,
+    lastCandleCloseTime,
     connect,
     disconnect,
   };
