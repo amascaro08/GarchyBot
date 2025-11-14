@@ -1,4 +1,4 @@
-import { YahooFinance } from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2';
 
 // Instantiate YahooFinance client (required for v3+)
 const yahooFinance = new YahooFinance();
