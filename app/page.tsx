@@ -91,85 +91,6 @@ export default function Home() {
   // Use WebSocket for real-time ticker data and candle updates (shared with Chart)
   const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected } = useWebSocket(symbol, candleInterval, candles);
   
-  // Real-time TP/SL checks using ticker data (faster than waiting for candle close)
-  useEffect(() => {
-    if (!botRunning || !wsTicker?.lastPrice || wsTicker.lastPrice <= 0) {
-      return;
-    }
-
-    const checkTPSL = async () => {
-      const openTradesSnapshot = tradesRef.current.filter(
-        (trade) => trade.status === 'open' && trade.symbol === symbol
-      );
-
-      for (const trade of openTradesSnapshot) {
-        const currentPrice = wsTicker.lastPrice;
-        
-        // Check TP/SL with current price (more responsive than waiting for candle close)
-        if (trade.side === 'LONG') {
-          if (currentPrice >= trade.tp) {
-            await closeTradeOnServer(
-              trade,
-              'tp',
-              trade.tp,
-              'success',
-              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
-            );
-            continue;
-          }
-          if (currentPrice <= trade.sl) {
-            await closeTradeOnServer(
-              trade,
-              'sl',
-              trade.sl,
-              'error',
-              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
-            );
-            continue;
-          }
-        } else {
-          // SHORT
-          if (currentPrice <= trade.tp) {
-            await closeTradeOnServer(
-              trade,
-              'tp',
-              trade.tp,
-              'success',
-              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
-            );
-            continue;
-          }
-          if (currentPrice >= trade.sl) {
-            await closeTradeOnServer(
-              trade,
-              'sl',
-              trade.sl,
-              'error',
-              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
-            );
-            continue;
-          }
-        }
-
-        // Update trailing stop loss using current price
-        const initialSl = trade.initialSl ?? trade.sl;
-        const trailingSl = computeTrailingBreakeven(
-          trade.side,
-          trade.entry,
-          initialSl,
-          trade.sl,
-          currentPrice
-        );
-
-        if (trailingSl !== null && trailingSl !== trade.sl) {
-          await updateTradeStopOnServer(trade, trailingSl);
-        }
-      }
-    };
-
-    checkTPSL();
-  }, [wsTicker?.lastPrice, wsTicker?.timestamp, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer]);
-  
   // Helper function to add log entries (memoized to avoid dependency warnings)
   const addLog = useCallback((level: LogLevel, message: string) => {
     const logEntry: LogEntry = {
@@ -523,6 +444,85 @@ export default function Home() {
       return null;
     }
   }, [replaceTradeInState, addLog]);
+
+  // Real-time TP/SL checks using ticker data (faster than waiting for candle close)
+  useEffect(() => {
+    if (!botRunning || !wsTicker?.lastPrice || wsTicker.lastPrice <= 0) {
+      return;
+    }
+
+    const checkTPSL = async () => {
+      const openTradesSnapshot = tradesRef.current.filter(
+        (trade) => trade.status === 'open' && trade.symbol === symbol
+      );
+
+      for (const trade of openTradesSnapshot) {
+        const currentPrice = wsTicker.lastPrice;
+        
+        // Check TP/SL with current price (more responsive than waiting for candle close)
+        if (trade.side === 'LONG') {
+          if (currentPrice >= trade.tp) {
+            await closeTradeOnServer(
+              trade,
+              'tp',
+              trade.tp,
+              'success',
+              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
+            );
+            continue;
+          }
+          if (currentPrice <= trade.sl) {
+            await closeTradeOnServer(
+              trade,
+              'sl',
+              trade.sl,
+              'error',
+              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
+            );
+            continue;
+          }
+        } else {
+          // SHORT
+          if (currentPrice <= trade.tp) {
+            await closeTradeOnServer(
+              trade,
+              'tp',
+              trade.tp,
+              'success',
+              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
+            );
+            continue;
+          }
+          if (currentPrice >= trade.sl) {
+            await closeTradeOnServer(
+              trade,
+              'sl',
+              trade.sl,
+              'error',
+              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
+            );
+            continue;
+          }
+        }
+
+        // Update trailing stop loss using current price
+        const initialSl = trade.initialSl ?? trade.sl;
+        const trailingSl = computeTrailingBreakeven(
+          trade.side,
+          trade.entry,
+          initialSl,
+          trade.sl,
+          currentPrice
+        );
+
+        if (trailingSl !== null && trailingSl !== trade.sl) {
+          await updateTradeStopOnServer(trade, trailingSl);
+        }
+      }
+    };
+
+    checkTPSL();
+  }, [wsTicker?.lastPrice, wsTicker?.timestamp, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer]);
 
   // Main polling function - uses current symbol/interval from closure
   const pollData = async () => {
