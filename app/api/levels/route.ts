@@ -47,10 +47,12 @@ export async function POST(request: NextRequest) {
           // Calculate from Yahoo Finance (3 years of data, matches Python script)
           console.log(`[LEVELS] Calculating volatility from Yahoo Finance for ${validated.symbol}...`);
           let yahooCandles;
+          let yahooFailed = false;
           try {
             yahooCandles = await getYahooFinanceKlines(validated.symbol, 1095); // 3 years
           } catch (yahooError) {
             console.warn(`[LEVELS] Yahoo Finance failed, falling back to Bybit data:`, yahooError);
+            yahooFailed = true;
             // Fallback to Bybit if Yahoo Finance fails
             const dailyAsc = daily.slice().reverse();
             const dailyCloses = dailyAsc.map(c => c.close);
@@ -63,7 +65,8 @@ export async function POST(request: NextRequest) {
             kPct = volatilityResult.averaged.kPct;
           }
           
-          if (yahooCandles && yahooCandles.length > 0) {
+          // If Yahoo Finance succeeded and we have candles, use them
+          if (!yahooFailed && yahooCandles && yahooCandles.length > 0) {
             const yahooCloses = yahooCandles.map(c => c.close);
             const volatilityResult = calculateAverageVolatility(yahooCloses, {
               clampPct: [1, 10],
@@ -87,6 +90,12 @@ export async function POST(request: NextRequest) {
           horizon: 5,
         });
         kPct = volatilityResult.averaged.kPct;
+      }
+      
+      // Ensure kPct is set (final fallback if all else fails)
+      if (!kPct || !isFinite(kPct)) {
+        console.warn(`[LEVELS] kPct not set, using default 0.03 (3%)`);
+        kPct = 0.03;
       }
       
       // Final safety clamp to prevent extreme values
