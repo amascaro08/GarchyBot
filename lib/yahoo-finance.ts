@@ -1,4 +1,7 @@
-import yahooFinance from 'yahoo-finance2';
+import { YahooFinance } from 'yahoo-finance2';
+
+// Instantiate YahooFinance client (required for v3+)
+const yahooFinance = new YahooFinance();
 
 /**
  * Map exchange symbols to Yahoo Finance tickers
