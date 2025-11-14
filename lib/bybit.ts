@@ -407,7 +407,8 @@ export async function placeOrder(params: {
   testnet?: boolean;
   apiKey?: string | null;
   apiSecret?: string | null;
-  timeInForce?: 'GoodTillCancel' | 'ImmediateOrCancel' | 'FillOrKill' | 'PostOnly';
+  timeInForce?: 'GTC' | 'IOC' | 'FOK' | 'PostOnly';
+  positionIdx?: 0 | 1 | 2; // 0=one-way, 1=buy side of hedge-mode, 2=sell side of hedge-mode
 }): Promise<any> {
   const {
     symbol,
@@ -417,7 +418,8 @@ export async function placeOrder(params: {
     testnet = true,
     apiKey: overrideApiKey,
     apiSecret: overrideApiSecret,
-    timeInForce = 'GoodTillCancel',
+    timeInForce = 'GTC', // Changed to match Bybit API: GTC, IOC, FOK, PostOnly
+    positionIdx = 0, // Default to one-way mode
   } = params;
 
   const apiKey = overrideApiKey || process.env.BYBIT_API_KEY;
@@ -432,17 +434,20 @@ export async function placeOrder(params: {
   const timestamp = Date.now();
   const recvWindow = 5000;
 
-  // Request body (without timestamp and recvWindow)
+  // Request body according to Bybit v5 API documentation
+  // https://bybit-exchange.github.io/docs/v5/order/create-order
   const requestBody: Record<string, any> = {
     category: 'linear',
-    symbol,
+    symbol: symbol.toUpperCase(), // Ensure symbol is uppercase
     side,
     orderType: price ? 'Limit' : 'Market',
     qty: qty.toString(),
     timeInForce,
+    positionIdx, // Required for linear contracts: 0=one-way mode
   };
 
-  if (price !== undefined) {
+  // Price is required for Limit orders
+  if (price !== undefined && price > 0) {
     requestBody.price = price.toString();
   }
 
@@ -481,15 +486,22 @@ export async function placeOrder(params: {
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error(`[Bybit API] HTTP Error ${response.status}: ${errorText}`);
       throw new BybitError(response.status, `HTTP ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
 
     if (data.retCode !== 0) {
-      throw new BybitError(data.retCode, data.retMsg || 'Unknown Bybit API error');
+      // Enhanced error message with full response for debugging
+      const errorMsg = data.retMsg || 'Unknown Bybit API error';
+      console.error(`[Bybit API Error] retCode: ${data.retCode}, retMsg: ${errorMsg}`);
+      console.error(`[Bybit API Error] Request: ${JSON.stringify(requestBody, null, 2)}`);
+      console.error(`[Bybit API Error] Full response: ${JSON.stringify(data, null, 2)}`);
+      throw new BybitError(data.retCode, `${errorMsg} (retCode: ${data.retCode})`);
     }
 
+    console.log(`[Bybit API] Order placed successfully: ${JSON.stringify(data.result, null, 2)}`);
     return data;
   } catch (error) {
     if (error instanceof BybitError) {

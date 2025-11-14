@@ -454,7 +454,8 @@ export async function POST(request: NextRequest) {
                         testnet: botConfig.api_mode !== 'live',
                         apiKey: botConfig.api_key,
                         apiSecret: botConfig.api_secret,
-                        timeInForce: 'GoodTillCancel', // Changed from PostOnly to allow immediate execution
+                        timeInForce: 'GTC', // Good Till Cancel - matches Bybit API format
+                        positionIdx: 0, // One-way mode
                       });
 
                       // Check if order was actually created successfully
