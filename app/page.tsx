@@ -13,6 +13,7 @@ import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 import { computeTrailingBreakeven } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
+import { useWebSocket } from '@/lib/useWebSocket';
 
 const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = DEFAULT_SYMBOLS[0];
