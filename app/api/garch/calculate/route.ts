@@ -46,11 +46,20 @@ export async function GET(request: NextRequest) {
     console.log(`[GARCH-CALC] Successfully fetched ${candles.length} candles for ${symbol}`);
     
     // Extract closing prices and validate
-    const closes = candles.map(c => c.close).filter(price => price > 0);
+    let closes = candles.map(c => c.close).filter(price => price > 0 && isFinite(price));
+    
+    // Filter out obvious outliers (for BTC, prices outside 1k-300k are likely bad data)
+    if (symbol === 'BTCUSDT' || symbol === 'BTC-USDT') {
+      const originalLength = closes.length;
+      closes = closes.filter(price => price >= 1000 && price <= 300000);
+      if (closes.length < originalLength) {
+        console.warn(`[GARCH-CALC] Filtered out ${originalLength - closes.length} outlier prices for ${symbol}`);
+      }
+    }
     
     if (closes.length < 30) {
       return NextResponse.json(
-        { error: `Insufficient data: only ${closes.length} days` },
+        { error: `Insufficient data after filtering: only ${closes.length} valid prices` },
         { status: 400 }
       );
     }

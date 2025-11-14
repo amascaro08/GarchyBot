@@ -131,11 +131,21 @@ function logReturns(prices: number[]): number[] {
     
     // Validate prices: must be positive and finite
     if (prevPrice > 0 && currPrice > 0 && isFinite(prevPrice) && isFinite(currPrice)) {
+      // Filter out prices that look like outliers (e.g., 1999999.80 for BTC)
+      // For BTC, reasonable range is ~1k to ~300k
+      // Check if price change is suspiciously large (might be bad data)
+      const priceChangeRatio = currPrice / prevPrice;
+      if (priceChangeRatio > 10 || priceChangeRatio < 0.1) {
+        // Price jumped more than 10x or dropped more than 90% - likely bad data
+        continue;
+      }
+      
       const logReturn = Math.log(currPrice / prevPrice);
       
-      // Filter out extreme returns (>50% or <-50% daily move is suspicious)
+      // Filter out extreme returns (>50% or <-50% daily move is suspicious for daily data)
       // This prevents outliers from skewing the volatility calculation
-      if (isFinite(logReturn) && Math.abs(logReturn) < 0.693) { // ln(2) ≈ 0.693 for 100% move
+      // For daily BTC, moves >30% are extremely rare, >50% is likely bad data
+      if (isFinite(logReturn) && Math.abs(logReturn) < 0.405) { // ln(1.5) ≈ 0.405 for 50% move (stricter than before)
         returns.push(logReturn);
       }
     }
@@ -865,29 +875,59 @@ function forecastEgarch(
   horizon: number
 ): number[] {
   const { omega = -0.1, alpha = 0.1, gamma = 0.1, beta = 0.9 } = model.params;
-  const lnSigma2_t = Math.log(model.finalVariance);
+  
+  // Validate inputs to prevent Infinity
+  if (!isFinite(model.finalVariance) || model.finalVariance <= 0) {
+    console.error(`[GARCH-DEBUG] EGARCH: Invalid finalVariance: ${model.finalVariance}`);
+    // Fallback: use a reasonable default variance
+    const defaultVar = 100; // 10% volatility squared in percentage units
+    model.finalVariance = defaultVar;
+  }
+  
+  if (!isFinite(model.lastReturn)) {
+    console.error(`[GARCH-DEBUG] EGARCH: Invalid lastReturn: ${model.lastReturn}`);
+    model.lastReturn = 0;
+  }
+  
+  const lnSigma2_t = Math.log(Math.max(model.finalVariance, 1e-8));
   const r_t = model.lastReturn;
-  const sigma_t = Math.sqrt(model.finalVariance);
-  const epsilon_t = r_t / sigma_t;
+  const sigma_t = Math.sqrt(Math.max(model.finalVariance, 1e-8));
+  const epsilon_t = sigma_t > 1e-6 ? r_t / sigma_t : 0;
   const absEpsilon_t = Math.abs(epsilon_t);
   
   // One-step ahead forecast
   const lnSigma2_t1 = omega + alpha * epsilon_t + gamma * (absEpsilon_t - Math.sqrt(2 / Math.PI)) + beta * lnSigma2_t;
-  const sigma2_t1 = Math.exp(lnSigma2_t1);
+  
+  // Prevent Infinity from exp(lnSigma2_t1)
+  const lnSigma2_t1_clamped = Math.max(-50, Math.min(50, lnSigma2_t1));
+  const sigma2_t1 = Math.exp(lnSigma2_t1_clamped);
   
   // Long-run log variance
   // E[ln(sigma^2)] = omega / (1 - beta) for symmetric case
-  const longRunLnVar = omega / (1 - beta);
+  // But prevent division by zero or Infinity
+  const betaClamped = Math.max(0.01, Math.min(0.999, beta));
+  const longRunLnVar = omega / (1 - betaClamped);
+  const longRunLnVar_clamped = Math.max(-50, Math.min(50, longRunLnVar));
   
   // Multi-step ahead forecast
   const forecasts: number[] = [];
-  forecasts.push(Math.sqrt(sigma2_t1)); // h=1
+  const sigma1 = Math.sqrt(Math.max(sigma2_t1, 1e-8));
+  forecasts.push(sigma1); // h=1
   
   for (let h = 2; h <= horizon; h++) {
     // For h>1, use long-run variance with decay
-    const lnSigma2_th = longRunLnVar + Math.pow(beta, h - 1) * (lnSigma2_t1 - longRunLnVar);
-    const sigma2_th = Math.exp(lnSigma2_th);
+    const lnSigma2_th = longRunLnVar_clamped + Math.pow(betaClamped, h - 1) * (lnSigma2_t1_clamped - longRunLnVar_clamped);
+    const lnSigma2_th_clamped = Math.max(-50, Math.min(50, lnSigma2_th));
+    const sigma2_th = Math.exp(lnSigma2_th_clamped);
     forecasts.push(Math.sqrt(Math.max(sigma2_th, 1e-8)));
+  }
+  
+  // Validate forecasts - if any are Infinity or NaN, replace with historical average
+  const validForecasts = forecasts.filter(f => isFinite(f) && f > 0);
+  if (validForecasts.length === 0 || validForecasts.length < forecasts.length) {
+    console.warn(`[GARCH-DEBUG] EGARCH: Some forecasts were invalid, using fallback`);
+    const fallback = Math.sqrt(Math.max(model.finalVariance, 1e-8));
+    return Array(horizon).fill(fallback);
   }
   
   return forecasts;
@@ -1080,9 +1120,22 @@ export function calculateAverageVolatility(
 
   // Average the forecasted sigmas over h days for each model (in percentage units)
   // These are already in percentage units (e.g., 2.5 means 2.5%)
-  const promGarch = garchForecasts.reduce((a, b) => a + b, 0) / garchForecasts.length;
-  const promGjr = gjrForecasts.reduce((a, b) => a + b, 0) / gjrForecasts.length;
-  const promEgarch = egarchForecasts.reduce((a, b) => a + b, 0) / egarchForecasts.length;
+  // Filter out Infinity and NaN values
+  const validGarchForecasts = garchForecasts.filter(f => isFinite(f) && f > 0);
+  const validGjrForecasts = gjrForecasts.filter(f => isFinite(f) && f > 0);
+  const validEgarchForecasts = egarchForecasts.filter(f => isFinite(f) && f > 0);
+  
+  const promGarch = validGarchForecasts.length > 0 
+    ? validGarchForecasts.reduce((a, b) => a + b, 0) / validGarchForecasts.length
+    : returnsStdDevPct; // Fallback to historical std dev
+  
+  const promGjr = validGjrForecasts.length > 0
+    ? validGjrForecasts.reduce((a, b) => a + b, 0) / validGjrForecasts.length
+    : returnsStdDevPct; // Fallback to historical std dev
+  
+  const promEgarch = validEgarchForecasts.length > 0
+    ? validEgarchForecasts.reduce((a, b) => a + b, 0) / validEgarchForecasts.length
+    : returnsStdDevPct; // Fallback to historical std dev
 
   // Debug logging - print prominently to console
   if (symbol && timeframe) {
