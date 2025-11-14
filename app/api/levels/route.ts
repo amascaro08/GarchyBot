@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Use custom kPct if provided, otherwise calculate from Yahoo Finance (3 years of data)
-    let kPct: number;
+    let kPct: number = 0.03; // Default value to satisfy TypeScript
     if (validated.customKPct !== undefined) {
       // Use custom kPct provided by user (already validated to be between 0.01 and 0.1)
       kPct = validated.customKPct;
@@ -77,6 +77,20 @@ export async function POST(request: NextRequest) {
             kPct = volatilityResult.averaged.kPct;
             console.log(`[LEVELS] Calculated volatility from Yahoo Finance: ${(kPct * 100).toFixed(4)}%`);
           }
+          
+          // If Yahoo Finance succeeded but returned no candles, fall back to Bybit
+          if (!yahooFailed && (!yahooCandles || yahooCandles.length === 0)) {
+            console.warn(`[LEVELS] Yahoo Finance returned no candles, falling back to Bybit data`);
+            const dailyAsc = daily.slice().reverse();
+            const dailyCloses = dailyAsc.map(c => c.close);
+            const volatilityResult = calculateAverageVolatility(dailyCloses, {
+              clampPct: [1, 10],
+              symbol: validated.symbol,
+              timeframe: '1d',
+              horizon: 5,
+            });
+            kPct = volatilityResult.averaged.kPct;
+          }
         }
       } catch (error) {
         console.error(`[LEVELS] Error getting volatility, using fallback:`, error);
@@ -90,12 +104,6 @@ export async function POST(request: NextRequest) {
           horizon: 5,
         });
         kPct = volatilityResult.averaged.kPct;
-      }
-      
-      // Ensure kPct is set (final fallback if all else fails)
-      if (!kPct || !isFinite(kPct)) {
-        console.warn(`[LEVELS] kPct not set, using default 0.03 (3%)`);
-        kPct = 0.03;
       }
       
       // Final safety clamp to prevent extreme values
