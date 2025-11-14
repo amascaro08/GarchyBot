@@ -79,9 +79,9 @@ export async function POST(request: NextRequest) {
           // ================================
           console.log(`[DAILY-SETUP] Phase 1: Calculating volatility for ${symbol}`);
 
-          // Fetch 1000+ days of historical data (limit=1000)
+          // Fetch 3 years of historical data (limit=1095 for ~3 years)
           const klinesRes = await fetch(
-            `${baseUrl}/api/klines?symbol=${symbol}&interval=1d&limit=1000&testnet=false`
+            `${baseUrl}/api/klines?symbol=${symbol}&interval=1d&limit=1095&testnet=false`
           );
 
           if (!klinesRes.ok) {
@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
             throw new Error(`No historical data received for ${symbol}`);
           }
 
-          console.log(`[DAILY-SETUP] Fetched ${candles.length} days of historical data for ${symbol}`);
+          console.log(`[DAILY-SETUP] Fetched ${candles.length} days of historical data (3 years) for ${symbol}`);
           debugInfo.dataPoints = candles.length;
 
           // Extract closing prices

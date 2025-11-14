@@ -14,19 +14,21 @@ export async function GET(request: NextRequest) {
     
     console.log(`[GARCH-CALC] Calculating volatility for ${symbol}...`);
     
-    // Fetch 1000+ days of historical data
+    // Fetch 3 years of historical data (~1095 days)
     // Try testnet first, then mainnet if that fails
     let candles;
     let lastError;
     
+    const daysToFetch = 1095; // 3 years of daily data
+    
     try {
-      console.log(`[GARCH-CALC] Trying testnet API...`);
-      candles = await getKlines(symbol, 'D', 1000, true); // Use 'D' for daily, testnet first
+      console.log(`[GARCH-CALC] Trying testnet API for ${daysToFetch} days (3 years)...`);
+      candles = await getKlines(symbol, 'D', daysToFetch, true); // Use 'D' for daily, testnet first
     } catch (testnetError) {
       lastError = testnetError;
       console.warn(`[GARCH-CALC] Testnet failed, trying mainnet...`, testnetError instanceof Error ? testnetError.message : testnetError);
       try {
-        candles = await getKlines(symbol, 'D', 1000, false); // Try mainnet
+        candles = await getKlines(symbol, 'D', daysToFetch, false); // Try mainnet
       } catch (mainnetError) {
         lastError = mainnetError;
         console.error(`[GARCH-CALC] Both testnet and mainnet failed. Mainnet error:`, mainnetError instanceof Error ? mainnetError.message : mainnetError);
