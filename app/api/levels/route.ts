@@ -14,57 +14,60 @@ export async function POST(request: NextRequest) {
     const validated = LevelsRequestSchema.parse(body);
     const testnet = body.testnet !== undefined ? body.testnet : true; // Default to testnet
 
-    // Try to get stored levels from database first (calculated once per day)
+    // ALWAYS try to get stored levels from database first (calculated once per day at UTC midnight)
+    // This ensures consistency - daily open and levels should NEVER change during the day
+    const nowUTC = new Date();
+    const todayUTC = new Date(Date.UTC(
+      nowUTC.getUTCFullYear(),
+      nowUTC.getUTCMonth(),
+      nowUTC.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    const todayUTCStr = todayUTC.toISOString().split('T')[0]; // YYYY-MM-DD in UTC
+    
     try {
-      const storedLevels = await getDailyLevels(validated.symbol);
-      if (storedLevels) {
-        // Compare dates using UTC (stored date is in YYYY-MM-DD format)
-        const storedDateStr = storedLevels.date; // YYYY-MM-DD format
-        const nowUTC = new Date();
-        const todayUTC = new Date(Date.UTC(
-          nowUTC.getUTCFullYear(),
-          nowUTC.getUTCMonth(),
-          nowUTC.getUTCDate(),
-          0, 0, 0, 0
-        ));
-        const todayUTCStr = todayUTC.toISOString().split('T')[0]; // YYYY-MM-DD in UTC
+      const storedLevels = await getDailyLevels(validated.symbol, todayUTCStr);
+      if (storedLevels && storedLevels.date === todayUTCStr) {
+        console.log(`[LEVELS] ✓ Using stored daily levels for ${validated.symbol} (date: ${storedLevels.date} UTC) - these are fixed for the day`);
+        console.log(`[LEVELS]   Daily Open: ${storedLevels.daily_open_price.toFixed(2)}`);
+        console.log(`[LEVELS]   Upper Range: ${storedLevels.upper_range.toFixed(2)}, Lower Range: ${storedLevels.lower_range.toFixed(2)}`);
+        console.log(`[LEVELS]   Grid Levels - Up: ${storedLevels.up_levels.length}, Down: ${storedLevels.dn_levels.length}`);
         
-        // Check if stored levels are for today (UTC)
-        if (storedDateStr === todayUTCStr) {
-          console.log(`[LEVELS] Using stored daily levels for ${validated.symbol} (date: ${storedLevels.date})`);
-          
-          // Still need VWAP calculated from current candles for real-time display
-          // But use stored levels for entry/TP/SL
-          let intraday;
-          try {
-            intraday = await getKlines(validated.symbol, '5', 288, false);
-          } catch (mainnetError) {
-            intraday = await getKlines(validated.symbol, '5', 288, testnet);
-          }
-          const intradayAsc = intraday.slice().reverse();
-          const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hlc3', useAllCandles: true });
-          const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hlc3', useAllCandles: true });
-          
-          return NextResponse.json({
-            symbol: validated.symbol,
-            kPct: storedLevels.calculated_volatility,
-            dOpen: storedLevels.daily_open_price,
-            vwap,
-            vwapLine,
-            upper: storedLevels.upper_range,
-            lower: storedLevels.lower_range,
-            upLevels: storedLevels.up_levels,
-            dnLevels: storedLevels.dn_levels,
-            dataSource: 'stored', // Indicate these are stored levels
-          });
-        } else {
-          console.log(`[LEVELS] Stored levels for ${validated.symbol} are from ${storedLevels.date}, not today. Will calculate new levels.`);
+        // Still need VWAP calculated from current candles for real-time display
+        // But use stored levels for entry/TP/SL (these NEVER change during the day)
+        let intraday;
+        try {
+          intraday = await getKlines(validated.symbol, '5', 288, false);
+        } catch (mainnetError) {
+          intraday = await getKlines(validated.symbol, '5', 288, testnet);
         }
+        const intradayAsc = intraday.slice().reverse();
+        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hlc3', useAllCandles: true });
+        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hlc3', useAllCandles: true });
+        
+        return NextResponse.json({
+          symbol: validated.symbol,
+          kPct: storedLevels.calculated_volatility,
+          dOpen: storedLevels.daily_open_price, // Fixed for the day
+          vwap, // Real-time, updates with new candles
+          vwapLine, // Real-time, updates with new candles
+          upper: storedLevels.upper_range, // Fixed for the day
+          lower: storedLevels.lower_range, // Fixed for the day
+          upLevels: storedLevels.up_levels, // Fixed for the day
+          dnLevels: storedLevels.dn_levels, // Fixed for the day
+          dataSource: 'stored', // Indicate these are stored levels (fixed for the day)
+        });
       } else {
-        console.log(`[LEVELS] No stored levels found for ${validated.symbol}. Will calculate.`);
+        if (storedLevels) {
+          console.log(`[LEVELS] ⚠️ Stored levels for ${validated.symbol} are from ${storedLevels.date}, but today is ${todayUTCStr} (UTC).`);
+          console.log(`[LEVELS]   This means daily-setup cron hasn't run yet for today. Will calculate once and store.`);
+        } else {
+          console.log(`[LEVELS] ⚠️ No stored levels found for ${validated.symbol} for today (${todayUTCStr} UTC).`);
+          console.log(`[LEVELS]   Will calculate once and store (daily-setup cron should handle this, but calculating as fallback).`);
+        }
       }
     } catch (storedError) {
-      console.warn(`[LEVELS] Could not get stored levels, will calculate:`, storedError);
+      console.warn(`[LEVELS] Could not get stored levels, will calculate once:`, storedError);
       // Continue to calculate if stored levels not available
     }
 
@@ -176,11 +179,13 @@ export async function POST(request: NextRequest) {
 
     // Store calculated levels in database for today if they don't exist
     // This ensures levels are stored even if daily-setup cron hasn't run yet
+    // IMPORTANT: Only store if we don't already have levels for today (prevents overwriting)
     try {
-      const todayLevels = await getDailyLevels(validated.symbol);
-      const today = new Date().toISOString().split('T')[0];
-      if (!todayLevels || todayLevels.date !== today) {
-        console.log(`[LEVELS] Storing calculated levels for ${validated.symbol} (date: ${today})`);
+      const existingLevels = await getDailyLevels(validated.symbol, todayUTCStr);
+      if (!existingLevels || existingLevels.date !== todayUTCStr) {
+        console.log(`[LEVELS] Storing calculated levels for ${validated.symbol} (date: ${todayUTCStr} UTC)`);
+        console.log(`[LEVELS]   Daily Open: ${dOpen.toFixed(2)}`);
+        console.log(`[LEVELS]   Upper Range: ${upper.toFixed(2)}, Lower Range: ${lower.toFixed(2)}`);
         await saveDailyLevels(
           validated.symbol,
           dOpen,
@@ -191,7 +196,28 @@ export async function POST(request: NextRequest) {
           kPct,
           validated.subdivisions
         );
-        console.log(`[LEVELS] ✓ Levels stored for ${validated.symbol}`);
+        console.log(`[LEVELS] ✓ Levels stored for ${validated.symbol} (date: ${todayUTCStr} UTC)`);
+        console.log(`[LEVELS]   NOTE: These levels are now FIXED for the rest of the day and will not change until UTC midnight`);
+      } else {
+        console.log(`[LEVELS] ⚠️ Levels already exist for ${validated.symbol} today (${todayUTCStr} UTC).`);
+        console.log(`[LEVELS]   Using stored levels instead of recalculating to maintain consistency.`);
+        // Return stored levels instead of calculated ones
+        const intradayAsc = intraday.slice().reverse();
+        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hlc3', useAllCandles: true });
+        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hlc3', useAllCandles: true });
+        
+        return NextResponse.json({
+          symbol: validated.symbol,
+          kPct: existingLevels.calculated_volatility,
+          dOpen: existingLevels.daily_open_price,
+          vwap,
+          vwapLine,
+          upper: existingLevels.upper_range,
+          lower: existingLevels.lower_range,
+          upLevels: existingLevels.up_levels,
+          dnLevels: existingLevels.dn_levels,
+          dataSource: 'stored',
+        });
       }
     } catch (saveError) {
       console.warn(`[LEVELS] Failed to store levels (non-critical):`, saveError);
