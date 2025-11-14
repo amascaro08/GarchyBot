@@ -1101,6 +1101,61 @@ export default function Home() {
     }
   }, [symbol, candleInterval, botRunning]); // Candles and signals depend on interval, but levels don't
 
+  // Real-time trade updates via Server-Sent Events
+  useEffect(() => {
+    const eventSource = new EventSource('/api/trades/stream');
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'trades' && data.trades) {
+          const dbTrades = data.trades.map((t: any) => ({
+            id: t.id,
+            time: t.time,
+            side: t.side,
+            entry: Number(t.entry),
+            tp: Number(t.tp),
+            sl: Number(t.sl),
+            initialSl: Number(t.initialSl),
+            reason: t.reason || '',
+            status: t.status,
+            symbol: t.symbol,
+            leverage: Number(t.leverage || leverage),
+            positionSize: Number(t.positionSize),
+            exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
+            pnl: t.pnl !== null && t.pnl !== undefined ? Number(t.pnl) : undefined,
+          }));
+
+          // Update trades state - use server data as source of truth
+          setTrades(dbTrades);
+          tradesRef.current = dbTrades;
+        } else if (data.type === 'pnl') {
+          // Update P&L values
+          if (data.sessionPnL !== undefined) {
+            setSessionPnL(Number(data.sessionPnL));
+          }
+          if (data.dailyPnL !== undefined) {
+            setDailyPnL(Number(data.dailyPnL));
+          }
+        } else if (data.type === 'error') {
+          console.error('SSE stream error:', data.message);
+        }
+      } catch (err) {
+        console.error('Error parsing SSE message:', err);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+      // EventSource will automatically reconnect
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [leverage]); // Only re-run if leverage changes (affects trade mapping)
+
   // Prepare chart markers from signals - memoize to prevent unnecessary re-renders
   const chartMarkers = useMemo(() => {
     if (signal && signal.signal && signal.touchedLevel && candles.length > 0) {

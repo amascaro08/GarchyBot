@@ -424,7 +424,20 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
           const isNewCandle = !lastCandle || lastCandle.ts !== candle.ts;
 
           if (lastCandle && lastCandle.ts === candle.ts) {
-            // Update the last candle
+            // Update the last candle - check if values actually changed
+            const valuesChanged = 
+              lastCandle.open !== candle.open ||
+              lastCandle.high !== candle.high ||
+              lastCandle.low !== candle.low ||
+              lastCandle.close !== candle.close ||
+              lastCandle.volume !== candle.volume;
+            
+            // Only update if values changed (prevents unnecessary re-renders)
+            if (!valuesChanged) {
+              return prevCandles;
+            }
+            
+            // Update the last candle with new values
             const updatedCandles = [...prevCandles];
             updatedCandles[updatedCandles.length - 1] = candle;
             return updatedCandles;
@@ -475,13 +488,15 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
   };
 
   // Auto-connect when symbol changes
+  // Note: connect and disconnect are stable callbacks, so we don't need them in deps
   useEffect(() => {
     connect();
 
     return () => {
       disconnect();
     };
-  }, [symbol, interval, connect, disconnect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, interval]);
 
   // Cleanup on unmount
   useEffect(() => {

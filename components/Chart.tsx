@@ -185,16 +185,10 @@ export default function Chart({
   // Use only websocket candles when available, otherwise fall back to static candles
   // Track the last candles signature to detect changes
   const candlesSignatureRef = useRef<string>('');
-  
-  // Create a string signature from wsCandles to detect changes (array reference might not change)
-  const wsCandlesSignature = useMemo(() => {
-    if (wsCandles.length === 0) return '';
-    // Use last 3 candles to detect updates
-    const lastThree = wsCandles.slice(-3);
-    return lastThree.map(c => `${c.ts}-${c.open}-${c.high}-${c.low}-${c.close}`).join('|');
-  }, [wsCandles.length, wsCandles[wsCandles.length - 1]?.ts, wsCandles[wsCandles.length - 1]?.open, wsCandles[wsCandles.length - 1]?.high, wsCandles[wsCandles.length - 1]?.low, wsCandles[wsCandles.length - 1]?.close]);
+  const lastCandleCountRef = useRef<number>(0);
   
   // Use WebSocket candles when connected, otherwise use static candles
+  // Force update when candle count changes or when WebSocket connects/disconnects
   const displayCandles = useMemo(() => {
     // Prefer WebSocket candles if connected and we have data
     if (wsConnected && wsCandles.length > 0) {
@@ -202,14 +196,17 @@ export default function Chart({
     }
     // Fall back to static candles
     return candles.length > 0 ? candles : [];
-  }, [candles, wsCandles, wsCandlesSignature, wsConnected]);
+  }, [candles, wsCandles, wsConnected]);
 
   // Create a signature of the candles array to detect changes
+  // Include candle count to detect when new candles are added
   const candlesSignature = useMemo(() => {
     if (!displayCandles || displayCandles.length === 0) return '';
-    // Create signature from last 3 candles (most recent data) to detect updates
-    const lastThree = displayCandles.slice(-3);
-    return lastThree.map(c => `${c.ts}-${c.open}-${c.high}-${c.low}-${c.close}`).join('|');
+    // Include count in signature to detect new candles
+    const lastCandle = displayCandles[displayCandles.length - 1];
+    if (!lastCandle) return '';
+    // Use last candle's full data plus count to detect any changes
+    return `${displayCandles.length}-${lastCandle.ts}-${lastCandle.open}-${lastCandle.high}-${lastCandle.low}-${lastCandle.close}-${lastCandle.volume || 0}`;
   }, [displayCandles]);
 
   // Update chart data when candles change (from WebSocket or static)
@@ -222,12 +219,27 @@ export default function Chart({
       return;
     }
 
-    // Only update if the signature changed (prevents unnecessary re-renders)
-    if (candlesSignature === candlesSignatureRef.current && candlesSignature !== '') {
-      return;
+    // Check if we need to update: signature changed OR candle count changed
+    const candleCountChanged = displayCandles.length !== lastCandleCountRef.current;
+    const signatureChanged = candlesSignature !== candlesSignatureRef.current;
+    
+    // Always update if WebSocket is connected (real-time data should always update)
+    // For static candles, only update if signature or count changed
+    if (wsConnected) {
+      // WebSocket connected - always update to ensure real-time updates
+      // But skip if signature hasn't changed and we've already processed this data
+      if (!signatureChanged && !candleCountChanged && candlesSignature !== '' && candlesSignatureRef.current === candlesSignature) {
+        return;
+      }
+    } else {
+      // Static candles - only update if signature/count changed
+      if (!signatureChanged && !candleCountChanged && candlesSignature !== '') {
+        return;
+      }
     }
 
     candlesSignatureRef.current = candlesSignature;
+    lastCandleCountRef.current = displayCandles.length;
 
     // Convert candles to chart format
     const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
@@ -430,7 +442,7 @@ export default function Chart({
         seriesRef.current.setMarkers([]);
       }
     }
-  }, [displayCandles, ticker, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
+  }, [displayCandles, candlesSignature, wsConnected, ticker, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
 
   // Monitor for chart freezing - if candles signature stops updating but we have WebSocket data, force refresh
   useEffect(() => {
