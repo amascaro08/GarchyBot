@@ -270,10 +270,12 @@ export async function POST(request: NextRequest) {
             }
           }
 
+          // Get open trades first (used for both live and demo modes)
+          const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
+          
           // Sync trades with Bybit's actual data (for live mode only)
           if (botConfig.api_mode === 'live' && botConfig.api_key && botConfig.api_secret) {
             const { fetchPosition, getOrderStatus } = await import('@/lib/bybit');
-            const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
             
             for (const trade of openTrades) {
               try {
@@ -491,7 +493,6 @@ export async function POST(request: NextRequest) {
             }
           } else {
             // For demo/testnet mode, use chart-based checking (fallback)
-            const openTrades = await getOpenTrades(botConfig.user_id, botConfig.id);
             for (const trade of openTrades) {
               const entryPrice = Number(trade.entry_price);
               const tpPrice = Number(trade.tp_price);
