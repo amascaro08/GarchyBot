@@ -6,6 +6,15 @@ import { dailyOpenUTC, vwapFromOHLCV, gridLevels, strictSignalWithDailyOpen } fr
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    
+    // Log raw body to debug
+    console.log('[SIGNAL] Received request body keys:', Object.keys(body));
+    console.log('[SIGNAL] Raw body values:');
+    console.log(`  dOpen: ${body.dOpen} (type: ${typeof body.dOpen})`);
+    console.log(`  vwap: ${body.vwap} (type: ${typeof body.vwap})`);
+    console.log(`  upperLevels: ${Array.isArray(body.upperLevels) ? `array[${body.upperLevels.length}]` : typeof body.upperLevels}`);
+    console.log(`  lowerLevels: ${Array.isArray(body.lowerLevels) ? `array[${body.lowerLevels.length}]` : typeof body.lowerLevels}`);
+    
     const validated = SignalRequestSchema.parse(body);
 
     // Use provided levels if available, otherwise calculate them

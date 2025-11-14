@@ -781,36 +781,69 @@ export async function getDailyLevels(symbol: string, date?: string): Promise<Dai
 
     if (!result.rows[0]) return null;
 
-    const levels = result.rows[0];
-    // Parse JSON arrays back to number arrays
-    // PostgreSQL JSONB may already be parsed or could be a string
-    if (typeof levels.up_levels === 'string') {
-      try {
-        levels.up_levels = JSON.parse(levels.up_levels);
-      } catch (parseError) {
-        console.error('Error parsing up_levels JSON:', parseError, 'Value:', levels.up_levels);
-        throw new Error(`Invalid JSON in up_levels: ${levels.up_levels}`);
-      }
-    } else if (!Array.isArray(levels.up_levels)) {
-      // If it's not a string and not an array, something is wrong
-      console.error('up_levels is neither string nor array:', typeof levels.up_levels, levels.up_levels);
-      levels.up_levels = [];
-    }
-    // up_levels is already an array (JSONB auto-parsed), use it as-is
+    const rawLevels = result.rows[0];
     
-    if (typeof levels.dn_levels === 'string') {
-      try {
-        levels.dn_levels = JSON.parse(levels.dn_levels);
-      } catch (parseError) {
-        console.error('Error parsing dn_levels JSON:', parseError, 'Value:', levels.dn_levels);
-        throw new Error(`Invalid JSON in dn_levels: ${levels.dn_levels}`);
-      }
-    } else if (!Array.isArray(levels.dn_levels)) {
-      // If it's not a string and not an array, something is wrong
-      console.error('dn_levels is neither string nor array:', typeof levels.dn_levels, levels.dn_levels);
-      levels.dn_levels = [];
-    }
-    // dn_levels is already an array (JSONB auto-parsed), use it as-is
+    // Convert NUMERIC types from PostgreSQL (they come as strings) to numbers
+    // Also parse JSONB arrays and ensure they're number arrays
+    const levels: DailyLevels = {
+      ...rawLevels,
+      // Convert NUMERIC fields to numbers (PostgreSQL returns them as strings)
+      daily_open_price: typeof rawLevels.daily_open_price === 'string' 
+        ? parseFloat(rawLevels.daily_open_price) 
+        : Number(rawLevels.daily_open_price),
+      upper_range: typeof rawLevels.upper_range === 'string'
+        ? parseFloat(rawLevels.upper_range)
+        : Number(rawLevels.upper_range),
+      lower_range: typeof rawLevels.lower_range === 'string'
+        ? parseFloat(rawLevels.lower_range)
+        : Number(rawLevels.lower_range),
+      calculated_volatility: typeof rawLevels.calculated_volatility === 'string'
+        ? parseFloat(rawLevels.calculated_volatility)
+        : Number(rawLevels.calculated_volatility),
+      subdivisions: typeof rawLevels.subdivisions === 'string'
+        ? parseInt(rawLevels.subdivisions, 10)
+        : Number(rawLevels.subdivisions),
+      // Parse JSONB arrays and ensure they're number arrays
+      up_levels: (() => {
+        let parsed: any = rawLevels.up_levels;
+        if (typeof parsed === 'string') {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch (parseError) {
+            console.error('Error parsing up_levels JSON:', parseError, 'Value:', parsed);
+            return [];
+          }
+        }
+        if (!Array.isArray(parsed)) {
+          console.error('up_levels is not an array:', typeof parsed, parsed);
+          return [];
+        }
+        // Ensure all values are numbers
+        return parsed.map((l: any) => typeof l === 'string' ? parseFloat(l) : Number(l));
+      })(),
+      dn_levels: (() => {
+        let parsed: any = rawLevels.dn_levels;
+        if (typeof parsed === 'string') {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch (parseError) {
+            console.error('Error parsing dn_levels JSON:', parseError, 'Value:', parsed);
+            return [];
+          }
+        }
+        if (!Array.isArray(parsed)) {
+          console.error('dn_levels is not an array:', typeof parsed, parsed);
+          return [];
+        }
+        // Ensure all values are numbers
+        return parsed.map((l: any) => typeof l === 'string' ? parseFloat(l) : Number(l));
+      })(),
+    };
+
+    console.log(`[DB] getDailyLevels for ${symbol} - Converted types:`);
+    console.log(`  daily_open_price: ${levels.daily_open_price} (type: ${typeof levels.daily_open_price})`);
+    console.log(`  up_levels: ${levels.up_levels.length} levels (type: ${Array.isArray(levels.up_levels) ? 'array' : typeof levels.up_levels})`);
+    console.log(`  dn_levels: ${levels.dn_levels.length} levels (type: ${Array.isArray(levels.dn_levels) ? 'array' : typeof levels.dn_levels})`);
 
     return levels;
   } catch (error) {

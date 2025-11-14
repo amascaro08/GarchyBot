@@ -257,21 +257,18 @@ export async function POST(request: NextRequest) {
           console.log(`[CRON] VWAP calculated: ${vwapData.vwap.toFixed(2)}`);
 
           // Combine stored levels with current VWAP
-          // Ensure all values are properly converted to numbers/arrays
+          // getDailyLevels now returns properly typed values (numbers/arrays)
+          // But ensure VWAP is a number and validate everything
           const levels = {
             ...storedLevels,
             vwap: Number(vwapData.vwap),
             vwapLine: vwapData.vwapLine,
-            kPct: Number(storedLevels.calculated_volatility),
-            dOpen: Number(storedLevels.daily_open_price),
-            upper: Number(storedLevels.upper_range),
-            lower: Number(storedLevels.lower_range),
-            upLevels: Array.isArray(storedLevels.up_levels) 
-              ? storedLevels.up_levels.map((l: any) => Number(l))
-              : [],
-            dnLevels: Array.isArray(storedLevels.dn_levels)
-              ? storedLevels.dn_levels.map((l: any) => Number(l))
-              : [],
+            kPct: storedLevels.calculated_volatility, // Already a number from getDailyLevels
+            dOpen: storedLevels.daily_open_price, // Already a number from getDailyLevels
+            upper: storedLevels.upper_range, // Already a number from getDailyLevels
+            lower: storedLevels.lower_range, // Already a number from getDailyLevels
+            upLevels: storedLevels.up_levels, // Already a number[] from getDailyLevels
+            dnLevels: storedLevels.dn_levels, // Already a number[] from getDailyLevels
           };
 
           // Validate levels before using
@@ -715,26 +712,36 @@ export async function POST(request: NextRequest) {
           }
 
           // Calculate signal using stored levels, current candles, and real-time price
+          const signalPayload = {
+            symbol: botConfig.symbol,
+            kPct: levels.kPct,
+            subdivisions: botConfig.subdivisions,
+            noTradeBandPct: botConfig.no_trade_band_pct,
+            useDailyOpenEntry: botConfig.use_daily_open_entry,
+            candles,
+            // Pass stored levels directly to avoid recalculation
+            dOpen: levels.dOpen,
+            upperLevels: levels.upLevels,
+            lowerLevels: levels.dnLevels,
+            vwap: levels.vwap,
+            // Pass real-time price for faster signal detection
+            realtimePrice,
+          };
+
+          // Log what we're sending to signal API
+          console.log(`[CRON] Sending signal request for ${botConfig.symbol}:`);
+          console.log(`  dOpen: ${signalPayload.dOpen} (type: ${typeof signalPayload.dOpen})`);
+          console.log(`  vwap: ${signalPayload.vwap} (type: ${typeof signalPayload.vwap})`);
+          console.log(`  upperLevels: ${Array.isArray(signalPayload.upperLevels) ? `array[${signalPayload.upperLevels.length}]` : typeof signalPayload.upperLevels}`);
+          console.log(`  lowerLevels: ${Array.isArray(signalPayload.lowerLevels) ? `array[${signalPayload.lowerLevels.length}]` : typeof signalPayload.lowerLevels}`);
+          console.log(`  realtimePrice: ${signalPayload.realtimePrice || 'N/A'}`);
+
           const signalRes = await fetch(
             `${baseUrl}/api/signal`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                symbol: botConfig.symbol,
-                kPct: levels.kPct,
-                subdivisions: botConfig.subdivisions,
-                noTradeBandPct: botConfig.no_trade_band_pct,
-                useDailyOpenEntry: botConfig.use_daily_open_entry,
-                candles,
-                // Pass stored levels directly to avoid recalculation
-                dOpen: levels.dOpen,
-                upperLevels: levels.upLevels,
-                lowerLevels: levels.dnLevels,
-                vwap: levels.vwap,
-                // Pass real-time price for faster signal detection
-                realtimePrice,
-              }),
+              body: JSON.stringify(signalPayload),
             }
           );
 
