@@ -14,6 +14,7 @@ interface SidebarProps {
   setLeverage: (n: number) => void;
   capital: number;
   setCapital: (n: number) => void;
+  apiMode: 'demo' | 'live';
   riskAmount: number;
   setRiskAmount: (n: number) => void;
   riskType: 'fixed' | 'percent';
@@ -314,15 +315,31 @@ export default function Sidebar(props: SidebarProps) {
 
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-bold mb-2 text-blue-300 uppercase tracking-wider">Capital ($)</label>
+            <label className="block text-xs font-bold mb-2 text-blue-300 uppercase tracking-wider">
+              Capital ($)
+              {apiMode === 'live' && (
+                <span className="ml-2 text-xs text-yellow-400 font-normal">(Auto-synced from wallet balance)</span>
+              )}
+            </label>
             <input
               type="number"
               min="1"
               step="1"
               value={capital}
               onChange={(e) => setCapital(Math.max(1, parseFloat(e.target.value) || 1))}
-              className="glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/20 focus:outline-none focus:ring-2 focus:ring-blue-500/50 bg-slate-900/70 backdrop-blur-xl border-2 border-slate-700/50"
+              disabled={apiMode === 'live'}
+              className={`glass-effect rounded-xl px-4 py-3 text-white font-semibold w-full transition-all duration-300 focus:outline-none focus:ring-2 bg-slate-900/70 backdrop-blur-xl border-2 ${
+                apiMode === 'live'
+                  ? 'border-yellow-500/50 cursor-not-allowed opacity-70 hover:border-yellow-500/50'
+                  : 'border-slate-700/50 hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/20 focus:ring-blue-500/50'
+              }`}
+              title={apiMode === 'live' ? 'Capital is auto-synced from your wallet balance in live mode' : ''}
             />
+            {apiMode === 'live' && (
+              <p className="text-xs text-yellow-400 mt-1">
+                Capital is automatically synced from your wallet balance when testing connection.
+              </p>
+            )}
           </div>
 
           <div>

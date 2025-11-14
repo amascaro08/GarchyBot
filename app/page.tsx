@@ -1223,6 +1223,47 @@ export default function Home() {
       setConnectionStatus('success');
       setConnectionMessage('Connection successful.');
       addLog('success', `Bybit ${apiMode} connection successful.`);
+
+      // Auto-sync capital from wallet balance when in live mode
+      if (apiMode === 'live' && balances.length > 0) {
+        // Calculate total equity (use equity, not available balance, as capital represents total account value)
+        const totalEquity = balances.reduce((sum, wallet) => sum + (wallet.equity || 0), 0);
+        if (totalEquity > 0) {
+          setCapital(totalEquity);
+          addLog('info', `Capital auto-synced from wallet balance: $${totalEquity.toFixed(2)}`);
+          
+          // Auto-save capital to database
+          try {
+            const settingsToSave = {
+              symbol,
+              candle_interval: candleInterval,
+              max_trades: maxTrades,
+              leverage,
+              capital: totalEquity,
+              risk_amount: riskAmount,
+              risk_type: riskType,
+              daily_target_type: dailyTargetType,
+              daily_target_amount: dailyTargetAmount,
+              daily_stop_type: dailyStopType,
+              daily_stop_amount: dailyStopAmount,
+              garch_mode: garchMode,
+              custom_k_pct: customKPct,
+              use_orderbook_confirm: useOrderBookConfirm,
+              api_mode: apiMode,
+              api_key: key,
+              api_secret: secret,
+            };
+
+            await fetch('/api/bot/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(settingsToSave),
+            });
+          } catch (error) {
+            console.error('Failed to auto-save capital:', error);
+          }
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to test connection';
       setConnectionStatus('error');
