@@ -3,6 +3,7 @@ import {
   getRunningBots,
   getOpenTrades,
   getPendingTrades,
+  getExpiredPendingTrades,
   createTrade,
   closeTrade,
   addActivityLog,
@@ -16,7 +17,7 @@ import {
   updateTrade,
 } from '@/lib/db';
 import { computeTrailingBreakeven } from '@/lib/strategy';
-import { placeOrder } from '@/lib/bybit';
+import { placeOrder, cancelOrder } from '@/lib/bybit';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import type { Candle } from '@/lib/types';
 
@@ -57,6 +58,60 @@ export async function POST(request: NextRequest) {
 
     // Reset daily P&L if new day
     await resetDailyPnL();
+
+    // Cancel expired pending orders (older than 1 hour)
+    try {
+      const expiredTrades = await getExpiredPendingTrades(1);
+      console.log(`[CRON] Found ${expiredTrades.length} expired pending orders to cancel`);
+      
+      for (const trade of expiredTrades) {
+        if (!trade.order_id || !trade.api_key || !trade.api_secret) {
+          continue;
+        }
+
+        try {
+          await cancelOrder({
+            symbol: trade.symbol,
+            orderId: trade.order_id,
+            testnet: trade.api_mode !== 'live',
+            apiKey: trade.api_key,
+            apiSecret: trade.api_secret,
+          });
+
+          // Update trade status to cancelled
+          await updateTrade(trade.id, {
+            status: 'cancelled',
+            exit_time: new Date(),
+          } as any);
+
+          await addActivityLog(
+            trade.user_id,
+            'warning',
+            `Order expired and cancelled: ${trade.side} ${trade.symbol} @ $${Number(trade.entry_price).toFixed(2)} (Order ID: ${trade.order_id})`,
+            { orderId: trade.order_id, expiryHours: 1 },
+            trade.bot_config_id
+          );
+
+          console.log(`[CRON] Cancelled expired order ${trade.order_id} for trade ${trade.id}`);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          console.error(`[CRON] Failed to cancel expired order ${trade.order_id}:`, errorMsg);
+          
+          // Try to update trade status anyway in case order was already cancelled
+          try {
+            await updateTrade(trade.id, {
+              status: 'cancelled',
+              exit_time: new Date(),
+            } as any);
+          } catch (updateError) {
+            console.error(`[CRON] Failed to update trade ${trade.id} status:`, updateError);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[CRON] Error processing expired orders:', error);
+      // Continue with normal bot processing even if expiry check fails
+    }
 
     // Get all running bots
     const runningBots = await getRunningBots();
@@ -390,7 +445,7 @@ export async function POST(request: NextRequest) {
                   if (botConfig.api_key && botConfig.api_secret && positionSize > 0) {
                     const orderQty = Math.max(0, Number(positionSize));
                     try {
-                      await placeOrder({
+                      const orderResult = await placeOrder({
                         symbol: botConfig.symbol,
                         side: signal.signal === 'LONG' ? 'Buy' : 'Sell',
                         qty: orderQty,
@@ -398,22 +453,33 @@ export async function POST(request: NextRequest) {
                         testnet: botConfig.api_mode !== 'live',
                         apiKey: botConfig.api_key,
                         apiSecret: botConfig.api_secret,
-                        timeInForce: 'PostOnly',
+                        timeInForce: 'GoodTillCancel', // Changed from PostOnly to allow immediate execution
                       });
 
+                      // Update trade status to 'open' and store order ID when order is successfully placed
+                      const orderId = orderResult?.result?.orderId;
+                      if (orderResult?.retCode === 0 && orderId) {
+                        await updateTrade(tradeRecord.id, {
+                          status: 'open',
+                          order_id: orderId,
+                        } as any);
+                      }
+
+                      const orderIdForLog = orderId || 'N/A';
                       await addActivityLog(
                         botConfig.user_id,
                         'success',
-                        `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}`,
-                        null,
+                        `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}, Order ID: ${orderIdForLog}`,
+                        { orderResult, orderId: orderIdForLog },
                         botConfig.id
                       );
                     } catch (error) {
+                      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
                       await addActivityLog(
                         botConfig.user_id,
                         'error',
-                        `Bybit order failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                        null,
+                        `Bybit order failed: ${errorMsg}`,
+                        { symbol: botConfig.symbol, side: signal.signal, qty: orderQty, error: errorMsg },
                         botConfig.id
                       );
                     }

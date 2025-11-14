@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS trades (
   
   -- Metadata
   reason TEXT,
+  order_id VARCHAR(100), -- Bybit order ID for tracking and cancellation
   entry_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   exit_time TIMESTAMP WITH TIME ZONE,
   
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE INDEX IF NOT EXISTS idx_trades_user_status ON trades(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_trades_bot_config ON trades(bot_config_id, status);
 CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_order_id ON trades(order_id);
 
 -- Activity logs - stores bot activity for debugging and monitoring
 CREATE TABLE IF NOT EXISTS activity_logs (

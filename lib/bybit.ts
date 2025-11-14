@@ -396,6 +396,8 @@ export async function fetchLinearInstruments(testnet: boolean = true): Promise<s
 /**
  * Place order on Bybit (Testnet or Mainnet)
  * Requires BYBIT_API_KEY and BYBIT_API_SECRET env vars unless apiKey/apiSecret are provided
+ * 
+ * Uses Bybit v5 API with POST request and JSON body format
  */
 export async function placeOrder(params: {
   symbol: string;
@@ -430,33 +432,33 @@ export async function placeOrder(params: {
   const timestamp = Date.now();
   const recvWindow = 5000;
 
-  const payload: Record<string, any> = {
+  // Request body (without timestamp and recvWindow)
+  const requestBody: Record<string, any> = {
     category: 'linear',
     symbol,
     side,
     orderType: price ? 'Limit' : 'Market',
     qty: qty.toString(),
-    timestamp,
-    recvWindow,
     timeInForce,
   };
 
   if (price !== undefined) {
-    payload.price = price.toString();
+    requestBody.price = price.toString();
   }
 
-  // Sort params for signature
-  const sortedParams = Object.keys(payload)
-    .sort()
-    .map((key) => `${key}=${payload[key]}`)
-    .join('&');
-
+  // For Bybit v5 API POST with JSON body, use header-based authentication
+  // Signature: timestamp + apiKey + recvWindow + jsonBodyString
+  const bodyString = JSON.stringify(requestBody);
+  const timestampStr = timestamp.toString();
+  const recvWindowStr = recvWindow.toString();
+  const paramString = `${timestampStr}${apiKey}${recvWindowStr}${bodyString}`;
+  
   const signature = crypto
     .createHmac('sha256', apiSecret)
-    .update(sortedParams)
+    .update(paramString)
     .digest('hex');
 
-  const url = `${baseUrl}${endpoint}?${sortedParams}&apiKey=${apiKey}&sign=${signature}`;
+  const url = `${baseUrl}${endpoint}`;
 
   try {
     const controller = new AbortController();
@@ -467,19 +469,133 @@ export async function placeOrder(params: {
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
+        'X-BAPI-API-KEY': apiKey,
+        'X-BAPI-SIGN': signature,
+        'X-BAPI-TIMESTAMP': timestampStr,
+        'X-BAPI-RECV-WINDOW': recvWindowStr,
       },
+      body: bodyString,
     });
 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new BybitError(response.status, `HTTP ${response.status}`);
+      const errorText = await response.text();
+      throw new BybitError(response.status, `HTTP ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
 
     if (data.retCode !== 0) {
-      throw new BybitError(data.retCode, data.retMsg);
+      throw new BybitError(data.retCode, data.retMsg || 'Unknown Bybit API error');
+    }
+
+    return data;
+  } catch (error) {
+    if (error instanceof BybitError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new BybitError(-1, 'Request timeout');
+    }
+    throw new BybitError(-1, error instanceof Error ? error.message : 'Unknown error');
+  }
+}
+
+/**
+ * Cancel order on Bybit (Testnet or Mainnet)
+ * Requires BYBIT_API_KEY and BYBIT_API_SECRET env vars unless apiKey/apiSecret are provided
+ * 
+ * Uses Bybit v5 API with POST request and JSON body format
+ */
+export async function cancelOrder(params: {
+  symbol: string;
+  orderId?: string;
+  orderLinkId?: string;
+  testnet?: boolean;
+  apiKey?: string | null;
+  apiSecret?: string | null;
+}): Promise<any> {
+  const {
+    symbol,
+    orderId,
+    orderLinkId,
+    testnet = true,
+    apiKey: overrideApiKey,
+    apiSecret: overrideApiSecret,
+  } = params;
+
+  const apiKey = overrideApiKey || process.env.BYBIT_API_KEY;
+  const apiSecret = overrideApiSecret || process.env.BYBIT_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    throw new Error('BYBIT_API_KEY and BYBIT_API_SECRET must be set');
+  }
+
+  if (!orderId && !orderLinkId) {
+    throw new Error('Either orderId or orderLinkId must be provided');
+  }
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/order/cancel';
+  const timestamp = Date.now();
+  const recvWindow = 5000;
+
+  // Request body
+  const requestBody: Record<string, any> = {
+    category: 'linear',
+    symbol,
+  };
+
+  if (orderId) {
+    requestBody.orderId = orderId;
+  }
+  if (orderLinkId) {
+    requestBody.orderLinkId = orderLinkId;
+  }
+
+  // For Bybit v5 API POST with JSON body, use header-based authentication
+  // Signature: timestamp + apiKey + recvWindow + jsonBodyString
+  const bodyString = JSON.stringify(requestBody);
+  const timestampStr = timestamp.toString();
+  const recvWindowStr = recvWindow.toString();
+  const paramString = `${timestampStr}${apiKey}${recvWindowStr}${bodyString}`;
+  
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(paramString)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-BAPI-API-KEY': apiKey,
+        'X-BAPI-SIGN': signature,
+        'X-BAPI-TIMESTAMP': timestampStr,
+        'X-BAPI-RECV-WINDOW': recvWindowStr,
+      },
+      body: bodyString,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new BybitError(response.status, `HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    if (data.retCode !== 0) {
+      throw new BybitError(data.retCode, data.retMsg || 'Unknown Bybit API error');
     }
 
     return data;

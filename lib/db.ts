@@ -78,6 +78,7 @@ export interface Trade {
   leverage: number;
   pnl: number;
   reason: string | null;
+  order_id: string | null; // Bybit order ID for tracking and cancellation
   entry_time: Date;
   exit_time: Date | null;
   created_at: Date;
@@ -346,12 +347,12 @@ export async function createTrade(trade: Omit<Trade, 'id' | 'created_at' | 'upda
       INSERT INTO trades (
         user_id, bot_config_id, symbol, side, status,
         entry_price, tp_price, sl_price, current_sl,
-        position_size, leverage, reason
+        position_size, leverage, reason, order_id
       ) VALUES (
         ${trade.user_id}, ${trade.bot_config_id}, ${trade.symbol},
         ${trade.side}, ${trade.status}, ${trade.entry_price},
         ${trade.tp_price}, ${trade.sl_price}, ${trade.current_sl},
-        ${trade.position_size}, ${trade.leverage}, ${trade.reason || null}
+        ${trade.position_size}, ${trade.leverage}, ${trade.reason || null}, ${trade.order_id || null}
       )
       RETURNING *
     `;
@@ -405,6 +406,35 @@ export async function getPendingTrades(userId: string, botConfigId?: string): Pr
     return result.rows;
   } catch (error) {
     console.error('Error getting pending trades:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get pending trades older than specified hours
+ * Used for order expiry cancellation
+ * Returns trades with bot config info needed for cancellation
+ */
+export async function getExpiredPendingTrades(hours: number = 1): Promise<Array<Trade & { api_key: string | null; api_secret: string | null; api_mode: string }>> {
+  try {
+    const result = await sql<Trade & { api_key: string | null; api_secret: string | null; api_mode: string }>`
+      SELECT 
+        t.*,
+        bc.api_key,
+        bc.api_secret,
+        bc.api_mode
+      FROM trades t
+      JOIN bot_configs bc ON t.bot_config_id = bc.id
+      WHERE t.status = 'pending'
+      AND t.entry_time < NOW() - INTERVAL '${hours} hour'
+      AND t.order_id IS NOT NULL
+      AND bc.api_key IS NOT NULL
+      AND bc.api_secret IS NOT NULL
+      ORDER BY t.entry_time ASC
+    `;
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting expired pending trades:', error);
     throw error;
   }
 }

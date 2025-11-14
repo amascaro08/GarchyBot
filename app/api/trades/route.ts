@@ -127,14 +127,26 @@ export async function POST(request: NextRequest) {
           testnet: botConfig.api_mode !== 'live',
           apiKey: botConfig.api_key,
           apiSecret: botConfig.api_secret,
-          timeInForce: 'PostOnly',
+          timeInForce: 'GoodTillCancel', // Changed from PostOnly to allow immediate execution
         });
 
+        // Update trade status to 'open' and store order ID when order is successfully placed
+        // Check if order was created successfully
+        if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {
+          const { updateTrade } = await import('@/lib/db');
+          const orderId = orderResult.result.orderId;
+          tradeRecord = await updateTrade(tradeRecord.id, {
+            status: 'open',
+            order_id: orderId,
+          } as any);
+        }
+
+        const orderId = orderResult?.result?.orderId || 'N/A';
         await addActivityLog(
           userId,
           'success',
-          `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}`,
-          { orderResult },
+          `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}, Order ID: ${orderId}`,
+          { orderResult, orderId },
           botConfig.id
         );
       } catch (error) {
@@ -143,7 +155,7 @@ export async function POST(request: NextRequest) {
           userId,
           'error',
           `Bybit order failed: ${message}`,
-          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize },
+          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize, error: message },
           botConfig.id
         );
       }
