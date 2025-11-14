@@ -141,6 +141,55 @@ function findClosestGridLevels(
   * Rules: LONG when price ABOVE VWAP, SHORT when price BELOW VWAP
   * Entry conditions: Price has just pulled back/rallied to touch a LowerRange/DailyOpen (LONG) or UpperRange/DailyOpen (SHORT) grid line
   */
+ /**
+  * Check if a level was touched in a candle (more sensitive detection)
+  * Also checks if price crossed through the level (went from above to below or vice versa)
+  */
+ function checkLevelTouch(candle: Candle, level: number, previousCandle?: Candle): boolean {
+   const { low, high, open, close } = candle;
+   const roundedLevel = roundLevel(level);
+   
+   // Standard check: level is within candle's high/low range
+   if (low <= roundedLevel && roundedLevel <= high) {
+     return true;
+   }
+   
+   // Enhanced check: price crossed through the level
+   // For LONG signals: price was above level, now below (pulled back to support)
+   // For SHORT signals: price was below level, now above (rallied to resistance)
+   if (previousCandle) {
+     const prevClose = previousCandle.close;
+     const currentClose = close;
+     
+     // Check if price crossed through the level
+     const crossedDown = prevClose >= roundedLevel && currentClose < roundedLevel;
+     const crossedUp = prevClose <= roundedLevel && currentClose > roundedLevel;
+     
+     // Also check if the level is very close to the candle (within 0.1% tolerance)
+     const tolerance = roundedLevel * 0.001; // 0.1% tolerance
+     const nearLevel = Math.abs(low - roundedLevel) <= tolerance || 
+                       Math.abs(high - roundedLevel) <= tolerance ||
+                       Math.abs(close - roundedLevel) <= tolerance;
+     
+     if (crossedDown || crossedUp || nearLevel) {
+       return true;
+     }
+   }
+   
+   return false;
+ }
+
+ /**
+  * Check if real-time price touches a level (for immediate signal detection)
+  */
+ function checkRealtimeLevelTouch(currentPrice: number, level: number, tolerance: number = 0.001): boolean {
+   const roundedLevel = roundLevel(level);
+   const priceTolerance = roundedLevel * tolerance; // Default 0.1% tolerance
+   
+   // Check if current price is within tolerance of the level
+   return Math.abs(currentPrice - roundedLevel) <= priceTolerance;
+ }
+
  export function strictSignalWithDailyOpen(params: {
    candles: Candle[];
    vwap: number;
@@ -151,6 +200,7 @@ function findClosestGridLevels(
    useDailyOpenEntry?: boolean; // Enable/disable daily open entries (default: true)
    kPct?: number; // Add kPct parameter
    subdivisions?: number; // Add subdivisions parameter
+   realtimePrice?: number; // Optional real-time price for faster signal detection
  }): {
    side: 'LONG' | 'SHORT' | null;
    entry: number | null;
@@ -158,113 +208,234 @@ function findClosestGridLevels(
    sl: number | null;
    reason: string;
  } {
-   const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct, useDailyOpenEntry = true, kPct = 0.03, subdivisions = 5 } = params;
+   const { candles, vwap, dOpen, upLevels, dnLevels, noTradeBandPct, useDailyOpenEntry = true, kPct = 0.03, subdivisions = 5, realtimePrice } = params;
 
   if (candles.length === 0) {
     return { side: null, entry: null, tp: null, sl: null, reason: 'No candles' };
   }
 
   const lastCandle = candles[candles.length - 1];
-  const { open, close, high, low } = lastCandle;
+  // Use real-time price if available, otherwise use last candle close
+  const currentPrice = realtimePrice && realtimePrice > 0 ? realtimePrice : lastCandle.close;
+  const { close } = lastCandle;
 
-  // Check if within no-trade band around VWAP
+  // Check if within no-trade band around VWAP (use real-time price if available)
   const vwapBand = vwap * noTradeBandPct;
-  if (Math.abs(close - vwap) < vwapBand) {
+  if (Math.abs(currentPrice - vwap) < vwapBand) {
     return { side: null, entry: null, tp: null, sl: null, reason: 'Within VWAP dead zone' };
   }
 
-  // Determine bias: LONG-ONLY if price ABOVE VWAP, SHORT-ONLY if price BELOW VWAP
-  const isLongBias = close > vwap;
-  const isShortBias = close < vwap;
+  // Determine bias: LONG-ONLY if price ABOVE VWAP, SHORT-ONLY if price BELOW VWAP (use real-time price)
+  const isLongBias = currentPrice > vwap;
+  const isShortBias = currentPrice < vwap;
 
   if (!isLongBias && !isShortBias) {
     return { side: null, entry: null, tp: null, sl: null, reason: 'No clear bias (price equals VWAP)' };
   }
 
-  // Check for level touches
+  // Check last 5 candles for level touches (more responsive detection)
+  // This catches touches that happened in recent candles, not just the last one
+  const candlesToCheck = candles.slice(-5); // Check last 5 candles
+
+  // Helper to get previous candle for a given candle index
+  const getPreviousCandle = (candleIndex: number): Candle | undefined => {
+    if (candleIndex > 0) {
+      return candles[candleIndex - 1];
+    }
+    return undefined;
+  };
+
+  // Check for level touches - prioritize real-time price check for faster detection
   if (isLongBias) {
     // LONG Entry: Price has just pulled back to touch a LowerRange or DailyOpenPrice grid line (acting as support)
     // Check in order: D1 (first lower level), Daily Open, then other lower levels
 
-    // Check if bar touches D1 (first lower level - entry at D1)
+    // First check real-time price if available (fastest detection)
+    if (realtimePrice && realtimePrice > 0) {
+      // Check D1
+      if (dnLevels.length > 0) {
+        const d1Level = roundLevel(dnLevels[0]);
+        if (checkRealtimeLevelTouch(realtimePrice, d1Level)) {
+          const entry = d1Level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: real-time price touched D1 support at ${entry.toFixed(2)}`,
+          };
+        }
+      }
+
+      // Check daily open
+      if (useDailyOpenEntry && checkRealtimeLevelTouch(realtimePrice, dOpen)) {
+        const entry = roundLevel(dOpen);
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+        return {
+          side: 'LONG',
+          entry,
+          tp,
+          sl,
+          reason: `Long signal: real-time price touched daily open support at ${entry.toFixed(2)}`,
+        };
+      }
+
+      // Check U1
+      if (upLevels.length > 0) {
+        const u1Level = roundLevel(upLevels[0]);
+        if (checkRealtimeLevelTouch(realtimePrice, u1Level)) {
+          const entry = u1Level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: real-time price touched U1 at ${entry.toFixed(2)}`,
+          };
+        }
+      }
+
+      // Check other levels
+      for (let i = 1; i < upLevels.length; i++) {
+        const level = roundLevel(upLevels[i]);
+        if (checkRealtimeLevelTouch(realtimePrice, level)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: real-time price touched U${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
+      }
+
+      for (let i = 1; i < dnLevels.length; i++) {
+        const level = roundLevel(dnLevels[i]);
+        if (checkRealtimeLevelTouch(realtimePrice, level)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: real-time price touched D${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
+      }
+    }
+
+    // Fallback to candle-based detection (check recent candles)
+    // Check if any recent candle touches D1 (first lower level - entry at D1)
     if (dnLevels.length > 0) {
       const d1Level = roundLevel(dnLevels[0]);
-      if (low <= d1Level && d1Level <= high) {
-        const entry = d1Level;
-        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+      for (let i = 0; i < candlesToCheck.length; i++) {
+        const candle = candlesToCheck[i];
+        const candleIndex = candles.length - candlesToCheck.length + i;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, d1Level, prevCandle)) {
+          const entry = d1Level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
-        return {
-          side: 'LONG',
-          entry,
-          tp,
-          sl,
-          reason: `Long signal: touched D1 support at ${entry.toFixed(2)}`,
-        };
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: touched D1 support at ${entry.toFixed(2)}`,
+          };
+        }
       }
     }
 
-    // Check if bar touches daily open (entry at daily open, acting as support)
-    if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
-      const entry = roundLevel(dOpen);
-      const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+    // Check if any recent candle touches daily open (entry at daily open, acting as support)
+    if (useDailyOpenEntry) {
+      for (let i = 0; i < candlesToCheck.length; i++) {
+        const candle = candlesToCheck[i];
+        const candleIndex = candles.length - candlesToCheck.length + i;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, dOpen, prevCandle)) {
+          const entry = roundLevel(dOpen);
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
-      return {
-        side: 'LONG',
-        entry,
-        tp,
-        sl,
-        reason: `Long signal: touched daily open support at ${entry.toFixed(2)}`,
-      };
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: touched daily open support at ${entry.toFixed(2)}`,
+          };
+        }
+      }
     }
 
-    // Check if bar touches U1 (entry at U1) - U1 is first upper level above daily open
+    // Check if any recent candle touches U1 (entry at U1) - U1 is first upper level above daily open
     if (upLevels.length > 0) {
       const u1Level = roundLevel(upLevels[0]);
-      if (low <= u1Level && u1Level <= high) {
-        const entry = u1Level;
-        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+      for (let i = 0; i < candlesToCheck.length; i++) {
+        const candle = candlesToCheck[i];
+        const candleIndex = candles.length - candlesToCheck.length + i;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, u1Level, prevCandle)) {
+          const entry = u1Level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
-        return {
-          side: 'LONG',
-          entry,
-          tp,
-          sl,
-          reason: `Long signal: touched U1 at ${entry.toFixed(2)}`,
-        };
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: touched U1 at ${entry.toFixed(2)}`,
+          };
+        }
       }
     }
 
-    // Check if bar touches any other upper level (U2, U3, etc.)
+    // Check if any recent candle touches any other upper level (U2, U3, etc.)
     for (let i = 1; i < upLevels.length; i++) {
       const level = roundLevel(upLevels[i]);
-      if (low <= level && level <= high) {
-        const entry = level;
-        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+      for (let j = 0; j < candlesToCheck.length; j++) {
+        const candle = candlesToCheck[j];
+        const candleIndex = candles.length - candlesToCheck.length + j;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, level, prevCandle)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
-        return {
-          side: 'LONG',
-          entry,
-          tp,
-          sl,
-          reason: `Long signal: touched U${i + 1} at ${level.toFixed(2)}`,
-        };
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: touched U${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
       }
     }
 
-    // Check if bar touches any lower level below D1 (D2, D3, etc.)
+    // Check if any recent candle touches any lower level below D1 (D2, D3, etc.)
     for (let i = 1; i < dnLevels.length; i++) {
       const level = roundLevel(dnLevels[i]);
-      if (low <= level && level <= high) {
-        const entry = level;
-        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+      for (let j = 0; j < candlesToCheck.length; j++) {
+        const candle = candlesToCheck[j];
+        const candleIndex = candles.length - candlesToCheck.length + j;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, level, prevCandle)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
 
-        return {
-          side: 'LONG',
-          entry,
-          tp,
-          sl,
-          reason: `Long signal: touched D${i + 1} at ${level.toFixed(2)}`,
-        };
+          return {
+            side: 'LONG',
+            entry,
+            tp,
+            sl,
+            reason: `Long signal: touched D${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
       }
     }
 
@@ -273,68 +444,154 @@ function findClosestGridLevels(
     // SHORT Entry: Price has just rallied up to touch an UpperRange or DailyOpenPrice grid line (acting as resistance)
     // Check in order: Daily Open, U1, then other upper levels
 
-    // Check if bar touches daily open (entry at daily open, acting as resistance)
-    if (useDailyOpenEntry && low <= dOpen && dOpen <= high) {
-      const entry = roundLevel(dOpen);
-      const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+    // First check real-time price if available (fastest detection)
+    if (realtimePrice && realtimePrice > 0) {
+      // Check daily open
+      if (useDailyOpenEntry && checkRealtimeLevelTouch(realtimePrice, dOpen)) {
+        const entry = roundLevel(dOpen);
+        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+        return {
+          side: 'SHORT',
+          entry,
+          tp,
+          sl,
+          reason: `Short signal: real-time price touched daily open resistance at ${entry.toFixed(2)}`,
+        };
+      }
 
-      return {
-        side: 'SHORT',
-        entry,
-        tp,
-        sl,
-        reason: `Short signal: touched daily open resistance at ${entry.toFixed(2)}`,
-      };
+      // Check U1
+      if (upLevels.length > 0) {
+        const u1Level = roundLevel(upLevels[0]);
+        if (checkRealtimeLevelTouch(realtimePrice, u1Level)) {
+          const entry = u1Level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+          return {
+            side: 'SHORT',
+            entry,
+            tp,
+            sl,
+            reason: `Short signal: real-time price touched U1 resistance at ${entry.toFixed(2)}`,
+          };
+        }
+      }
+
+      // Check other levels
+      for (let i = 0; i < dnLevels.length; i++) {
+        const level = roundLevel(dnLevels[i]);
+        if (checkRealtimeLevelTouch(realtimePrice, level)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+          return {
+            side: 'SHORT',
+            entry,
+            tp,
+            sl,
+            reason: `Short signal: real-time price touched D${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
+      }
+
+      for (let i = 1; i < upLevels.length; i++) {
+        const level = roundLevel(upLevels[i]);
+        if (checkRealtimeLevelTouch(realtimePrice, level)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+          return {
+            side: 'SHORT',
+            entry,
+            tp,
+            sl,
+            reason: `Short signal: real-time price touched U${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
+      }
     }
 
-    // Check if bar touches U1 (first upper level - entry at U1, acting as resistance)
+    // Fallback to candle-based detection (check recent candles)
+    // Check if any recent candle touches daily open (entry at daily open, acting as resistance)
+    if (useDailyOpenEntry) {
+      for (let i = 0; i < candlesToCheck.length; i++) {
+        const candle = candlesToCheck[i];
+        const candleIndex = candles.length - candlesToCheck.length + i;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, dOpen, prevCandle)) {
+          const entry = roundLevel(dOpen);
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+
+          return {
+            side: 'SHORT',
+            entry,
+            tp,
+            sl,
+            reason: `Short signal: touched daily open resistance at ${entry.toFixed(2)}`,
+          };
+        }
+      }
+    }
+
+    // Check if any recent candle touches U1 (first upper level - entry at U1, acting as resistance)
     if (upLevels.length > 0) {
       const u1Level = roundLevel(upLevels[0]);
-      if (low <= u1Level && u1Level <= high) {
-        const entry = u1Level;
-        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+      for (let i = 0; i < candlesToCheck.length; i++) {
+        const candle = candlesToCheck[i];
+        const candleIndex = candles.length - candlesToCheck.length + i;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, u1Level, prevCandle)) {
+          const entry = u1Level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
-        return {
-          side: 'SHORT',
-          entry,
-          tp,
-          sl,
-          reason: `Short signal: touched U1 resistance at ${entry.toFixed(2)}`,
-        };
+          return {
+            side: 'SHORT',
+            entry,
+            tp,
+            sl,
+            reason: `Short signal: touched U1 resistance at ${entry.toFixed(2)}`,
+          };
+        }
       }
     }
 
-    // Check if bar touches any lower level (D1, D2, etc.)
+    // Check if any recent candle touches any lower level (D1, D2, etc.)
     for (let i = 0; i < dnLevels.length; i++) {
       const level = roundLevel(dnLevels[i]);
-      if (low <= level && level <= high) {
-        const entry = level;
-        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+      for (let j = 0; j < candlesToCheck.length; j++) {
+        const candle = candlesToCheck[j];
+        const candleIndex = candles.length - candlesToCheck.length + j;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, level, prevCandle)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
-        return {
-          side: 'SHORT',
-          entry,
-          tp,
-          sl,
-          reason: `Short signal: touched D${i + 1} at ${level.toFixed(2)}`,
-        };
+          return {
+            side: 'SHORT',
+            entry,
+            tp,
+            sl,
+            reason: `Short signal: touched D${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
       }
     }
 
-    // Check if bar touches any upper level between U1 and daily open
+    // Check if any recent candle touches any upper level between U1 and daily open
     for (let i = 1; i < upLevels.length; i++) {
       const level = roundLevel(upLevels[i]);
-      if (low <= level && level <= high) {
-        const entry = level;
-        const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+      for (let j = 0; j < candlesToCheck.length; j++) {
+        const candle = candlesToCheck[j];
+        const candleIndex = candles.length - candlesToCheck.length + j;
+        const prevCandle = getPreviousCandle(candleIndex);
+        if (checkLevelTouch(candle, level, prevCandle)) {
+          const entry = level;
+          const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
 
-        return {
-          side: 'SHORT',
-          entry,
-          tp,
-          sl,
-          reason: `Short signal: touched U${i + 1} at ${level.toFixed(2)}`,
-        };
+          return {
+            side: 'SHORT',
+            entry,
+            tp,
+            sl,
+            reason: `Short signal: touched U${i + 1} at ${level.toFixed(2)}`,
+          };
+        }
       }
     }
 

@@ -31,6 +31,11 @@ export async function POST(request: NextRequest) {
       console.log('[SIGNAL] Calculated levels dynamically');
     }
 
+    // Get real-time price if provided (for faster signal detection)
+    const realtimePrice = body.realtimePrice && typeof body.realtimePrice === 'number' && body.realtimePrice > 0
+      ? body.realtimePrice
+      : undefined;
+
     // Get signal
     const signal = strictSignalWithDailyOpen({
       candles: validated.candles,
@@ -42,6 +47,7 @@ export async function POST(request: NextRequest) {
       useDailyOpenEntry: body.useDailyOpenEntry ?? true, // Default to true if not specified
       kPct: validated.kPct,
       subdivisions: validated.subdivisions,
+      realtimePrice, // Pass real-time price for faster detection
     });
 
     return NextResponse.json({

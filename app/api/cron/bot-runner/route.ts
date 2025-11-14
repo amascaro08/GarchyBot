@@ -168,6 +168,20 @@ export async function POST(request: NextRequest) {
 
           const lastClose = candles[candles.length - 1].close;
 
+          // Fetch real-time ticker data for faster signal detection
+          let realtimePrice: number | undefined = undefined;
+          try {
+            const { getTicker } = await import('@/lib/bybit');
+            const ticker = await getTicker(botConfig.symbol, botConfig.api_mode !== 'live');
+            if (ticker && ticker.lastPrice > 0) {
+              realtimePrice = ticker.lastPrice;
+              console.log(`[CRON] Fetched real-time price for ${botConfig.symbol}: $${realtimePrice.toFixed(2)}`);
+            }
+          } catch (tickerError) {
+            console.warn(`[CRON] Failed to fetch ticker for ${botConfig.symbol}, using candle close:`, tickerError);
+            // Continue with candle data if ticker fetch fails
+          }
+
           // Check if Phase 2 is completed for this symbol
           const phase2Completed = await checkPhase2Completed(botConfig.symbol);
           if (!phase2Completed) {
@@ -654,7 +668,7 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          // Calculate signal using stored levels and current candles
+          // Calculate signal using stored levels, current candles, and real-time price
           const signalRes = await fetch(
             `${baseUrl}/api/signal`,
             {
@@ -672,6 +686,8 @@ export async function POST(request: NextRequest) {
                 upperLevels: levels.upLevels,
                 lowerLevels: levels.dnLevels,
                 vwap: levels.vwap,
+                // Pass real-time price for faster signal detection
+                realtimePrice,
               }),
             }
           );

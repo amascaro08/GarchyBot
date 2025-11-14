@@ -458,6 +458,57 @@ export function roundQuantity(
 }
 
 /**
+ * Fetch real-time ticker data from Bybit
+ * Returns current last price, bid, ask, and 24h stats
+ */
+export async function getTicker(
+  symbol: string,
+  testnet: boolean = false
+): Promise<{ lastPrice: number; bid1Price: number; ask1Price: number; high24h: number; low24h: number } | null> {
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const normalizedSymbol = symbol.toUpperCase();
+  const url = `${baseUrl}/v5/market/tickers?category=linear&symbol=${normalizedSymbol}`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+
+    if (data.retCode !== 0 || !data.result?.list || data.result.list.length === 0) {
+      return null;
+    }
+
+    const ticker = data.result.list[0];
+
+    return {
+      lastPrice: parseFloat(ticker.lastPrice || '0'),
+      bid1Price: parseFloat(ticker.bid1Price || '0'),
+      ask1Price: parseFloat(ticker.ask1Price || '0'),
+      high24h: parseFloat(ticker.highPrice24h || '0'),
+      low24h: parseFloat(ticker.lowPrice24h || '0'),
+    };
+  } catch (error) {
+    console.error(`[Bybit API] Failed to fetch ticker for ${symbol}:`, error);
+    return null;
+  }
+}
+
+/**
  * Round price to match Bybit's tick size (price precision)
  */
 export function roundPrice(price: number, tickSize: number): number {
