@@ -119,7 +119,6 @@ export async function POST(request: NextRequest) {
     let orderResult: any = null;
     const orderQty = Math.max(0, Number(payload.positionSize));
     const tradeValueUSDT = orderQty * payload.entry;
-    const leverage = payload.leverage ?? botConfig.leverage;
     const requiredMargin = tradeValueUSDT / leverage;
     
     console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, leverage=${leverage}x, requiredMargin=$${requiredMargin.toFixed(2)} USDT, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
