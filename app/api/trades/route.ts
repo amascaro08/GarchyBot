@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
     const now = new Date();
     const leverage = payload.leverage ?? botConfig.leverage;
 
-    const tradeRecord = await createTrade({
+    let tradeRecord = await createTrade({
       user_id: userId,
       bot_config_id: botConfig.id,
       symbol: payload.symbol,
