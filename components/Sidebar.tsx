@@ -14,7 +14,6 @@ interface SidebarProps {
   setLeverage: (n: number) => void;
   capital: number;
   setCapital: (n: number) => void;
-  apiMode: 'demo' | 'live';
   riskAmount: number;
   setRiskAmount: (n: number) => void;
   riskType: 'fixed' | 'percent';
