@@ -131,8 +131,7 @@ export async function POST(request: NextRequest) {
           timeInForce: 'GoodTillCancel', // Changed from PostOnly to allow immediate execution
         });
 
-        // Update trade status to 'open' and store order ID when order is successfully placed
-        // Check if order was created successfully
+        // Check if order was actually created successfully
         if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {
           const { updateTrade } = await import('@/lib/db');
           const orderId = orderResult.result.orderId;
@@ -140,16 +139,20 @@ export async function POST(request: NextRequest) {
             status: 'open',
             order_id: orderId,
           } as any);
-        }
 
-        const orderId = orderResult?.result?.orderId || 'N/A';
-        await addActivityLog(
-          userId,
-          'success',
-          `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}, Order ID: ${orderId}`,
-          { orderResult, orderId },
-          botConfig.id
-        );
+          await addActivityLog(
+            userId,
+            'success',
+            `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}, Order ID: ${orderId}`,
+            { orderResult, orderId },
+            botConfig.id
+          );
+        } else {
+          // Order was rejected by Bybit
+          const errorMsg = orderResult?.retMsg || 'Unknown error';
+          const retCode = orderResult?.retCode || 'N/A';
+          throw new Error(`Bybit rejected order (retCode: ${retCode}): ${errorMsg}`);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error placing order';
         await addActivityLog(

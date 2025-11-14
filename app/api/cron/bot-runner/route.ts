@@ -457,23 +457,27 @@ export async function POST(request: NextRequest) {
                         timeInForce: 'GoodTillCancel', // Changed from PostOnly to allow immediate execution
                       });
 
-                      // Update trade status to 'open' and store order ID when order is successfully placed
-                      const orderId = orderResult?.result?.orderId;
-                      if (orderResult?.retCode === 0 && orderId) {
+                      // Check if order was actually created successfully
+                      if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {
+                        const orderId = orderResult.result.orderId;
                         await updateTrade(tradeRecord.id, {
                           status: 'open',
                           order_id: orderId,
                         } as any);
-                      }
 
-                      const orderIdForLog = orderId || 'N/A';
-                      await addActivityLog(
-                        botConfig.user_id,
-                        'success',
-                        `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}, Order ID: ${orderIdForLog}`,
-                        { orderResult, orderId: orderIdForLog },
-                        botConfig.id
-                      );
+                        await addActivityLog(
+                          botConfig.user_id,
+                          'success',
+                          `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}, Order ID: ${orderId}`,
+                          { orderResult, orderId },
+                          botConfig.id
+                        );
+                      } else {
+                        // Order was rejected by Bybit
+                        const errorMsg = orderResult?.retMsg || 'Unknown error';
+                        const retCode = orderResult?.retCode || 'N/A';
+                        throw new Error(`Bybit rejected order (retCode: ${retCode}): ${errorMsg}`);
+                      }
                     } catch (error) {
                       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
                       await addActivityLog(
