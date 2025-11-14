@@ -257,17 +257,36 @@ export async function POST(request: NextRequest) {
           console.log(`[CRON] VWAP calculated: ${vwapData.vwap.toFixed(2)}`);
 
           // Combine stored levels with current VWAP
+          // Ensure all values are properly converted to numbers/arrays
           const levels = {
             ...storedLevels,
-            vwap: vwapData.vwap,
+            vwap: Number(vwapData.vwap),
             vwapLine: vwapData.vwapLine,
-            kPct: storedLevels.calculated_volatility,
-            dOpen: storedLevels.daily_open_price,
-            upper: storedLevels.upper_range,
-            lower: storedLevels.lower_range,
-            upLevels: storedLevels.up_levels,
-            dnLevels: storedLevels.dn_levels,
+            kPct: Number(storedLevels.calculated_volatility),
+            dOpen: Number(storedLevels.daily_open_price),
+            upper: Number(storedLevels.upper_range),
+            lower: Number(storedLevels.lower_range),
+            upLevels: Array.isArray(storedLevels.up_levels) 
+              ? storedLevels.up_levels.map((l: any) => Number(l))
+              : [],
+            dnLevels: Array.isArray(storedLevels.dn_levels)
+              ? storedLevels.dn_levels.map((l: any) => Number(l))
+              : [],
           };
+
+          // Validate levels before using
+          if (!levels.dOpen || !levels.vwap || levels.upLevels.length === 0 || levels.dnLevels.length === 0) {
+            console.error(`[CRON] Invalid stored levels for ${botConfig.symbol}:`);
+            console.error(`  dOpen: ${levels.dOpen}, vwap: ${levels.vwap}`);
+            console.error(`  upLevels: ${levels.upLevels.length} levels, dnLevels: ${levels.dnLevels.length} levels`);
+            throw new Error('Invalid stored levels - missing required values');
+          }
+
+          console.log(`[CRON] ✓ Validated stored levels for ${botConfig.symbol}:`);
+          console.log(`  Daily Open: ${levels.dOpen.toFixed(2)}`);
+          console.log(`  VWAP: ${levels.vwap.toFixed(2)}`);
+          console.log(`  Upper Levels: ${levels.upLevels.map(l => l.toFixed(2)).join(', ')}`);
+          console.log(`  Lower Levels: ${levels.dnLevels.map(l => l.toFixed(2)).join(', ')}`);
 
           const lastCandle = candles[candles.length - 1];
           const pendingTrades = await getPendingTrades(botConfig.user_id, botConfig.id);

@@ -14,21 +14,38 @@ export async function POST(request: NextRequest) {
     let dnLevels: number[];
     let dOpen: number;
 
-    if (body.dOpen && body.upperLevels && body.lowerLevels && body.vwap) {
-      // Use pre-calculated stored levels
+    // Check if stored levels are provided (must be valid numbers/arrays)
+    const hasStoredLevels = 
+      typeof body.dOpen === 'number' && body.dOpen > 0 &&
+      Array.isArray(body.upperLevels) && body.upperLevels.length > 0 &&
+      Array.isArray(body.lowerLevels) && body.lowerLevels.length > 0 &&
+      typeof body.vwap === 'number' && body.vwap > 0;
+
+    if (hasStoredLevels) {
+      // Use pre-calculated stored levels from database
       vwap = body.vwap;
       upLevels = body.upperLevels;
       dnLevels = body.lowerLevels;
       dOpen = body.dOpen;
-      console.log('[SIGNAL] Using pre-calculated stored levels');
+      console.log('[SIGNAL] ✓ Using pre-calculated stored levels from database');
+      console.log(`[SIGNAL]   Stored Daily Open: ${dOpen.toFixed(2)}`);
+      console.log(`[SIGNAL]   Stored VWAP: ${vwap.toFixed(2)}`);
+      console.log(`[SIGNAL]   Stored Upper Levels: ${upLevels.length} levels`);
+      console.log(`[SIGNAL]   Stored Lower Levels: ${dnLevels.length} levels`);
     } else {
-      // Calculate levels dynamically (fallback)
+      // Calculate levels dynamically (fallback - should not happen if bot runner is working correctly)
+      console.warn('[SIGNAL] ⚠️ Stored levels not provided or invalid, calculating dynamically (this should not happen!)');
+      console.warn(`[SIGNAL]   body.dOpen: ${body.dOpen} (type: ${typeof body.dOpen})`);
+      console.warn(`[SIGNAL]   body.upperLevels: ${Array.isArray(body.upperLevels) ? `array[${body.upperLevels.length}]` : typeof body.upperLevels}`);
+      console.warn(`[SIGNAL]   body.lowerLevels: ${Array.isArray(body.lowerLevels) ? `array[${body.lowerLevels.length}]` : typeof body.lowerLevels}`);
+      console.warn(`[SIGNAL]   body.vwap: ${body.vwap} (type: ${typeof body.vwap})`);
+      
       dOpen = dailyOpenUTC(validated.candles);
       vwap = vwapFromOHLCV(validated.candles);
       const levels = gridLevels(dOpen, validated.kPct, validated.subdivisions);
       upLevels = levels.upLevels;
       dnLevels = levels.dnLevels;
-      console.log('[SIGNAL] Calculated levels dynamically');
+      console.log('[SIGNAL] Calculated levels dynamically (fallback)');
     }
 
     // Get real-time price if provided (for faster signal detection)
