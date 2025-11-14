@@ -360,12 +360,12 @@ export async function getKlines(
 
 /**
  * Fetch instrument info for a specific symbol from Bybit
- * Returns lotSizeFilter with minOrderQty and qtyStep
+ * Returns lotSizeFilter with minOrderQty, qtyStep, and priceFilter with tickSize
  */
 export async function getInstrumentInfo(
   symbol: string,
   testnet: boolean = true
-): Promise<{ minOrderQty: number; qtyStep: number } | null> {
+): Promise<{ minOrderQty: number; qtyStep: number; tickSize: number; minPrice: number; maxPrice: number } | null> {
   const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
   const normalizedSymbol = symbol.toUpperCase();
   const endpoint = `${baseUrl}/v5/market/instruments-info?category=linear&symbol=${normalizedSymbol}`;
@@ -395,9 +395,15 @@ export async function getInstrumentInfo(
       return null;
     }
 
+    const priceFilter = instrument?.priceFilter;
+    
     return {
       minOrderQty: parseFloat(lotSizeFilter.minOrderQty || '0.001'),
       qtyStep: parseFloat(lotSizeFilter.qtyStep || '0.001'),
+      // Price precision (tick size)
+      tickSize: priceFilter ? parseFloat(priceFilter.tickSize || '0.01') : 0.01,
+      minPrice: priceFilter ? parseFloat(priceFilter.minPrice || '0') : 0,
+      maxPrice: priceFilter ? parseFloat(priceFilter.maxPrice || '0') : 0,
     };
   } catch (error) {
     console.error(`[Bybit API] Failed to fetch instrument info for ${symbol}:`, error);
@@ -449,6 +455,33 @@ export function roundQuantity(
   }
 
   return finalQty;
+}
+
+/**
+ * Round price to match Bybit's tick size (price precision)
+ */
+export function roundPrice(price: number, tickSize: number): number {
+  if (tickSize <= 0) return price;
+  
+  // Round to nearest tickSize
+  const rounded = Math.round(price / tickSize) * tickSize;
+  
+  // Calculate precision based on tickSize
+  const tickSizeStr = tickSize.toString();
+  let precision = 0;
+  if (tickSizeStr.includes('.')) {
+    precision = tickSizeStr.split('.')[1].length;
+  } else if (tickSizeStr.includes('e')) {
+    const match = tickSizeStr.match(/e-(\d+)/);
+    if (match) {
+      precision = parseInt(match[1]);
+    }
+  }
+  
+  // Ensure precision is reasonable (max 8 decimal places)
+  precision = Math.min(precision, 8);
+  
+  return parseFloat(rounded.toFixed(precision));
 }
 
 /**
@@ -669,6 +702,30 @@ export async function setTakeProfitStopLoss(params: {
     throw new Error('Either takeProfit or stopLoss must be provided');
   }
 
+  // Round TP/SL prices to match Bybit's tick size (price precision)
+  let roundedTP = takeProfit;
+  let roundedSL = stopLoss;
+  try {
+    const instrumentInfo = await getInstrumentInfo(symbol, testnet);
+    if (instrumentInfo && instrumentInfo.tickSize) {
+      if (takeProfit !== undefined && takeProfit > 0) {
+        roundedTP = roundPrice(takeProfit, instrumentInfo.tickSize);
+        if (Math.abs(roundedTP - takeProfit) > 0.0001) {
+          console.log(`[Bybit API] Rounded TP from ${takeProfit.toFixed(8)} to ${roundedTP.toFixed(8)} to match tick size ${instrumentInfo.tickSize}`);
+        }
+      }
+      if (stopLoss !== undefined && stopLoss > 0) {
+        roundedSL = roundPrice(stopLoss, instrumentInfo.tickSize);
+        if (Math.abs(roundedSL - stopLoss) > 0.0001) {
+          console.log(`[Bybit API] Rounded SL from ${stopLoss.toFixed(8)} to ${roundedSL.toFixed(8)} to match tick size ${instrumentInfo.tickSize}`);
+        }
+      }
+    }
+  } catch (priceRoundError) {
+    console.warn(`[Bybit API] Failed to round TP/SL prices, using original:`, priceRoundError);
+    // Continue with original prices if rounding fails
+  }
+
   const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
   const endpoint = '/v5/position/trading-stop';
   const timestamp = Date.now();
@@ -680,11 +737,11 @@ export async function setTakeProfitStopLoss(params: {
     positionIdx,
   };
 
-  if (takeProfit !== undefined && takeProfit > 0) {
-    requestBody.takeProfit = takeProfit.toString();
+  if (roundedTP !== undefined && roundedTP > 0) {
+    requestBody.takeProfit = roundedTP.toString();
   }
-  if (stopLoss !== undefined && stopLoss > 0) {
-    requestBody.stopLoss = stopLoss.toString();
+  if (roundedSL !== undefined && roundedSL > 0) {
+    requestBody.stopLoss = roundedSL.toString();
   }
 
   const bodyString = JSON.stringify(requestBody);
@@ -841,6 +898,151 @@ export async function cancelOrder(params: {
       throw new BybitError(data.retCode, data.retMsg || 'Unknown Bybit API error');
     }
 
+    return data;
+  } catch (error) {
+    if (error instanceof BybitError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new BybitError(-1, 'Request timeout');
+    }
+    throw new BybitError(-1, error instanceof Error ? error.message : 'Unknown error');
+  }
+}
+
+/**
+ * Close a position on Bybit by placing a market order in the opposite direction
+ * This is used to manually close an open position
+ */
+export async function closePosition(params: {
+  symbol: string;
+  side: 'LONG' | 'SHORT'; // Current position side
+  qty?: number; // Optional: specific quantity to close, if not provided closes entire position
+  testnet?: boolean;
+  apiKey: string;
+  apiSecret: string;
+  positionIdx?: 0 | 1 | 2;
+}): Promise<any> {
+  const {
+    symbol,
+    side,
+    qty,
+    testnet = true,
+    apiKey: overrideApiKey,
+    apiSecret: overrideApiSecret,
+    positionIdx = 0,
+  } = params;
+
+  const apiKey = overrideApiKey || process.env.BYBIT_API_KEY;
+  const apiSecret = overrideApiSecret || process.env.BYBIT_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    throw new Error('BYBIT_API_KEY and BYBIT_API_SECRET must be set');
+  }
+
+  // For closing: LONG position needs Sell order, SHORT position needs Buy order
+  const closeSide = side === 'LONG' ? 'Sell' : 'Buy';
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/order/create';
+  const timestamp = Date.now();
+  const recvWindow = 5000;
+
+  // Get current position size if qty not provided
+  let closeQty = qty;
+  if (!closeQty) {
+    try {
+      const positionData = await fetchPosition({
+        symbol,
+        testnet,
+        apiKey,
+        apiSecret,
+        positionIdx,
+      });
+      const position = positionData.result?.list?.find((p: any) => 
+        p.symbol === symbol.toUpperCase() && 
+        parseFloat(p.size || '0') !== 0
+      );
+      if (position) {
+        closeQty = parseFloat(position.size || '0');
+      } else {
+        throw new Error('No open position found to close');
+      }
+    } catch (error) {
+      throw new Error(`Failed to get position size: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // Round quantity to match Bybit's requirements
+  const instrumentInfo = await getInstrumentInfo(symbol, testnet);
+  if (instrumentInfo && closeQty) {
+    const roundedQty = roundQuantity(closeQty, instrumentInfo.qtyStep, instrumentInfo.minOrderQty);
+    if (roundedQty === null) {
+      throw new BybitError(
+        10001,
+        `Quantity ${closeQty} is below minimum order quantity ${instrumentInfo.minOrderQty} for ${symbol}`
+      );
+    }
+    closeQty = roundedQty;
+  }
+
+  // Request body for market order to close position
+  const requestBody: Record<string, any> = {
+    category: 'linear',
+    symbol: symbol.toUpperCase(),
+    side: closeSide,
+    orderType: 'Market', // Use market order to close immediately
+    qty: closeQty!.toString(),
+    positionIdx, // Required for linear contracts: 0=one-way mode
+    reduceOnly: true, // Important: This ensures we're closing, not opening a new position
+  };
+
+  const bodyString = JSON.stringify(requestBody);
+  const timestampStr = timestamp.toString();
+  const recvWindowStr = recvWindow.toString();
+  const paramString = `${timestampStr}${apiKey}${recvWindowStr}${bodyString}`;
+  
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(paramString)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-BAPI-API-KEY': apiKey,
+        'X-BAPI-SIGN': signature,
+        'X-BAPI-TIMESTAMP': timestampStr,
+        'X-BAPI-RECV-WINDOW': recvWindowStr,
+      },
+      body: bodyString,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Bybit API] HTTP Error ${response.status}: ${errorText}`);
+      throw new BybitError(response.status, `HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    if (data.retCode !== 0) {
+      const errorMsg = data.retMsg || 'Unknown Bybit API error';
+      console.error(`[Bybit API Error] retCode: ${data.retCode}, retMsg: ${errorMsg}`);
+      throw new BybitError(data.retCode, `${errorMsg} (retCode: ${data.retCode})`);
+    }
+
+    console.log(`[Bybit API] Position closed successfully: ${JSON.stringify(data.result, null, 2)}`);
     return data;
   } catch (error) {
     if (error instanceof BybitError) {

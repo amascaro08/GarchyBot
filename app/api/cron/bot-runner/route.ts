@@ -296,17 +296,41 @@ export async function POST(request: NextRequest) {
                       if (order) {
                         const orderStatusStr = order.orderStatus?.toLowerCase();
                         if (orderStatusStr === 'filled') {
-                          // Order was filled, update trade to open
+                          // Order was filled, update trade to open and set TP/SL on Bybit
+                          const filledEntryPrice = parseFloat(order.avgPrice || order.price || trade.entry_price);
+                          const filledQty = parseFloat(order.executedQty || trade.position_size);
+                          
                           await updateTrade(trade.id, {
                             status: 'open',
-                            entry_price: parseFloat(order.avgPrice || order.price || trade.entry_price),
-                            position_size: parseFloat(order.executedQty || trade.position_size),
+                            entry_price: filledEntryPrice,
+                            position_size: filledQty,
                           } as any);
+                          
+                          // Set TP/SL on Bybit now that we have an actual position
+                          if (trade.tp_price && trade.sl_price) {
+                            try {
+                              const { setTakeProfitStopLoss } = await import('@/lib/bybit');
+                              await setTakeProfitStopLoss({
+                                symbol: trade.symbol,
+                                takeProfit: Number(trade.tp_price),
+                                stopLoss: Number(trade.current_sl ?? trade.sl_price),
+                                testnet: false,
+                                apiKey: botConfig.api_key,
+                                apiSecret: botConfig.api_secret,
+                                positionIdx: 0,
+                              });
+                              console.log(`[CRON] TP/SL set on Bybit after order fill: TP=$${Number(trade.tp_price).toFixed(2)}, SL=$${Number(trade.current_sl ?? trade.sl_price).toFixed(2)}`);
+                            } catch (tpSlError) {
+                              console.error(`[CRON] Failed to set TP/SL after order fill:`, tpSlError);
+                              // Don't fail the trade update - TP/SL can be set manually later
+                            }
+                          }
+                          
                           await addActivityLog(
                             botConfig.user_id,
                             'success',
-                            `Order filled on Bybit: ${trade.side} ${trade.symbol} @ $${parseFloat(order.avgPrice || order.price).toFixed(2)}`,
-                            { orderId: trade.order_id, filledQty: order.executedQty },
+                            `Order filled on Bybit: ${trade.side} ${trade.symbol} @ $${filledEntryPrice.toFixed(2)}, Position opened`,
+                            { orderId: trade.order_id, filledQty, entryPrice: filledEntryPrice },
                             botConfig.id
                           );
                         } else if (orderStatusStr === 'cancelled' || orderStatusStr === 'rejected') {
@@ -629,19 +653,32 @@ export async function POST(request: NextRequest) {
                   approved = false;
                 }
 
-                if (approved) {
-                  // Calculate position size based on USDT trade value
-                  // Order value in USDT = capital * leverage
-                  // Position size in base asset = (capital * leverage) / entry_price
-                  const tradeValueUSDT = botConfig.capital * botConfig.leverage;
-                  const entryPrice = signal.touchedLevel;
-                  const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
-                  const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
+          if (approved) {
+            // Calculate actual capital to use based on risk_type and risk_amount
+            let capitalToUse: number;
+            if (botConfig.risk_type === 'percent') {
+              // risk_amount is a percentage (e.g., 20 means 20%)
+              capitalToUse = botConfig.capital * (botConfig.risk_amount / 100);
+            } else {
+              // risk_type is 'fixed', risk_amount is the fixed amount to use
+              capitalToUse = botConfig.risk_amount;
+            }
+            
+            // Ensure we don't exceed available capital
+            capitalToUse = Math.min(capitalToUse, botConfig.capital);
+            
+            // Calculate position size based on USDT trade value
+            // Order value in USDT = capital_to_use * leverage
+            // Position size in base asset = (capital_to_use * leverage) / entry_price
+            const tradeValueUSDT = capitalToUse * botConfig.leverage;
+            const entryPrice = signal.touchedLevel;
+            const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
+            const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
                   
-                  if (positionSize <= 0) {
-                    console.log('[CRON] Skipping trade - calculated position size <= 0');
-                  } else {
-                    console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (capital: $${botConfig.capital.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
+            if (positionSize <= 0) {
+              console.log('[CRON] Skipping trade - calculated position size <= 0');
+            } else {
+              console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
 
                   const tradeRecord = await createTrade({
                       user_id: botConfig.user_id,
@@ -666,11 +703,29 @@ export async function POST(request: NextRequest) {
                   if (botConfig.api_key && botConfig.api_secret && positionSize > 0) {
                     const orderQty = Math.max(0, Number(positionSize));
                     try {
+                      const { placeOrder, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+                      
+                      // Round entry price to match Bybit's tick size (price precision)
+                      // This ensures the order price exactly matches the calculated level
+                      let roundedEntryPrice = signal.touchedLevel;
+                      try {
+                        const instrumentInfo = await getInstrumentInfo(botConfig.symbol, botConfig.api_mode !== 'live');
+                        if (instrumentInfo && instrumentInfo.tickSize) {
+                          roundedEntryPrice = roundPrice(signal.touchedLevel, instrumentInfo.tickSize);
+                          if (Math.abs(roundedEntryPrice - signal.touchedLevel) > 0.0001) {
+                            console.log(`[CRON] Rounded entry price from ${signal.touchedLevel.toFixed(8)} to ${roundedEntryPrice.toFixed(8)} to match Bybit tick size ${instrumentInfo.tickSize}`);
+                          }
+                        }
+                      } catch (priceRoundError) {
+                        console.warn(`[CRON] Failed to round price, using original:`, priceRoundError);
+                        // Continue with original price if rounding fails
+                      }
+                      
                       const orderResult = await placeOrder({
                         symbol: botConfig.symbol,
                         side: signal.signal === 'LONG' ? 'Buy' : 'Sell',
                         qty: orderQty,
-                        price: signal.touchedLevel,
+                        price: roundedEntryPrice, // Use rounded price to match Bybit precision
                         testnet: botConfig.api_mode !== 'live',
                         apiKey: botConfig.api_key,
                         apiSecret: botConfig.api_secret,

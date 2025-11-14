@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/bot-runner",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/daily-setup",
+      "schedule": "0 0 * * *"
     }
   ]
 }

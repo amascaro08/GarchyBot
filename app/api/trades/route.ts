@@ -86,10 +86,25 @@ export async function POST(request: NextRequest) {
     const now = new Date();
     const leverage = payload.leverage ?? botConfig.leverage;
 
+    // Calculate actual capital to use based on risk_type and risk_amount
+    // If risk_type is 'percent', use percentage of capital
+    // If risk_type is 'fixed', use fixed risk_amount
+    let capitalToUse: number;
+    if (botConfig.risk_type === 'percent') {
+      // risk_amount is a percentage (e.g., 20 means 20%)
+      capitalToUse = botConfig.capital * (botConfig.risk_amount / 100);
+    } else {
+      // risk_type is 'fixed', risk_amount is the fixed amount to use
+      capitalToUse = botConfig.risk_amount;
+    }
+    
+    // Ensure we don't exceed available capital
+    capitalToUse = Math.min(capitalToUse, botConfig.capital);
+    
     // Calculate position size from capital and leverage (the source of truth)
-    // Trade value = capital * leverage (e.g., $2 * 50x = $100 USDT)
-    // Position size = trade value / entry price (e.g., $100 / $99,629 = 0.001003 BTC)
-    const tradeValueUSDT = botConfig.capital * leverage;
+    // Trade value = capital * leverage (e.g., $4 * 50x = $200 USDT)
+    // Position size = trade value / entry price (e.g., $200 / $99,629 = 0.002006 BTC)
+    const tradeValueUSDT = capitalToUse * leverage;
     const entryPrice = payload.entry;
     const calculatedPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
     const storedPositionSize = calculatedPositionSize > 0 ? calculatedPositionSize : payload.positionSize;
@@ -114,7 +129,7 @@ export async function POST(request: NextRequest) {
       exit_time: null,
     });
     
-    console.log(`[TRADE] Trade created with position_size: ${storedPositionSize.toFixed(8)} (calculated from capital $${botConfig.capital} * leverage ${leverage}x / entry $${payload.entry.toFixed(2)})`);
+    console.log(`[TRADE] Trade created with position_size: ${storedPositionSize.toFixed(8)} (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)}, leverage: ${leverage}x, entry: $${payload.entry.toFixed(2)})`);
 
     await addActivityLog(
       userId,
@@ -134,9 +149,9 @@ export async function POST(request: NextRequest) {
     const requiredMargin = tradeValueUSDT / leverage;
     
     // Log the calculation to verify it's correct
-    console.log(`[TRADE] Position size calculation: capital=$${botConfig.capital}, leverage=${leverage}x, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, entryPrice=$${entryPrice.toFixed(2)}, calculatedPositionSize=${calculatedPositionSize.toFixed(8)}, orderQty=${orderQty.toFixed(8)}`);
+    console.log(`[TRADE] Position size calculation: risk_type=${botConfig.risk_type}, capital=$${botConfig.capital}, risk_amount=${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use=$${capitalToUse.toFixed(2)}, leverage=${leverage}x, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, entryPrice=$${entryPrice.toFixed(2)}, calculatedPositionSize=${calculatedPositionSize.toFixed(8)}, orderQty=${orderQty.toFixed(8)}, requiredMargin=$${requiredMargin.toFixed(2)} USDT`);
     
-    console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, leverage=${leverage}x, requiredMargin=$${requiredMargin.toFixed(2)} USDT, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
+    console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT (capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${leverage}x), requiredMargin=$${requiredMargin.toFixed(2)} USDT, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
     
     // Check available balance before attempting order
     if (botConfig.api_key && botConfig.api_secret) {
@@ -154,27 +169,41 @@ export async function POST(request: NextRequest) {
         const availableBalance = parseFloat(usdtCoin?.availableToWithdraw || usdtCoin?.availableBalance || '0');
         const equity = parseFloat(usdtCoin?.equity || '0');
         
-        console.log(`[TRADE] Account balance check: Available: $${availableBalance.toFixed(2)} USDT, Equity: $${equity.toFixed(2)} USDT, Required margin: $${requiredMargin.toFixed(2)} USDT`);
-        
-        // For futures, we need initial margin which might be higher than just notional/leverage
-        // Bybit typically requires a bit more than the calculated margin for safety
-        // Also account for potential maintenance margin and fees (typically 10-20% buffer needed)
-        const marginBuffer = 1.15; // 15% buffer for fees and safety margin
+        // For Bybit futures, the required margin is the notional value / leverage
+        // Bybit may add a small maintenance margin buffer, but typically it's close to notional/leverage
+        // Add a small 5% buffer for fees and safety (reduced from 15% which was too conservative)
+        const marginBuffer = 1.05; // 5% buffer for fees and safety margin
         const totalRequiredMargin = requiredMargin * marginBuffer;
         
+        console.log(`[TRADE] Account balance check: Available: $${availableBalance.toFixed(2)} USDT, Equity: $${equity.toFixed(2)} USDT, Capital to use: $${capitalToUse.toFixed(2)}, Required margin: $${requiredMargin.toFixed(2)} USDT, With buffer (5%): $${totalRequiredMargin.toFixed(2)} USDT`);
+        
         if (availableBalance < totalRequiredMargin) {
-          const errorMsg = `Insufficient balance. Available: $${availableBalance.toFixed(2)} USDT, Required margin: $${requiredMargin.toFixed(2)} USDT + buffer (total: $${totalRequiredMargin.toFixed(2)} USDT needed)`;
+          const errorMsg = `Insufficient balance. Available: $${availableBalance.toFixed(2)} USDT, Required margin: $${requiredMargin.toFixed(2)} USDT + 5% buffer = $${totalRequiredMargin.toFixed(2)} USDT needed`;
           console.warn(`[TRADE] ${errorMsg}`);
+          console.warn(`[TRADE] Calculation breakdown: capital=$${botConfig.capital}, risk_type=${botConfig.risk_type}, risk_amount=${botConfig.risk_amount}, capital_to_use=$${capitalToUse.toFixed(2)}, leverage=${leverage}x, trade_value=$${tradeValueUSDT.toFixed(2)} USDT, margin=$${requiredMargin.toFixed(2)}`);
+          
           await addActivityLog(
             userId,
             'warning',
-            `Balance check warning: ${errorMsg}. Will still attempt order - Bybit will reject if insufficient.`,
-            { symbol: payload.symbol, side: payload.side, availableBalance, requiredMargin, leverage, tradeValueUSDT, totalRequiredMargin },
+            `Balance check: ${errorMsg}. Will still attempt order - Bybit will reject if insufficient.`,
+            { 
+              symbol: payload.symbol, 
+              side: payload.side, 
+              availableBalance, 
+              requiredMargin, 
+              totalRequiredMargin,
+              capital: botConfig.capital,
+              capitalToUse,
+              riskType: botConfig.risk_type,
+              riskAmount: botConfig.risk_amount,
+              leverage, 
+              tradeValueUSDT 
+            },
             botConfig.id
           );
           // Don't throw - let Bybit decide if there's enough balance
         } else {
-          console.log(`[TRADE] Balance check passed. Available: $${availableBalance.toFixed(2)} USDT, Required: $${totalRequiredMargin.toFixed(2)} USDT. Proceeding with order placement...`);
+          console.log(`[TRADE] Balance check passed. Available: $${availableBalance.toFixed(2)} USDT, Required: $${totalRequiredMargin.toFixed(2)} USDT (margin: $${requiredMargin.toFixed(2)} + 5% buffer). Proceeding with order placement...`);
         }
       } catch (balanceError) {
         console.warn(`[TRADE] Failed to check balance, proceeding anyway:`, balanceError);
@@ -184,12 +213,29 @@ export async function POST(request: NextRequest) {
     
     if (botConfig.api_key && botConfig.api_secret && orderQty > 0) {
       try {
-        console.log(`[TRADE] Calling placeOrder with qty=${orderQty}...`);
+        // Round entry price to match Bybit's tick size (price precision)
+        // This ensures the order price exactly matches the calculated level
+        let roundedEntryPrice = payload.entry;
+        try {
+          const { getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+          const instrumentInfo = await getInstrumentInfo(payload.symbol, botConfig.api_mode !== 'live');
+          if (instrumentInfo && instrumentInfo.tickSize) {
+            roundedEntryPrice = roundPrice(payload.entry, instrumentInfo.tickSize);
+            if (Math.abs(roundedEntryPrice - payload.entry) > 0.0001) {
+              console.log(`[TRADE] Rounded entry price from ${payload.entry.toFixed(8)} to ${roundedEntryPrice.toFixed(8)} to match Bybit tick size ${instrumentInfo.tickSize}`);
+            }
+          }
+        } catch (priceRoundError) {
+          console.warn(`[TRADE] Failed to round price, using original:`, priceRoundError);
+          // Continue with original price if rounding fails
+        }
+        
+        console.log(`[TRADE] Calling placeOrder with qty=${orderQty}, price=${roundedEntryPrice} (original: ${payload.entry})...`);
         orderResult = await placeOrder({
           symbol: payload.symbol,
           side: payload.side === 'LONG' ? 'Buy' : 'Sell',
           qty: orderQty,
-          price: payload.entry,
+          price: roundedEntryPrice, // Use rounded price to match Bybit precision
           testnet: botConfig.api_mode !== 'live',
           apiKey: botConfig.api_key,
           apiSecret: botConfig.api_secret,
@@ -200,65 +246,20 @@ export async function POST(request: NextRequest) {
         console.log(`[TRADE] Order placement response:`, JSON.stringify(orderResult, null, 2));
 
         // Check if order was actually created successfully on Bybit
-        // For mainnet, ONLY mark as 'open' if order was confirmed by Bybit
+        // IMPORTANT: Don't mark as 'open' yet - LIMIT orders are pending until filled!
+        // Status should remain 'pending' until the order is actually filled
         if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {
           const { updateTrade } = await import('@/lib/db');
           const orderId = orderResult.result.orderId;
           
-          // Only mark as 'open' if we're in live mode (mainnet) and order was successfully placed
-          // For demo/testnet, we can still mark as open for testing purposes
-          if (botConfig.api_mode === 'live') {
-            // On mainnet, only mark as open if order was successfully placed
-            tradeRecord = await updateTrade(tradeRecord.id, {
-              status: 'open',
-              order_id: orderId,
-            } as any);
-            
-            console.log(`[TRADE] Trade marked as 'open' on mainnet. Order ID: ${orderId}`);
-          } else {
-            // For testnet/demo, still mark as open but note it's not real
-            tradeRecord = await updateTrade(tradeRecord.id, {
-              status: 'open',
-              order_id: orderId,
-            } as any);
-            
-            console.log(`[TRADE] Trade marked as 'open' on testnet. Order ID: ${orderId}`);
-          }
-
-          // Set TP and SL on Bybit after order is placed
-          if (botConfig.api_mode === 'live' && (payload.tp || payload.sl)) {
-            try {
-              const { setTakeProfitStopLoss } = await import('@/lib/bybit');
-              await setTakeProfitStopLoss({
-                symbol: payload.symbol,
-                takeProfit: payload.tp,
-                stopLoss: payload.sl,
-                testnet: false,
-                apiKey: botConfig.api_key,
-                apiSecret: botConfig.api_secret,
-                positionIdx: 0,
-              });
-              console.log(`[TRADE] TP/SL set on Bybit: TP=$${payload.tp.toFixed(2)}, SL=$${payload.sl.toFixed(2)}`);
-              await addActivityLog(
-                userId,
-                'success',
-                `TP/SL set on Bybit: TP $${payload.tp.toFixed(2)}, SL $${payload.sl.toFixed(2)}`,
-                { tp: payload.tp, sl: payload.sl },
-                botConfig.id
-              );
-            } catch (tpSlError) {
-              const tpSlMsg = tpSlError instanceof Error ? tpSlError.message : 'Unknown error';
-              console.error(`[TRADE] Failed to set TP/SL on Bybit:`, tpSlMsg);
-              await addActivityLog(
-                userId,
-                'warning',
-                `TP/SL setting failed (order still active): ${tpSlMsg}`,
-                { tp: payload.tp, sl: payload.sl, error: tpSlMsg },
-                botConfig.id
-              );
-              // Don't throw - order is still active even if TP/SL setting fails
-            }
-          }
+          // Store order ID but keep status as 'pending' - order hasn't filled yet
+          tradeRecord = await updateTrade(tradeRecord.id, {
+            order_id: orderId,
+            // Keep status as 'pending' - will be updated to 'open' when order fills
+          } as any);
+          
+          console.log(`[TRADE] Limit order placed on Bybit (${botConfig.api_mode.toUpperCase()}). Order ID: ${orderId}, Status: PENDING (will update to OPEN when filled)`);
+          console.log(`[TRADE] Note: TP/SL will be set automatically when the order fills and position is opened`);
 
           await addActivityLog(
             userId,
