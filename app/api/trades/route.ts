@@ -99,6 +99,7 @@ export async function POST(request: NextRequest) {
       leverage,
       pnl: 0,
       reason: payload.reason || null,
+      order_id: null, // Will be set after order is placed
       entry_time: now,
       exit_time: null,
     });
