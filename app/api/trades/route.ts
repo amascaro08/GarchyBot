@@ -117,9 +117,17 @@ export async function POST(request: NextRequest) {
     );
 
     let orderResult: any = null;
-    const orderQty = Math.max(0, Number(payload.positionSize));
-    const tradeValueUSDT = orderQty * payload.entry;
+    // Recalculate trade value and position size from capital and leverage (the source of truth)
+    // Trade value = capital * leverage (e.g., $2 * 50x = $100 USDT)
+    // Position size = trade value / entry price (e.g., $100 / $99,629 = 0.001003 BTC)
+    const tradeValueUSDT = botConfig.capital * leverage;
+    const entryPrice = payload.entry;
+    const calculatedPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
+    const orderQty = Math.max(0, Number.isFinite(calculatedPositionSize) ? calculatedPositionSize : 0);
     const requiredMargin = tradeValueUSDT / leverage;
+    
+    // Log the calculation to verify it's correct
+    console.log(`[TRADE] Position size calculation: capital=$${botConfig.capital}, leverage=${leverage}x, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, entryPrice=$${entryPrice.toFixed(2)}, calculatedPositionSize=${calculatedPositionSize.toFixed(8)}, orderQty=${orderQty.toFixed(8)}`);
     
     console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, leverage=${leverage}x, requiredMargin=$${requiredMargin.toFixed(2)} USDT, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
     
@@ -184,14 +192,31 @@ export async function POST(request: NextRequest) {
 
         console.log(`[TRADE] Order placement response:`, JSON.stringify(orderResult, null, 2));
 
-        // Check if order was actually created successfully
+        // Check if order was actually created successfully on Bybit
+        // For mainnet, ONLY mark as 'open' if order was confirmed by Bybit
         if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {
           const { updateTrade } = await import('@/lib/db');
           const orderId = orderResult.result.orderId;
-          tradeRecord = await updateTrade(tradeRecord.id, {
-            status: 'open',
-            order_id: orderId,
-          } as any);
+          
+          // Only mark as 'open' if we're in live mode (mainnet) and order was successfully placed
+          // For demo/testnet, we can still mark as open for testing purposes
+          if (botConfig.api_mode === 'live') {
+            // On mainnet, only mark as open if order was successfully placed
+            tradeRecord = await updateTrade(tradeRecord.id, {
+              status: 'open',
+              order_id: orderId,
+            } as any);
+            
+            console.log(`[TRADE] Trade marked as 'open' on mainnet. Order ID: ${orderId}`);
+          } else {
+            // For testnet/demo, still mark as open but note it's not real
+            tradeRecord = await updateTrade(tradeRecord.id, {
+              status: 'open',
+              order_id: orderId,
+            } as any);
+            
+            console.log(`[TRADE] Trade marked as 'open' on testnet. Order ID: ${orderId}`);
+          }
 
           await addActivityLog(
             userId,
@@ -201,9 +226,10 @@ export async function POST(request: NextRequest) {
             botConfig.id
           );
         } else {
-          // Order was rejected by Bybit
+          // Order was rejected by Bybit - keep status as 'pending' and log error
           const errorMsg = orderResult?.retMsg || 'Unknown error';
           const retCode = orderResult?.retCode || 'N/A';
+          console.error(`[TRADE] Bybit rejected order - keeping trade as 'pending'. retCode: ${retCode}, retMsg: ${errorMsg}`);
           throw new Error(`Bybit rejected order (retCode: ${retCode}): ${errorMsg}`);
         }
       } catch (error) {
@@ -215,17 +241,28 @@ export async function POST(request: NextRequest) {
         // Check for insufficient balance error and provide helpful message
         let userFriendlyMessage = message;
         if (message.includes('110007') || message.includes('not enough')) {
-          const requiredMargin = tradeValueUSDT / (payload.leverage || botConfig.leverage);
-          userFriendlyMessage = `Insufficient balance. Trade value: $${tradeValueUSDT.toFixed(2)} USDT, Required margin (${botConfig.leverage}x leverage): ~$${requiredMargin.toFixed(2)} USDT. Please check your available balance on Bybit.`;
+          const requiredMargin = tradeValueUSDT / leverage;
+          userFriendlyMessage = `Insufficient balance. Trade value: $${tradeValueUSDT.toFixed(2)} USDT, Required margin (${leverage}x leverage): ~$${requiredMargin.toFixed(2)} USDT. Please check your available balance on Bybit.`;
         }
         
+        // On mainnet, ensure trade stays as 'pending' if order placement failed
+        // Only mark as 'open' when order is actually confirmed by Bybit
         await addActivityLog(
           userId,
           'error',
-          `Bybit order failed: ${userFriendlyMessage}`,
-          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize, error: message, errorDetails, tradeValueUSDT },
+          `Bybit order failed (trade remains 'pending'): ${userFriendlyMessage}`,
+          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize, error: message, errorDetails, tradeValueUSDT, apiMode: botConfig.api_mode },
           botConfig.id
         );
+        
+        // For mainnet, ensure trade status is NOT 'open' if order failed
+        if (botConfig.api_mode === 'live' && tradeRecord.status === 'open') {
+          console.warn(`[TRADE] Order failed on mainnet but trade status was 'open'. Reverting to 'pending'.`);
+          const { updateTrade } = await import('@/lib/db');
+          tradeRecord = await updateTrade(tradeRecord.id, {
+            status: 'pending',
+          } as any);
+        }
         // Don't throw - allow trade to remain in 'pending' status
         // This way user can see the error in activity logs
       }
