@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { calculateAverageVolatility } from '@/lib/vol';
-import { getKlines } from '@/lib/bybit';
+import { getYahooFinanceKlines } from '@/lib/yahoo-finance';
 
 /**
- * Calculate GARCH volatility for a symbol
+ * Calculate GARCH volatility for a symbol using Yahoo Finance data
  * Client-accessible endpoint (no auth required for viewing calculations)
  * GET /api/garch/calculate?symbol=BTCUSDT
  */
@@ -12,35 +12,23 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const symbol = searchParams.get('symbol') || 'BTCUSDT';
     
-    console.log(`[GARCH-CALC] Calculating volatility for ${symbol}...`);
+    console.log(`[GARCH-CALC] Calculating volatility for ${symbol} using Yahoo Finance...`);
     
-    // Fetch 3 years of historical data (~1095 days)
-    // Try testnet first, then mainnet if that fails
-    let candles;
-    let lastError;
-    
+    // Fetch 3 years of historical data (~1095 days) from Yahoo Finance
     const daysToFetch = 1095; // 3 years of daily data
     
+    let candles;
     try {
-      console.log(`[GARCH-CALC] Trying testnet API for ${daysToFetch} days (3 years)...`);
-      candles = await getKlines(symbol, 'D', daysToFetch, true); // Use 'D' for daily, testnet first
-    } catch (testnetError) {
-      lastError = testnetError;
-      console.warn(`[GARCH-CALC] Testnet failed, trying mainnet...`, testnetError instanceof Error ? testnetError.message : testnetError);
-      try {
-        candles = await getKlines(symbol, 'D', daysToFetch, false); // Try mainnet
-      } catch (mainnetError) {
-        lastError = mainnetError;
-        console.error(`[GARCH-CALC] Both testnet and mainnet failed. Mainnet error:`, mainnetError instanceof Error ? mainnetError.message : mainnetError);
-        // The getKlines function should have already tried Binance/CoinGecko fallbacks
-        // If we get here, all APIs failed
-        throw new Error(`Failed to fetch data from Bybit, Binance, and CoinGecko: ${mainnetError instanceof Error ? mainnetError.message : 'Unknown error'}`);
-      }
+      console.log(`[GARCH-CALC] Fetching ${daysToFetch} days (3 years) from Yahoo Finance...`);
+      candles = await getYahooFinanceKlines(symbol, daysToFetch);
+    } catch (yahooError) {
+      console.error(`[GARCH-CALC] Yahoo Finance failed:`, yahooError instanceof Error ? yahooError.message : yahooError);
+      throw new Error(`Failed to fetch data from Yahoo Finance: ${yahooError instanceof Error ? yahooError.message : 'Unknown error'}`);
     }
     
     if (!candles || candles.length === 0) {
       return NextResponse.json(
-        { error: `No historical data for ${symbol} after trying all APIs` },
+        { error: `No historical data for ${symbol} from Yahoo Finance` },
         { status: 400 }
       );
     }
@@ -48,6 +36,7 @@ export async function GET(request: NextRequest) {
     console.log(`[GARCH-CALC] Successfully fetched ${candles.length} candles for ${symbol}`);
     
     // Extract closing prices and validate
+    // Yahoo Finance already provides adjusted close (if available), matching yfinance's auto_adjust=True
     let closes = candles.map(c => c.close).filter(price => price > 0 && isFinite(price));
     
     // Filter out obvious outliers (for BTC, prices outside 1k-300k are likely bad data)
@@ -67,7 +56,7 @@ export async function GET(request: NextRequest) {
     }
     
     // Debug: Log sample of data to verify it looks correct
-    console.log(`[GARCH-CALC] Sample data for ${symbol}:`);
+    console.log(`[GARCH-CALC] Sample data for ${symbol} (Yahoo Finance):`);
     console.log(`  First 5 closes: ${closes.slice(0, 5).map(c => c.toFixed(2)).join(', ')}`);
     console.log(`  Last 5 closes: ${closes.slice(-5).map(c => c.toFixed(2)).join(', ')}`);
     console.log(`  Price range: ${Math.min(...closes).toFixed(2)} - ${Math.max(...closes).toFixed(2)}`);
