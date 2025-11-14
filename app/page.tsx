@@ -1528,6 +1528,18 @@ export default function Home() {
 
           {/* Main layout */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* Cards above chart - full width */}
+            <div className="xl:col-span-3 mb-6">
+              <Cards
+                price={currentPrice}
+                garchPct={levels?.kPct ?? null}
+                vwap={levels?.vwap ?? null}
+                dOpen={levels?.dOpen ?? null}
+                upper={levels?.upper ?? null}
+                lower={levels?.lower ?? null}
+              />
+            </div>
+
             {/* Chart spans full width */}
             <div className="xl:col-span-3 glass-effect rounded-2xl p-5 sm:p-7 shadow-2xl card-hover border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
               <div className="mb-5">
@@ -1553,14 +1565,6 @@ export default function Home() {
 
             {/* Trade statistics & activity */}
             <div className="space-y-6">
-              <Cards
-                price={currentPrice}
-                garchPct={levels?.kPct ?? null}
-                vwap={levels?.vwap ?? null}
-                dOpen={levels?.dOpen ?? null}
-                upper={levels?.upper ?? null}
-                lower={levels?.lower ?? null}
-              />
               <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} walletInfo={walletInfo} />
               <ActivityLog logs={activityLogs} maxLogs={50} />
             </div>

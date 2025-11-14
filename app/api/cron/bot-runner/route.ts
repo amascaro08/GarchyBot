@@ -307,8 +307,12 @@ export async function POST(request: NextRequest) {
                           } as any);
                           
                           // Set TP/SL on Bybit now that we have an actual position
+                          // Wait a small delay to ensure position is fully established on Bybit
                           if (trade.tp_price && trade.sl_price) {
                             try {
+                              // Small delay to ensure position is established
+                              await new Promise(resolve => setTimeout(resolve, 1000));
+                              
                               const { setTakeProfitStopLoss } = await import('@/lib/bybit');
                               await setTakeProfitStopLoss({
                                 symbol: trade.symbol,
@@ -320,9 +324,23 @@ export async function POST(request: NextRequest) {
                                 positionIdx: 0,
                               });
                               console.log(`[CRON] TP/SL set on Bybit after order fill: TP=$${Number(trade.tp_price).toFixed(2)}, SL=$${Number(trade.current_sl ?? trade.sl_price).toFixed(2)}`);
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'success',
+                                `TP/SL set on Bybit: ${trade.side} ${trade.symbol} TP=$${Number(trade.tp_price).toFixed(2)}, SL=$${Number(trade.current_sl ?? trade.sl_price).toFixed(2)}`,
+                                { orderId: trade.order_id, tp: Number(trade.tp_price), sl: Number(trade.current_sl ?? trade.sl_price) },
+                                botConfig.id
+                              );
                             } catch (tpSlError) {
                               console.error(`[CRON] Failed to set TP/SL after order fill:`, tpSlError);
-                              // Don't fail the trade update - TP/SL can be set manually later
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'warning',
+                                `Failed to set TP/SL on Bybit after order fill for ${trade.side} ${trade.symbol}: ${tpSlError instanceof Error ? tpSlError.message : 'Unknown error'}. Will retry on next cron run.`,
+                                { orderId: trade.order_id, error: tpSlError instanceof Error ? tpSlError.message : String(tpSlError) },
+                                botConfig.id
+                              );
+                              // Don't fail the trade update - TP/SL will be retried on next cron run
                             }
                           }
                           
@@ -447,6 +465,56 @@ export async function POST(request: NextRequest) {
                         const actualEntryPrice = parseFloat(position.avgPrice || trade.entry_price);
                         const unrealizedPnl = parseFloat(position.unrealisedPnl || '0');
                         const markPrice = parseFloat(position.markPrice || lastClose);
+                        
+                        // Check if TP/SL are set on Bybit
+                        const bybitTP = position.takeProfit ? parseFloat(position.takeProfit) : null;
+                        const bybitSL = position.stopLoss ? parseFloat(position.stopLoss) : null;
+                        const tradeTP = Number(trade.tp_price);
+                        const tradeSL = Number(trade.current_sl ?? trade.sl_price);
+                        
+                        // Set TP/SL if they're not set on Bybit or don't match our trade values
+                        const shouldSetTP = !bybitTP || Math.abs(bybitTP - tradeTP) > 0.01;
+                        const shouldSetSL = !bybitSL || Math.abs(bybitSL - tradeSL) > 0.01;
+                        
+                        if (shouldSetTP || shouldSetSL) {
+                          try {
+                            const { setTakeProfitStopLoss } = await import('@/lib/bybit');
+                            const tpToSet = shouldSetTP ? tradeTP : undefined;
+                            const slToSet = shouldSetSL ? tradeSL : undefined;
+                            
+                            await setTakeProfitStopLoss({
+                              symbol: trade.symbol,
+                              takeProfit: tpToSet,
+                              stopLoss: slToSet,
+                              testnet: false,
+                              apiKey: botConfig.api_key,
+                              apiSecret: botConfig.api_secret,
+                              positionIdx: 0,
+                            });
+                            
+                            const setMsg = [];
+                            if (shouldSetTP) setMsg.push(`TP=$${tradeTP.toFixed(2)}`);
+                            if (shouldSetSL) setMsg.push(`SL=$${tradeSL.toFixed(2)}`);
+                            
+                            console.log(`[CRON] TP/SL set on Bybit for trade ${trade.id}: ${setMsg.join(', ')}`);
+                            await addActivityLog(
+                              botConfig.user_id,
+                              'success',
+                              `TP/SL set on Bybit: ${trade.side} ${trade.symbol} ${setMsg.join(', ')}`,
+                              { orderId: trade.order_id, tp: tpToSet, sl: slToSet },
+                              botConfig.id
+                            );
+                          } catch (tpSlError) {
+                            console.error(`[CRON] Failed to set TP/SL for open position ${trade.id}:`, tpSlError);
+                            await addActivityLog(
+                              botConfig.user_id,
+                              'warning',
+                              `Failed to set TP/SL on Bybit for ${trade.side} ${trade.symbol}: ${tpSlError instanceof Error ? tpSlError.message : 'Unknown error'}`,
+                              { orderId: trade.order_id, error: tpSlError instanceof Error ? tpSlError.message : String(tpSlError) },
+                              botConfig.id
+                            );
+                          }
+                        }
                         
                         // Update position size, entry price, and P&L from Bybit's actual data
                         const needsUpdate = 

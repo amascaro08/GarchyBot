@@ -81,11 +81,11 @@ export default function Cards({ price, garchPct, vwap, dOpen, upper, lower }: Ca
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:gap-6">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
       {cardData.map((card, idx) => (
         <div
           key={idx}
-          className={`glass-effect rounded-xl p-5 border ${card.borderColor} bg-gradient-to-br ${card.bgGradient} card-hover shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden`}
+          className={`glass-effect rounded-xl p-4 sm:p-5 border ${card.borderColor} bg-gradient-to-br ${card.bgGradient} card-hover shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden`}
         >
           {/* Icon background */}
           <div className="absolute top-2 right-2 text-2xl opacity-20">
@@ -96,7 +96,7 @@ export default function Cards({ price, garchPct, vwap, dOpen, upper, lower }: Ca
             {card.label}
           </div>
 
-          <div className={`text-2xl sm:text-3xl font-bold ${card.color} transition-all duration-300 mb-1`}>
+          <div className={`text-xl sm:text-2xl lg:text-3xl font-bold ${card.color} transition-all duration-300 mb-1`}>
             {card.value}
           </div>
 
