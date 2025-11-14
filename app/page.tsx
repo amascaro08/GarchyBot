@@ -1212,7 +1212,8 @@ export default function Home() {
             (wallet.coin || []).map((coin: any) => ({
               coin: coin.coin,
               equity: Number(coin.equity || 0),
-              availableToWithdraw: Number(coin.availableToWithdraw || 0),
+              // Use availableBalance for trading, fallback to availableToWithdraw if not present
+              availableToWithdraw: Number(coin.availableBalance || coin.availableToWithdraw || 0),
             }))
           )
           .filter((wallet: { equity: number; availableToWithdraw: number }) => wallet.equity > 0 || wallet.availableToWithdraw > 0)
