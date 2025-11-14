@@ -636,6 +636,116 @@ export async function placeOrder(params: {
 }
 
 /**
+ * Set take profit and stop loss for a position on Bybit
+ * Uses Bybit v5 API /v5/position/trading-stop endpoint
+ */
+export async function setTakeProfitStopLoss(params: {
+  symbol: string;
+  takeProfit?: number;
+  stopLoss?: number;
+  testnet?: boolean;
+  apiKey?: string | null;
+  apiSecret?: string | null;
+  positionIdx?: 0 | 1 | 2;
+}): Promise<any> {
+  const {
+    symbol,
+    takeProfit,
+    stopLoss,
+    testnet = true,
+    apiKey: overrideApiKey,
+    apiSecret: overrideApiSecret,
+    positionIdx = 0,
+  } = params;
+
+  const apiKey = overrideApiKey || process.env.BYBIT_API_KEY;
+  const apiSecret = overrideApiSecret || process.env.BYBIT_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    throw new Error('BYBIT_API_KEY and BYBIT_API_SECRET must be set');
+  }
+
+  if (!takeProfit && !stopLoss) {
+    throw new Error('Either takeProfit or stopLoss must be provided');
+  }
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/position/trading-stop';
+  const timestamp = Date.now();
+  const recvWindow = 5000;
+
+  const requestBody: Record<string, any> = {
+    category: 'linear',
+    symbol: symbol.toUpperCase(),
+    positionIdx,
+  };
+
+  if (takeProfit !== undefined && takeProfit > 0) {
+    requestBody.takeProfit = takeProfit.toString();
+  }
+  if (stopLoss !== undefined && stopLoss > 0) {
+    requestBody.stopLoss = stopLoss.toString();
+  }
+
+  const bodyString = JSON.stringify(requestBody);
+  const timestampStr = timestamp.toString();
+  const recvWindowStr = recvWindow.toString();
+  const paramString = `${timestampStr}${apiKey}${recvWindowStr}${bodyString}`;
+  
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(paramString)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-BAPI-API-KEY': apiKey,
+        'X-BAPI-SIGN': signature,
+        'X-BAPI-TIMESTAMP': timestampStr,
+        'X-BAPI-RECV-WINDOW': recvWindowStr,
+      },
+      body: bodyString,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Bybit API] HTTP Error ${response.status}: ${errorText}`);
+      throw new BybitError(response.status, `HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    if (data.retCode !== 0) {
+      const errorMsg = data.retMsg || 'Unknown Bybit API error';
+      console.error(`[Bybit API Error] retCode: ${data.retCode}, retMsg: ${errorMsg}`);
+      throw new BybitError(data.retCode, `${errorMsg} (retCode: ${data.retCode})`);
+    }
+
+    console.log(`[Bybit API] TP/SL set successfully: ${JSON.stringify(data.result, null, 2)}`);
+    return data;
+  } catch (error) {
+    if (error instanceof BybitError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new BybitError(-1, 'Request timeout');
+    }
+    throw new BybitError(-1, error instanceof Error ? error.message : 'Unknown error');
+  }
+}
+
+/**
  * Cancel order on Bybit (Testnet or Mainnet)
  * Requires BYBIT_API_KEY and BYBIT_API_SECRET env vars unless apiKey/apiSecret are provided
  * 
@@ -741,6 +851,60 @@ export async function cancelOrder(params: {
     }
     throw new BybitError(-1, error instanceof Error ? error.message : 'Unknown error');
   }
+}
+
+/**
+ * Fetch position information from Bybit
+ * Returns the actual position size and unrealized P&L from Bybit
+ */
+export async function fetchPosition(params: {
+  symbol: string;
+  testnet?: boolean;
+  apiKey: string;
+  apiSecret: string;
+  positionIdx?: 0 | 1 | 2;
+}): Promise<any> {
+  const {
+    symbol,
+    testnet = true,
+    apiKey,
+    apiSecret,
+    positionIdx = 0,
+  } = params;
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/position/list';
+  const recvWindow = '5000';
+  const timestamp = Date.now().toString();
+  const query = `category=linear&symbol=${symbol.toUpperCase()}&positionIdx=${positionIdx}`;
+  const prehash = `${timestamp}${apiKey}${recvWindow}${query}`;
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(prehash)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}?${query}`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'X-BAPI-API-KEY': apiKey,
+      'X-BAPI-SIGN': signature,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-RECV-WINDOW': recvWindow,
+    },
+  });
+
+  if (!response.ok) {
+    throw new BybitError(response.status, `HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.retCode !== 0) {
+    throw new BybitError(data.retCode, data.retMsg || 'Failed to fetch position');
+  }
+
+  return data;
 }
 
 /**

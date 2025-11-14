@@ -84,6 +84,14 @@ export async function POST(request: NextRequest) {
     const now = new Date();
     const leverage = payload.leverage ?? botConfig.leverage;
 
+    // Calculate position size from capital and leverage (the source of truth)
+    // Trade value = capital * leverage (e.g., $2 * 50x = $100 USDT)
+    // Position size = trade value / entry price (e.g., $100 / $99,629 = 0.001003 BTC)
+    const tradeValueUSDT = botConfig.capital * leverage;
+    const entryPrice = payload.entry;
+    const calculatedPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
+    const storedPositionSize = calculatedPositionSize > 0 ? calculatedPositionSize : payload.positionSize;
+    
     let tradeRecord = await createTrade({
       user_id: userId,
       bot_config_id: botConfig.id,
@@ -95,7 +103,7 @@ export async function POST(request: NextRequest) {
       sl_price: payload.sl,
       current_sl: payload.sl,
       exit_price: null,
-      position_size: payload.positionSize,
+      position_size: storedPositionSize, // Use calculated position size
       leverage,
       pnl: 0,
       reason: payload.reason || null,
@@ -103,6 +111,8 @@ export async function POST(request: NextRequest) {
       entry_time: now,
       exit_time: null,
     });
+    
+    console.log(`[TRADE] Trade created with position_size: ${storedPositionSize.toFixed(8)} (calculated from capital $${botConfig.capital} * leverage ${leverage}x / entry $${payload.entry.toFixed(2)})`);
 
     await addActivityLog(
       userId,
@@ -218,11 +228,46 @@ export async function POST(request: NextRequest) {
             console.log(`[TRADE] Trade marked as 'open' on testnet. Order ID: ${orderId}`);
           }
 
+          // Set TP and SL on Bybit after order is placed
+          if (botConfig.api_mode === 'live' && (payload.tp || payload.sl)) {
+            try {
+              const { setTakeProfitStopLoss } = await import('@/lib/bybit');
+              await setTakeProfitStopLoss({
+                symbol: payload.symbol,
+                takeProfit: payload.tp,
+                stopLoss: payload.sl,
+                testnet: false,
+                apiKey: botConfig.api_key,
+                apiSecret: botConfig.api_secret,
+                positionIdx: 0,
+              });
+              console.log(`[TRADE] TP/SL set on Bybit: TP=$${payload.tp.toFixed(2)}, SL=$${payload.sl.toFixed(2)}`);
+              await addActivityLog(
+                userId,
+                'success',
+                `TP/SL set on Bybit: TP $${payload.tp.toFixed(2)}, SL $${payload.sl.toFixed(2)}`,
+                { tp: payload.tp, sl: payload.sl },
+                botConfig.id
+              );
+            } catch (tpSlError) {
+              const tpSlMsg = tpSlError instanceof Error ? tpSlError.message : 'Unknown error';
+              console.error(`[TRADE] Failed to set TP/SL on Bybit:`, tpSlMsg);
+              await addActivityLog(
+                userId,
+                'warning',
+                `TP/SL setting failed (order still active): ${tpSlMsg}`,
+                { tp: payload.tp, sl: payload.sl, error: tpSlMsg },
+                botConfig.id
+              );
+              // Don't throw - order is still active even if TP/SL setting fails
+            }
+          }
+
           await addActivityLog(
             userId,
             'success',
-            `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${payload.positionSize}, Order ID: ${orderId}`,
-            { orderResult, orderId },
+            `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${orderQty.toFixed(8)}, Order ID: ${orderId}`,
+            { orderResult, orderId, orderQty },
             botConfig.id
           );
         } else {
