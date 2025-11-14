@@ -1227,7 +1227,7 @@ export default function Home() {
       // Auto-sync capital from wallet balance when in live mode
       if (apiMode === 'live' && balances.length > 0) {
         // Calculate total equity (use equity, not available balance, as capital represents total account value)
-        const totalEquity = balances.reduce((sum, wallet) => sum + (wallet.equity || 0), 0);
+        const totalEquity = balances.reduce((sum: number, wallet: { equity: number; availableToWithdraw: number }) => sum + (wallet.equity || 0), 0);
         if (totalEquity > 0) {
           setCapital(totalEquity);
           addLog('info', `Capital auto-synced from wallet balance: $${totalEquity.toFixed(2)}`);
