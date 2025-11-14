@@ -83,6 +83,51 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       botConfig.id
     );
 
+    // Set TP/SL on Bybit immediately after trade opens
+    if (botConfig.api_key && botConfig.api_secret && updatedTrade.tp_price && updatedTrade.sl_price) {
+      try {
+        // Small delay to ensure position is fully established on Bybit
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const { setTakeProfitStopLoss } = await import('@/lib/bybit');
+        await setTakeProfitStopLoss({
+          symbol: updatedTrade.symbol,
+          takeProfit: Number(updatedTrade.tp_price),
+          stopLoss: Number(updatedTrade.current_sl ?? updatedTrade.sl_price),
+          testnet: botConfig.api_mode !== 'live',
+          apiKey: botConfig.api_key,
+          apiSecret: botConfig.api_secret,
+          positionIdx: 0,
+        });
+        
+        console.log(`[TRADE FILL] TP/SL set on Bybit: TP=$${Number(updatedTrade.tp_price).toFixed(2)}, SL=$${Number(updatedTrade.current_sl ?? updatedTrade.sl_price).toFixed(2)}`);
+        await addActivityLog(
+          userId,
+          'success',
+          `TP/SL set on Bybit: ${updatedTrade.side} ${updatedTrade.symbol} TP=$${Number(updatedTrade.tp_price).toFixed(2)}, SL=$${Number(updatedTrade.current_sl ?? updatedTrade.sl_price).toFixed(2)}`,
+          { 
+            tradeId: updatedTrade.id,
+            tp: Number(updatedTrade.tp_price), 
+            sl: Number(updatedTrade.current_sl ?? updatedTrade.sl_price) 
+          },
+          botConfig.id
+        );
+      } catch (tpSlError) {
+        console.error(`[TRADE FILL] Failed to set TP/SL on Bybit:`, tpSlError);
+        await addActivityLog(
+          userId,
+          'warning',
+          `Failed to set TP/SL on Bybit after trade fill: ${tpSlError instanceof Error ? tpSlError.message : 'Unknown error'}. Will retry via cron job.`,
+          { 
+            tradeId: updatedTrade.id,
+            error: tpSlError instanceof Error ? tpSlError.message : String(tpSlError) 
+          },
+          botConfig.id
+        );
+        // Don't fail the response - TP/SL will be retried by cron job
+      }
+    }
+
     return NextResponse.json({
       success: true,
       trade: serializeTrade(updatedTrade),
