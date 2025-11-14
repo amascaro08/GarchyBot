@@ -336,79 +336,124 @@ export async function POST(request: NextRequest) {
             
             for (const trade of openTrades) {
               try {
-                // Check if trade has an order ID (pending or open)
-                if (trade.order_id) {
-                  // Check order status for pending trades
-                  if (trade.status === 'pending') {
-                    try {
-                      const orderStatus = await getOrderStatus({
-                        symbol: trade.symbol,
-                        orderId: trade.order_id,
-                        testnet: false,
-                        apiKey: botConfig.api_key,
-                        apiSecret: botConfig.api_secret,
-                      });
-                      
-                      const order = orderStatus.result?.list?.[0];
-                      if (order) {
-                        const orderStatusStr = order.orderStatus?.toLowerCase();
-                        if (orderStatusStr === 'filled') {
-                          // Order was filled, update trade to open and set TP/SL on Bybit
-                          const filledEntryPrice = parseFloat(order.avgPrice || order.price || trade.entry_price);
-                          const filledQty = parseFloat(order.executedQty || trade.position_size);
+                  // Check if trade has an order ID (pending or open)
+                  if (trade.order_id) {
+                    // Check order status for pending trades (especially market orders)
+                    if (trade.status === 'pending') {
+                      try {
+                        const orderStatus = await getOrderStatus({
+                          symbol: trade.symbol,
+                          orderId: trade.order_id,
+                          testnet: botConfig.api_mode !== 'live',
+                          apiKey: botConfig.api_key,
+                          apiSecret: botConfig.api_secret,
+                        });
+                        
+                        const order = orderStatus.result?.list?.[0];
+                        if (order) {
+                          const orderStatusStr = order.orderStatus?.toLowerCase() || '';
+                          const isFilled = orderStatusStr === 'filled' || 
+                                          orderStatusStr === 'partiallyfilled' ||
+                                          orderStatusStr.includes('fill') ||
+                                          (order.avgPrice && parseFloat(order.avgPrice) > 0);
                           
-                          await updateTrade(trade.id, {
-                            status: 'open',
-                            entry_price: filledEntryPrice,
-                            position_size: filledQty,
-                          } as any);
-                          
-                          // Set TP/SL on Bybit now that we have an actual position
-                          // Wait a small delay to ensure position is fully established on Bybit
-                          if (trade.tp_price && trade.sl_price) {
-                            try {
-                              // Small delay to ensure position is established
-                              await new Promise(resolve => setTimeout(resolve, 1000));
-                              
-                              const { setTakeProfitStopLoss } = await import('@/lib/bybit');
-                              await setTakeProfitStopLoss({
-                                symbol: trade.symbol,
-                                takeProfit: Number(trade.tp_price),
-                                stopLoss: Number(trade.current_sl ?? trade.sl_price),
-                                testnet: false,
-                                apiKey: botConfig.api_key,
-                                apiSecret: botConfig.api_secret,
-                                positionIdx: 0,
-                              });
-                              console.log(`[CRON] TP/SL set on Bybit after order fill: TP=$${Number(trade.tp_price).toFixed(2)}, SL=$${Number(trade.current_sl ?? trade.sl_price).toFixed(2)}`);
-                              await addActivityLog(
-                                botConfig.user_id,
-                                'success',
-                                `TP/SL set on Bybit: ${trade.side} ${trade.symbol} TP=$${Number(trade.tp_price).toFixed(2)}, SL=$${Number(trade.current_sl ?? trade.sl_price).toFixed(2)}`,
-                                { orderId: trade.order_id, tp: Number(trade.tp_price), sl: Number(trade.current_sl ?? trade.sl_price) },
-                                botConfig.id
-                              );
-                            } catch (tpSlError) {
-                              console.error(`[CRON] Failed to set TP/SL after order fill:`, tpSlError);
-                              await addActivityLog(
-                                botConfig.user_id,
-                                'warning',
-                                `Failed to set TP/SL on Bybit after order fill for ${trade.side} ${trade.symbol}: ${tpSlError instanceof Error ? tpSlError.message : 'Unknown error'}. Will retry on next cron run.`,
-                                { orderId: trade.order_id, error: tpSlError instanceof Error ? tpSlError.message : String(tpSlError) },
-                                botConfig.id
-                              );
-                              // Don't fail the trade update - TP/SL will be retried on next cron run
+                          if (isFilled) {
+                            // Order was filled, update trade to open and set TP/SL on Bybit
+                            const filledEntryPrice = parseFloat(order.avgPrice || order.price || trade.entry_price);
+                            const filledQty = parseFloat(order.executedQty || trade.position_size);
+                            
+                            await updateTrade(trade.id, {
+                              status: 'open',
+                              entry_price: filledEntryPrice,
+                              position_size: filledQty,
+                            } as any);
+                            
+                            // Set TP/SL on Bybit now that we have an actual position
+                            // Wait a small delay to ensure position is fully established on Bybit
+                            if (trade.tp_price && trade.sl_price) {
+                              try {
+                                // Small delay to ensure position is established
+                                await new Promise(resolve => setTimeout(resolve, 1000));
+                                
+                                const { setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+                                
+                                // Round TP/SL to match tick size
+                                let roundedTP = Number(trade.tp_price);
+                                let roundedSL = Number(trade.current_sl ?? trade.sl_price);
+                                try {
+                                  const instrumentInfo = await getInstrumentInfo(trade.symbol, botConfig.api_mode !== 'live');
+                                  if (instrumentInfo && instrumentInfo.tickSize) {
+                                    roundedTP = roundPrice(roundedTP, instrumentInfo.tickSize);
+                                    roundedSL = roundPrice(roundedSL, instrumentInfo.tickSize);
+                                  }
+                                } catch (priceRoundError) {
+                                  console.warn(`[CRON] Failed to round TP/SL prices:`, priceRoundError);
+                                }
+                                
+                                await setTakeProfitStopLoss({
+                                  symbol: trade.symbol,
+                                  takeProfit: roundedTP,
+                                  stopLoss: roundedSL,
+                                  testnet: botConfig.api_mode !== 'live',
+                                  apiKey: botConfig.api_key,
+                                  apiSecret: botConfig.api_secret,
+                                  positionIdx: 0,
+                                });
+                                console.log(`[CRON] TP/SL set on Bybit after order fill: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                                await addActivityLog(
+                                  botConfig.user_id,
+                                  'success',
+                                  `TP/SL set on Bybit: ${trade.side} ${trade.symbol} TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`,
+                                  { orderId: trade.order_id, tp: roundedTP, sl: roundedSL },
+                                  botConfig.id
+                                );
+                              } catch (tpSlError) {
+                                console.error(`[CRON] Failed to set TP/SL after order fill:`, tpSlError);
+                                // Retry once
+                                try {
+                                  await new Promise(resolve => setTimeout(resolve, 2000));
+                                  const { setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+                                  let roundedTP = Number(trade.tp_price);
+                                  let roundedSL = Number(trade.current_sl ?? trade.sl_price);
+                                  try {
+                                    const instrumentInfo = await getInstrumentInfo(trade.symbol, botConfig.api_mode !== 'live');
+                                    if (instrumentInfo && instrumentInfo.tickSize) {
+                                      roundedTP = roundPrice(roundedTP, instrumentInfo.tickSize);
+                                      roundedSL = roundPrice(roundedSL, instrumentInfo.tickSize);
+                                    }
+                                  } catch (priceRoundError) {
+                                    // Use unrounded values
+                                  }
+                                  await setTakeProfitStopLoss({
+                                    symbol: trade.symbol,
+                                    takeProfit: roundedTP,
+                                    stopLoss: roundedSL,
+                                    testnet: botConfig.api_mode !== 'live',
+                                    apiKey: botConfig.api_key,
+                                    apiSecret: botConfig.api_secret,
+                                    positionIdx: 0,
+                                  });
+                                  console.log(`[CRON] ✓ TP/SL set on retry: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                                } catch (retryError) {
+                                  await addActivityLog(
+                                    botConfig.user_id,
+                                    'warning',
+                                    `Failed to set TP/SL on Bybit after order fill for ${trade.side} ${trade.symbol}: ${tpSlError instanceof Error ? tpSlError.message : 'Unknown error'}. Will retry on next cron run.`,
+                                    { orderId: trade.order_id, error: tpSlError instanceof Error ? tpSlError.message : String(tpSlError) },
+                                    botConfig.id
+                                  );
+                                }
+                              }
                             }
-                          }
-                          
-                          await addActivityLog(
-                            botConfig.user_id,
-                            'success',
-                            `Order filled on Bybit: ${trade.side} ${trade.symbol} @ $${filledEntryPrice.toFixed(2)}, Position opened`,
-                            { orderId: trade.order_id, filledQty, entryPrice: filledEntryPrice },
-                            botConfig.id
-                          );
-                        } else if (orderStatusStr === 'cancelled' || orderStatusStr === 'rejected') {
+                            
+                            await addActivityLog(
+                              botConfig.user_id,
+                              'success',
+                              `Order filled on Bybit: ${trade.side} ${trade.symbol} @ $${filledEntryPrice.toFixed(2)}, Position opened`,
+                              { orderId: trade.order_id, filledQty, entryPrice: filledEntryPrice },
+                              botConfig.id
+                            );
+                          } else if (orderStatusStr === 'cancelled' || orderStatusStr === 'rejected') {
                           // Order was cancelled/rejected, update trade
                           await updateTrade(trade.id, {
                             status: 'cancelled',
@@ -861,11 +906,15 @@ export async function POST(request: NextRequest) {
                       if (orderResult?.retCode === 0 && orderResult?.result) {
                         const orderId = orderResult.result.orderId;
                         const orderStatus = orderResult.result.orderStatus;
-                        const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || signal.touchedLevel);
-                        const executedQty = parseFloat(orderResult.result.executedQty || orderResult.result.qty || orderQty);
+                        const orderStatusLower = orderStatus?.toLowerCase() || '';
+                        const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || orderResult.result.avgPrice || signal.touchedLevel);
+                        const executedQty = parseFloat(orderResult.result.executedQty || orderResult.result.executedQty || orderResult.result.qty || orderQty);
                         
                         // Market orders should be filled immediately
-                        if (orderStatus === 'Filled' || orderStatus === 'PartiallyFilled') {
+                        // Check for various status strings (Bybit may return different cases)
+                        if (orderStatusLower === 'filled' || orderStatusLower === 'partiallyfilled' || 
+                            orderStatus === 'Filled' || orderStatus === 'PartiallyFilled' ||
+                            orderStatusLower.includes('fill')) {
                           console.log(`[CRON] Market order FILLED: ${signal.signal} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
                           
                           // Round TP/SL prices to match Bybit's tick size
@@ -882,7 +931,10 @@ export async function POST(request: NextRequest) {
                           }
                           
                           // Set TP/SL immediately after order is filled
+                          // Wait a moment for position to be established on Bybit
                           try {
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
                             await setTakeProfitStopLoss({
                               symbol: botConfig.symbol,
                               takeProfit: roundedTP,
@@ -894,8 +946,31 @@ export async function POST(request: NextRequest) {
                             });
                             console.log(`[CRON] ✓ TP/SL set immediately: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
                           } catch (tpSlError) {
-                            console.error(`[CRON] Failed to set TP/SL:`, tpSlError);
-                            // Continue anyway - TP/SL can be set later
+                            console.error(`[CRON] Failed to set TP/SL, retrying...`, tpSlError);
+                            // Retry after another delay
+                            try {
+                              await new Promise(resolve => setTimeout(resolve, 2000));
+                              await setTakeProfitStopLoss({
+                                symbol: botConfig.symbol,
+                                takeProfit: roundedTP,
+                                stopLoss: roundedSL,
+                                testnet: botConfig.api_mode !== 'live',
+                                apiKey: botConfig.api_key,
+                                apiSecret: botConfig.api_secret,
+                                positionIdx: 0,
+                              });
+                              console.log(`[CRON] ✓ TP/SL set on retry: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                            } catch (retryError) {
+                              console.error(`[CRON] Failed to set TP/SL on retry:`, retryError);
+                              // Log but continue - cron job will retry on next run
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'warning',
+                                `TP/SL not set yet for ${signal.signal} ${botConfig.symbol}, will retry on next cron run`,
+                                { orderId, tp: roundedTP, sl: roundedSL, error: retryError instanceof Error ? retryError.message : String(retryError) },
+                                botConfig.id
+                              );
+                            }
                           }
                           
                           // Update trade with actual filled price and status
@@ -914,20 +989,100 @@ export async function POST(request: NextRequest) {
                             botConfig.id
                           );
                         } else {
-                          // Order placed but not filled yet (shouldn't happen with market orders)
-                          console.warn(`[CRON] Market order placed but status is ${orderStatus}, waiting for fill...`);
-                          await updateTrade(tradeRecord.id, {
-                            order_id: orderId,
-                            // Keep status as 'pending' until filled
-                          } as any);
+                          // Order placed but status unclear - check order status via API
+                          console.warn(`[CRON] Market order placed but status is ${orderStatus}, checking order status...`);
                           
-                          await addActivityLog(
-                            botConfig.user_id,
-                            'warning',
-                            `Market order placed but not filled yet: ${signal.signal} ${botConfig.symbol}, Order ID: ${orderId}, Status: ${orderStatus}`,
-                            { orderResult, orderId, orderStatus },
-                            botConfig.id
-                          );
+                          try {
+                            const { getOrderStatus } = await import('@/lib/bybit');
+                            // Wait a moment for order to process
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
+                            const orderStatusCheck = await getOrderStatus({
+                              symbol: botConfig.symbol,
+                              orderId: orderId,
+                              testnet: botConfig.api_mode !== 'live',
+                              apiKey: botConfig.api_key,
+                              apiSecret: botConfig.api_secret,
+                            });
+                            
+                            const order = orderStatusCheck.result?.list?.[0];
+                            if (order) {
+                              const checkStatus = order.orderStatus?.toLowerCase() || '';
+                              if (checkStatus === 'filled' || checkStatus === 'partiallyfilled' || checkStatus.includes('fill')) {
+                                const filledPrice = parseFloat(order.avgPrice || order.price || signal.touchedLevel);
+                                const filledQty = parseFloat(order.executedQty || order.qty || orderQty);
+                                
+                                // Round TP/SL
+                                let roundedTP = signal.tp;
+                                let roundedSL = signal.sl;
+                                try {
+                                  const instrumentInfo = await getInstrumentInfo(botConfig.symbol, botConfig.api_mode !== 'live');
+                                  if (instrumentInfo && instrumentInfo.tickSize) {
+                                    roundedTP = roundPrice(signal.tp, instrumentInfo.tickSize);
+                                    roundedSL = roundPrice(signal.sl, instrumentInfo.tickSize);
+                                  }
+                                } catch (priceRoundError) {
+                                  console.warn(`[CRON] Failed to round TP/SL prices:`, priceRoundError);
+                                }
+                                
+                                // Set TP/SL
+                                try {
+                                  await setTakeProfitStopLoss({
+                                    symbol: botConfig.symbol,
+                                    takeProfit: roundedTP,
+                                    stopLoss: roundedSL,
+                                    testnet: botConfig.api_mode !== 'live',
+                                    apiKey: botConfig.api_key,
+                                    apiSecret: botConfig.api_secret,
+                                    positionIdx: 0,
+                                  });
+                                  console.log(`[CRON] ✓ TP/SL set after status check: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                                } catch (tpSlError) {
+                                  console.error(`[CRON] Failed to set TP/SL:`, tpSlError);
+                                }
+                                
+                                // Update trade
+                                await updateTrade(tradeRecord.id, {
+                                  status: 'open',
+                                  order_id: orderId,
+                                  entry_price: filledPrice,
+                                  position_size: filledQty,
+                                } as any);
+                                
+                                await addActivityLog(
+                                  botConfig.user_id,
+                                  'success',
+                                  `Market order FILLED (verified): ${signal.signal} ${botConfig.symbol} @ $${filledPrice.toFixed(2)}, qty: ${filledQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
+                                  { orderResult, orderId, filledPrice, filledQty, tp: roundedTP, sl: roundedSL },
+                                  botConfig.id
+                                );
+                              } else {
+                                // Still not filled
+                                await updateTrade(tradeRecord.id, {
+                                  order_id: orderId,
+                                  // Keep status as 'pending' until filled
+                                } as any);
+                                
+                                await addActivityLog(
+                                  botConfig.user_id,
+                                  'warning',
+                                  `Market order placed but not filled yet: ${signal.signal} ${botConfig.symbol}, Order ID: ${orderId}, Status: ${checkStatus}`,
+                                  { orderResult, orderId, orderStatus: checkStatus },
+                                  botConfig.id
+                                );
+                              }
+                            } else {
+                              // Couldn't get order status
+                              await updateTrade(tradeRecord.id, {
+                                order_id: orderId,
+                              } as any);
+                            }
+                          } catch (statusError) {
+                            console.error(`[CRON] Error checking order status:`, statusError);
+                            await updateTrade(tradeRecord.id, {
+                              order_id: orderId,
+                            } as any);
+                          }
                         }
                       } else {
                         // Order was rejected by Bybit

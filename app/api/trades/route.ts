@@ -245,24 +245,34 @@ export async function POST(request: NextRequest) {
           const executedQty = parseFloat(orderResult.result.executedQty || orderResult.result.qty || orderQty);
           
           // Market orders should be filled immediately
-          if (orderStatus === 'Filled' || orderStatus === 'PartiallyFilled') {
-            console.log(`[TRADE] Market order FILLED: ${payload.side} ${payload.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
-            
-            // Round TP/SL prices to match Bybit's tick size
-            let roundedTP = payload.tp;
-            let roundedSL = payload.sl;
-            try {
-              const instrumentInfo = await getInstrumentInfo(payload.symbol, botConfig.api_mode !== 'live');
-              if (instrumentInfo && instrumentInfo.tickSize) {
-                roundedTP = roundPrice(payload.tp, instrumentInfo.tickSize);
-                roundedSL = roundPrice(payload.sl, instrumentInfo.tickSize);
-              }
-            } catch (priceRoundError) {
-              console.warn(`[TRADE] Failed to round TP/SL prices:`, priceRoundError);
+          // Check for various status strings (Bybit may return different cases)
+          const orderStatusLower = orderStatus?.toLowerCase() || '';
+          const isFilled = orderStatusLower === 'filled' || orderStatusLower === 'partiallyfilled' || 
+                          orderStatus === 'Filled' || orderStatus === 'PartiallyFilled' ||
+                          orderStatusLower.includes('fill') ||
+                          (orderResult.result.avgPrice && parseFloat(orderResult.result.avgPrice) > 0);
+          
+          // Round TP/SL prices to match Bybit's tick size
+          let roundedTP = payload.tp;
+          let roundedSL = payload.sl;
+          try {
+            const instrumentInfo = await getInstrumentInfo(payload.symbol, botConfig.api_mode !== 'live');
+            if (instrumentInfo && instrumentInfo.tickSize) {
+              roundedTP = roundPrice(payload.tp, instrumentInfo.tickSize);
+              roundedSL = roundPrice(payload.sl, instrumentInfo.tickSize);
             }
+          } catch (priceRoundError) {
+            console.warn(`[TRADE] Failed to round TP/SL prices:`, priceRoundError);
+          }
+          
+          if (isFilled) {
+            console.log(`[TRADE] Market order FILLED: ${payload.side} ${payload.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
             
             // Set TP/SL immediately after order is filled
             try {
+              // Small delay to ensure position is established
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              
               await setTakeProfitStopLoss({
                 symbol: payload.symbol,
                 takeProfit: roundedTP,
@@ -275,7 +285,23 @@ export async function POST(request: NextRequest) {
               console.log(`[TRADE] ✓ TP/SL set immediately: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
             } catch (tpSlError) {
               console.error(`[TRADE] Failed to set TP/SL:`, tpSlError);
-              // Continue anyway - TP/SL can be set later
+              // Retry once after another delay
+              try {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                await setTakeProfitStopLoss({
+                  symbol: payload.symbol,
+                  takeProfit: roundedTP,
+                  stopLoss: roundedSL,
+                  testnet: botConfig.api_mode !== 'live',
+                  apiKey: botConfig.api_key,
+                  apiSecret: botConfig.api_secret,
+                  positionIdx: 0,
+                });
+                console.log(`[TRADE] ✓ TP/SL set on retry: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+              } catch (retryError) {
+                console.error(`[TRADE] Failed to set TP/SL on retry:`, retryError);
+                // Log error but continue - TP/SL will be set by cron job
+              }
             }
             
             // Update trade with actual filled price and status
@@ -297,20 +323,110 @@ export async function POST(request: NextRequest) {
               botConfig.id
             );
           } else {
-            // Order placed but not filled yet (shouldn't happen with market orders)
-            console.warn(`[TRADE] Market order placed but status is ${orderStatus}, waiting for fill...`);
+            // Order placed but status unclear - verify via API and set TP/SL anyway
+            console.warn(`[TRADE] Market order placed but status unclear (${orderStatus}), verifying...`);
+            
+            // Store order ID first
             tradeRecord = await updateTrade(tradeRecord.id, {
               order_id: orderId,
-              // Keep status as 'pending' until filled
             } as any);
             
-            await addActivityLog(
-              userId,
-              'warning',
-              `Market order placed but not filled yet: ${payload.side} ${payload.symbol}, Order ID: ${orderId}, Status: ${orderStatus}`,
-              { orderResult, orderId, orderStatus },
-              botConfig.id
-            );
+            // Try to verify order status and set TP/SL
+            try {
+              const { getOrderStatus } = await import('@/lib/bybit');
+              await new Promise(resolve => setTimeout(resolve, 1500));
+              
+              const orderStatusCheck = await getOrderStatus({
+                symbol: payload.symbol,
+                orderId: orderId,
+                testnet: botConfig.api_mode !== 'live',
+                apiKey: botConfig.api_key,
+                apiSecret: botConfig.api_secret,
+              });
+              
+              const order = orderStatusCheck.result?.list?.[0];
+              if (order) {
+                const checkStatus = order.orderStatus?.toLowerCase() || '';
+                const verifiedFilled = checkStatus === 'filled' || checkStatus === 'partiallyfilled' || checkStatus.includes('fill');
+                const verifiedPrice = parseFloat(order.avgPrice || order.price || avgPrice);
+                const verifiedQty = parseFloat(order.executedQty || order.qty || executedQty);
+                
+                if (verifiedFilled || verifiedPrice > 0) {
+                  // Set TP/SL
+                  try {
+                    await setTakeProfitStopLoss({
+                      symbol: payload.symbol,
+                      takeProfit: roundedTP,
+                      stopLoss: roundedSL,
+                      testnet: botConfig.api_mode !== 'live',
+                      apiKey: botConfig.api_key,
+                      apiSecret: botConfig.api_secret,
+                      positionIdx: 0,
+                    });
+                    console.log(`[TRADE] ✓ TP/SL set after verification: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                  } catch (tpSlError) {
+                    console.error(`[TRADE] Failed to set TP/SL:`, tpSlError);
+                  }
+                  
+                  // Update trade
+                  tradeRecord = await updateTrade(tradeRecord.id, {
+                    status: 'open',
+                    entry_price: verifiedPrice,
+                    position_size: verifiedQty,
+                  } as any);
+                  
+                  await addActivityLog(
+                    userId,
+                    'success',
+                    `Market order FILLED (verified): ${payload.side} ${payload.symbol} @ $${verifiedPrice.toFixed(2)}, qty: ${verifiedQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
+                    { orderResult, orderId, verifiedPrice, verifiedQty, tp: roundedTP, sl: roundedSL },
+                    botConfig.id
+                  );
+                } else {
+                  // Still pending - but set TP/SL anyway if we have a position
+                  try {
+                    await setTakeProfitStopLoss({
+                      symbol: payload.symbol,
+                      takeProfit: roundedTP,
+                      stopLoss: roundedSL,
+                      testnet: botConfig.api_mode !== 'live',
+                      apiKey: botConfig.api_key,
+                      apiSecret: botConfig.api_secret,
+                      positionIdx: 0,
+                    });
+                    console.log(`[TRADE] ✓ TP/SL set proactively: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                  } catch (tpSlError) {
+                    // Ignore - position might not exist yet
+                  }
+                  
+                  await addActivityLog(
+                    userId,
+                    'warning',
+                    `Market order placed, verifying fill: ${payload.side} ${payload.symbol}, Order ID: ${orderId}, Status: ${checkStatus}`,
+                    { orderResult, orderId, orderStatus: checkStatus },
+                    botConfig.id
+                  );
+                }
+              }
+            } catch (statusError) {
+              console.error(`[TRADE] Error verifying order status:`, statusError);
+              // Try to set TP/SL anyway (position might exist)
+              try {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                await setTakeProfitStopLoss({
+                  symbol: payload.symbol,
+                  takeProfit: roundedTP,
+                  stopLoss: roundedSL,
+                  testnet: botConfig.api_mode !== 'live',
+                  apiKey: botConfig.api_key,
+                  apiSecret: botConfig.api_secret,
+                  positionIdx: 0,
+                });
+                console.log(`[TRADE] ✓ TP/SL set proactively: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+              } catch (tpSlError) {
+                console.error(`[TRADE] Failed to set TP/SL proactively:`, tpSlError);
+              }
+            }
           }
         } else {
           // Order was rejected by Bybit
