@@ -840,51 +840,95 @@ export async function POST(request: NextRequest) {
                   if (botConfig.api_key && botConfig.api_secret && positionSize > 0) {
                     const orderQty = Math.max(0, Number(positionSize));
                     try {
-                      const { placeOrder, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+                      const { placeOrder, setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
                       
-                      // Round entry price to match Bybit's tick size (price precision)
-                      // This ensures the order price exactly matches the calculated level
-                      let roundedEntryPrice = signal.touchedLevel;
-                      try {
-                        const instrumentInfo = await getInstrumentInfo(botConfig.symbol, botConfig.api_mode !== 'live');
-                        if (instrumentInfo && instrumentInfo.tickSize) {
-                          roundedEntryPrice = roundPrice(signal.touchedLevel, instrumentInfo.tickSize);
-                          if (Math.abs(roundedEntryPrice - signal.touchedLevel) > 0.0001) {
-                            console.log(`[CRON] Rounded entry price from ${signal.touchedLevel.toFixed(8)} to ${roundedEntryPrice.toFixed(8)} to match Bybit tick size ${instrumentInfo.tickSize}`);
-                          }
-                        }
-                      } catch (priceRoundError) {
-                        console.warn(`[CRON] Failed to round price, using original:`, priceRoundError);
-                        // Continue with original price if rounding fails
-                      }
+                      // Place MARKET order for immediate execution (no price needed)
+                      console.log(`[CRON] Placing MARKET order: ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(8)}`);
                       
                       const orderResult = await placeOrder({
                         symbol: botConfig.symbol,
                         side: signal.signal === 'LONG' ? 'Buy' : 'Sell',
                         qty: orderQty,
-                        price: roundedEntryPrice, // Use rounded price to match Bybit precision
+                        // No price parameter = Market order
                         testnet: botConfig.api_mode !== 'live',
                         apiKey: botConfig.api_key,
                         apiSecret: botConfig.api_secret,
-                        timeInForce: 'GTC', // Good Till Cancel - matches Bybit API format
+                        timeInForce: 'IOC', // Immediate or Cancel - ensures immediate execution
                         positionIdx: 0, // One-way mode
                       });
 
-                      // Check if order was actually created successfully
-                      if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {
+                      // Check if order was filled successfully
+                      if (orderResult?.retCode === 0 && orderResult?.result) {
                         const orderId = orderResult.result.orderId;
-                        await updateTrade(tradeRecord.id, {
-                          status: 'open',
-                          order_id: orderId,
-                        } as any);
+                        const orderStatus = orderResult.result.orderStatus;
+                        const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || signal.touchedLevel);
+                        const executedQty = parseFloat(orderResult.result.executedQty || orderResult.result.qty || orderQty);
+                        
+                        // Market orders should be filled immediately
+                        if (orderStatus === 'Filled' || orderStatus === 'PartiallyFilled') {
+                          console.log(`[CRON] Market order FILLED: ${signal.signal} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
+                          
+                          // Round TP/SL prices to match Bybit's tick size
+                          let roundedTP = signal.tp;
+                          let roundedSL = signal.sl;
+                          try {
+                            const instrumentInfo = await getInstrumentInfo(botConfig.symbol, botConfig.api_mode !== 'live');
+                            if (instrumentInfo && instrumentInfo.tickSize) {
+                              roundedTP = roundPrice(signal.tp, instrumentInfo.tickSize);
+                              roundedSL = roundPrice(signal.sl, instrumentInfo.tickSize);
+                            }
+                          } catch (priceRoundError) {
+                            console.warn(`[CRON] Failed to round TP/SL prices:`, priceRoundError);
+                          }
+                          
+                          // Set TP/SL immediately after order is filled
+                          try {
+                            await setTakeProfitStopLoss({
+                              symbol: botConfig.symbol,
+                              takeProfit: roundedTP,
+                              stopLoss: roundedSL,
+                              testnet: botConfig.api_mode !== 'live',
+                              apiKey: botConfig.api_key,
+                              apiSecret: botConfig.api_secret,
+                              positionIdx: 0,
+                            });
+                            console.log(`[CRON] ✓ TP/SL set immediately: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                          } catch (tpSlError) {
+                            console.error(`[CRON] Failed to set TP/SL:`, tpSlError);
+                            // Continue anyway - TP/SL can be set later
+                          }
+                          
+                          // Update trade with actual filled price and status
+                          await updateTrade(tradeRecord.id, {
+                            status: 'open',
+                            order_id: orderId,
+                            entry_price: avgPrice,
+                            position_size: executedQty,
+                          } as any);
 
-                        await addActivityLog(
-                          botConfig.user_id,
-                          'success',
-                          `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(4)}, Order ID: ${orderId}`,
-                          { orderResult, orderId },
-                          botConfig.id
-                        );
+                          await addActivityLog(
+                            botConfig.user_id,
+                            'success',
+                            `Market order FILLED: ${signal.signal} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
+                            { orderResult, orderId, avgPrice, executedQty, tp: roundedTP, sl: roundedSL },
+                            botConfig.id
+                          );
+                        } else {
+                          // Order placed but not filled yet (shouldn't happen with market orders)
+                          console.warn(`[CRON] Market order placed but status is ${orderStatus}, waiting for fill...`);
+                          await updateTrade(tradeRecord.id, {
+                            order_id: orderId,
+                            // Keep status as 'pending' until filled
+                          } as any);
+                          
+                          await addActivityLog(
+                            botConfig.user_id,
+                            'warning',
+                            `Market order placed but not filled yet: ${signal.signal} ${botConfig.symbol}, Order ID: ${orderId}, Status: ${orderStatus}`,
+                            { orderResult, orderId, orderStatus },
+                            botConfig.id
+                          );
+                        }
                       } else {
                         // Order was rejected by Bybit
                         const errorMsg = orderResult?.retMsg || 'Unknown error';
@@ -893,23 +937,28 @@ export async function POST(request: NextRequest) {
                       }
                     } catch (error) {
                       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+                      console.error(`[CRON] Market order failed:`, errorMsg);
                       await addActivityLog(
                         botConfig.user_id,
                         'error',
-                        `Bybit order failed: ${errorMsg}`,
+                        `Market order failed: ${errorMsg}`,
                         { symbol: botConfig.symbol, side: signal.signal, qty: orderQty, error: errorMsg },
                         botConfig.id
                       );
                     }
                   }
 
-                    await addActivityLog(
-                      botConfig.user_id,
-                      'success',
-                      `Limit order placed: ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
-                      { signal, positionSize },
-                      botConfig.id
-                    );
+                    // Activity log for market order is already added above when order is filled
+                    // This log is only for demo/testnet mode or when API keys are not configured
+                    if (!botConfig.api_key || !botConfig.api_secret) {
+                      await addActivityLog(
+                        botConfig.user_id,
+                        'success',
+                        `Market order (demo): ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
+                        { signal, positionSize },
+                        botConfig.id
+                      );
+                    }
                   }
                 }
               }

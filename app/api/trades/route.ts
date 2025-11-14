@@ -131,17 +131,21 @@ export async function POST(request: NextRequest) {
     
     console.log(`[TRADE] Trade created with position_size: ${storedPositionSize.toFixed(8)} (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)}, leverage: ${leverage}x, entry: $${payload.entry.toFixed(2)})`);
 
-    await addActivityLog(
-      userId,
-      'success',
-      `Limit order placed: ${payload.side} @ $${payload.entry.toFixed(2)}, TP $${payload.tp.toFixed(2)}, SL $${payload.sl.toFixed(2)}`,
-      {
-        symbol: payload.symbol,
-        positionSize: payload.positionSize,
-        leverage,
-      },
-      botConfig.id
-    );
+    // Activity log for market order is added after order is filled (see below)
+    // This initial log is only for demo/testnet mode or when API keys are not configured
+    if (!botConfig.api_key || !botConfig.api_secret) {
+      await addActivityLog(
+        userId,
+        'success',
+        `Market order (demo): ${payload.side} @ $${payload.entry.toFixed(2)}, TP $${payload.tp.toFixed(2)}, SL $${payload.sl.toFixed(2)}`,
+        {
+          symbol: payload.symbol,
+          positionSize: payload.positionSize,
+          leverage,
+        },
+        botConfig.id
+      );
+    }
 
     let orderResult: any = null;
     // Use the already calculated position size (calculated above)
@@ -213,66 +217,106 @@ export async function POST(request: NextRequest) {
     
     if (botConfig.api_key && botConfig.api_secret && orderQty > 0) {
       try {
-        // Round entry price to match Bybit's tick size (price precision)
-        // This ensures the order price exactly matches the calculated level
-        let roundedEntryPrice = payload.entry;
-        try {
-          const { getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
-          const instrumentInfo = await getInstrumentInfo(payload.symbol, botConfig.api_mode !== 'live');
-          if (instrumentInfo && instrumentInfo.tickSize) {
-            roundedEntryPrice = roundPrice(payload.entry, instrumentInfo.tickSize);
-            if (Math.abs(roundedEntryPrice - payload.entry) > 0.0001) {
-              console.log(`[TRADE] Rounded entry price from ${payload.entry.toFixed(8)} to ${roundedEntryPrice.toFixed(8)} to match Bybit tick size ${instrumentInfo.tickSize}`);
-            }
-          }
-        } catch (priceRoundError) {
-          console.warn(`[TRADE] Failed to round price, using original:`, priceRoundError);
-          // Continue with original price if rounding fails
-        }
+        const { placeOrder, setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
         
-        console.log(`[TRADE] Calling placeOrder with qty=${orderQty}, price=${roundedEntryPrice} (original: ${payload.entry})...`);
+        // Place MARKET order for immediate execution (no price needed)
+        console.log(`[TRADE] Placing MARKET order: ${payload.side} ${payload.symbol} qty ${orderQty.toFixed(8)}`);
+        
         orderResult = await placeOrder({
           symbol: payload.symbol,
           side: payload.side === 'LONG' ? 'Buy' : 'Sell',
           qty: orderQty,
-          price: roundedEntryPrice, // Use rounded price to match Bybit precision
+          // No price parameter = Market order
           testnet: botConfig.api_mode !== 'live',
           apiKey: botConfig.api_key,
           apiSecret: botConfig.api_secret,
-          timeInForce: 'GTC', // Good Till Cancel - matches Bybit API format
+          timeInForce: 'IOC', // Immediate or Cancel - ensures immediate execution
           positionIdx: 0, // One-way mode
         });
 
         console.log(`[TRADE] Order placement response:`, JSON.stringify(orderResult, null, 2));
 
-        // Check if order was actually created successfully on Bybit
-        // IMPORTANT: Don't mark as 'open' yet - LIMIT orders are pending until filled!
-        // Status should remain 'pending' until the order is actually filled
-        if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {
+        // Check if market order was filled successfully
+        if (orderResult?.retCode === 0 && orderResult?.result) {
           const { updateTrade } = await import('@/lib/db');
           const orderId = orderResult.result.orderId;
+          const orderStatus = orderResult.result.orderStatus;
+          const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || payload.entry);
+          const executedQty = parseFloat(orderResult.result.executedQty || orderResult.result.qty || orderQty);
           
-          // Store order ID but keep status as 'pending' - order hasn't filled yet
-          tradeRecord = await updateTrade(tradeRecord.id, {
-            order_id: orderId,
-            // Keep status as 'pending' - will be updated to 'open' when order fills
-          } as any);
-          
-          console.log(`[TRADE] Limit order placed on Bybit (${botConfig.api_mode.toUpperCase()}). Order ID: ${orderId}, Status: PENDING (will update to OPEN when filled)`);
-          console.log(`[TRADE] Note: TP/SL will be set automatically when the order fills and position is opened`);
+          // Market orders should be filled immediately
+          if (orderStatus === 'Filled' || orderStatus === 'PartiallyFilled') {
+            console.log(`[TRADE] Market order FILLED: ${payload.side} ${payload.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
+            
+            // Round TP/SL prices to match Bybit's tick size
+            let roundedTP = payload.tp;
+            let roundedSL = payload.sl;
+            try {
+              const instrumentInfo = await getInstrumentInfo(payload.symbol, botConfig.api_mode !== 'live');
+              if (instrumentInfo && instrumentInfo.tickSize) {
+                roundedTP = roundPrice(payload.tp, instrumentInfo.tickSize);
+                roundedSL = roundPrice(payload.sl, instrumentInfo.tickSize);
+              }
+            } catch (priceRoundError) {
+              console.warn(`[TRADE] Failed to round TP/SL prices:`, priceRoundError);
+            }
+            
+            // Set TP/SL immediately after order is filled
+            try {
+              await setTakeProfitStopLoss({
+                symbol: payload.symbol,
+                takeProfit: roundedTP,
+                stopLoss: roundedSL,
+                testnet: botConfig.api_mode !== 'live',
+                apiKey: botConfig.api_key,
+                apiSecret: botConfig.api_secret,
+                positionIdx: 0,
+              });
+              console.log(`[TRADE] ✓ TP/SL set immediately: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+            } catch (tpSlError) {
+              console.error(`[TRADE] Failed to set TP/SL:`, tpSlError);
+              // Continue anyway - TP/SL can be set later
+            }
+            
+            // Update trade with actual filled price and status
+            tradeRecord = await updateTrade(tradeRecord.id, {
+              status: 'open',
+              order_id: orderId,
+              entry_price: avgPrice,
+              position_size: executedQty,
+            } as any);
+            
+            console.log(`[TRADE] Market order FILLED on Bybit (${botConfig.api_mode.toUpperCase()}). Order ID: ${orderId}, Entry: $${avgPrice.toFixed(2)}, Status: OPEN`);
+            console.log(`[TRADE] TP/SL set: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
 
-          await addActivityLog(
-            userId,
-            'success',
-            `Limit order sent to Bybit (${botConfig.api_mode.toUpperCase()}): ${payload.side} ${payload.symbol} qty ${orderQty.toFixed(8)}, Order ID: ${orderId}`,
-            { orderResult, orderId, orderQty },
-            botConfig.id
-          );
+            await addActivityLog(
+              userId,
+              'success',
+              `Market order FILLED: ${payload.side} ${payload.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
+              { orderResult, orderId, avgPrice, executedQty, tp: roundedTP, sl: roundedSL },
+              botConfig.id
+            );
+          } else {
+            // Order placed but not filled yet (shouldn't happen with market orders)
+            console.warn(`[TRADE] Market order placed but status is ${orderStatus}, waiting for fill...`);
+            tradeRecord = await updateTrade(tradeRecord.id, {
+              order_id: orderId,
+              // Keep status as 'pending' until filled
+            } as any);
+            
+            await addActivityLog(
+              userId,
+              'warning',
+              `Market order placed but not filled yet: ${payload.side} ${payload.symbol}, Order ID: ${orderId}, Status: ${orderStatus}`,
+              { orderResult, orderId, orderStatus },
+              botConfig.id
+            );
+          }
         } else {
-          // Order was rejected by Bybit - keep status as 'pending' and log error
+          // Order was rejected by Bybit
           const errorMsg = orderResult?.retMsg || 'Unknown error';
           const retCode = orderResult?.retCode || 'N/A';
-          console.error(`[TRADE] Bybit rejected order - keeping trade as 'pending'. retCode: ${retCode}, retMsg: ${errorMsg}`);
+          console.error(`[TRADE] Bybit rejected order. retCode: ${retCode}, retMsg: ${errorMsg}`);
           throw new Error(`Bybit rejected order (retCode: ${retCode}): ${errorMsg}`);
         }
       } catch (error) {
