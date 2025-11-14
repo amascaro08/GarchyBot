@@ -771,8 +771,34 @@ export async function getDailyLevels(symbol: string, date?: string): Promise<Dai
 
     const levels = result.rows[0];
     // Parse JSON arrays back to number arrays
-    levels.up_levels = JSON.parse(levels.up_levels as any);
-    levels.dn_levels = JSON.parse(levels.dn_levels as any);
+    // PostgreSQL JSONB may already be parsed or could be a string
+    if (typeof levels.up_levels === 'string') {
+      try {
+        levels.up_levels = JSON.parse(levels.up_levels);
+      } catch (parseError) {
+        console.error('Error parsing up_levels JSON:', parseError, 'Value:', levels.up_levels);
+        throw new Error(`Invalid JSON in up_levels: ${levels.up_levels}`);
+      }
+    } else if (!Array.isArray(levels.up_levels)) {
+      // If it's not a string and not an array, something is wrong
+      console.error('up_levels is neither string nor array:', typeof levels.up_levels, levels.up_levels);
+      levels.up_levels = [];
+    }
+    // up_levels is already an array (JSONB auto-parsed), use it as-is
+    
+    if (typeof levels.dn_levels === 'string') {
+      try {
+        levels.dn_levels = JSON.parse(levels.dn_levels);
+      } catch (parseError) {
+        console.error('Error parsing dn_levels JSON:', parseError, 'Value:', levels.dn_levels);
+        throw new Error(`Invalid JSON in dn_levels: ${levels.dn_levels}`);
+      }
+    } else if (!Array.isArray(levels.dn_levels)) {
+      // If it's not a string and not an array, something is wrong
+      console.error('dn_levels is neither string nor array:', typeof levels.dn_levels, levels.dn_levels);
+      levels.dn_levels = [];
+    }
+    // dn_levels is already an array (JSONB auto-parsed), use it as-is
 
     return levels;
   } catch (error) {
