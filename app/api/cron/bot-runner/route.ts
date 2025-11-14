@@ -200,22 +200,31 @@ export async function POST(request: NextRequest) {
             return { userId: botConfig.user_id, status: 'error', error: 'No stored levels found' };
           }
 
-          // Verify stored levels are for today
-          const storedDate = new Date(storedLevels.date);
-          const today = new Date();
-          today.setUTCHours(0, 0, 0, 0);
-          storedDate.setUTCHours(0, 0, 0, 0);
+          // Verify stored levels are for today (UTC)
+          // Parse stored date string (format: YYYY-MM-DD) and compare with UTC today
+          const storedDateStr = storedLevels.date; // Should be in YYYY-MM-DD format
+          const nowUTC = new Date();
+          const todayUTC = new Date(Date.UTC(
+            nowUTC.getUTCFullYear(),
+            nowUTC.getUTCMonth(),
+            nowUTC.getUTCDate(),
+            0, 0, 0, 0
+          ));
+          const todayUTCStr = todayUTC.toISOString().split('T')[0]; // YYYY-MM-DD in UTC
           
-          if (storedDate.getTime() !== today.getTime()) {
-            console.error(`[CRON] Stored levels for ${botConfig.symbol} are from ${storedLevels.date}, not today! Recalculating...`);
+          if (storedDateStr !== todayUTCStr) {
+            console.error(`[CRON] Stored levels for ${botConfig.symbol} are from ${storedDateStr} (UTC), but today is ${todayUTCStr} (UTC)!`);
+            console.error(`[CRON] Current UTC time: ${nowUTC.toISOString()}`);
             await addActivityLog(
               botConfig.user_id,
               'warning',
-              `Stored levels are stale (date: ${storedLevels.date}). Please run daily-setup cron.`,
-              { storedDate: storedLevels.date, today: today.toISOString().split('T')[0] },
+              `Stored levels are stale (date: ${storedDateStr} UTC, today: ${todayUTCStr} UTC). Please run daily-setup cron.`,
+              { storedDate: storedDateStr, todayUTC: todayUTCStr, currentUTC: nowUTC.toISOString() },
               botConfig.id
             );
             // Continue with stale levels but log warning - daily-setup should be run
+          } else {
+            console.log(`[CRON] ✓ Stored levels date matches today (UTC): ${storedDateStr}`);
           }
 
           console.log(`[CRON] Using stored levels for ${botConfig.symbol} (date: ${storedLevels.date}):`);

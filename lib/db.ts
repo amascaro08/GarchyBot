@@ -725,12 +725,24 @@ export async function saveDailyLevels(
   subdivisions: number
 ): Promise<DailyLevels> {
   try {
+    // Use UTC date to ensure consistency (YYYY-MM-DD format)
+    const nowUTC = new Date();
+    const utcDate = new Date(Date.UTC(
+      nowUTC.getUTCFullYear(),
+      nowUTC.getUTCMonth(),
+      nowUTC.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    const dateStr = utcDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    console.log(`[DB] Saving daily levels for ${symbol} with UTC date: ${dateStr}`);
+    
     const result = await sql<DailyLevels>`
       INSERT INTO daily_levels (
         symbol, date, daily_open_price, upper_range, lower_range,
         up_levels, dn_levels, calculated_volatility, subdivisions
       ) VALUES (
-        ${symbol}, CURRENT_DATE, ${dailyOpenPrice}, ${upperRange}, ${lowerRange},
+        ${symbol}, ${dateStr}::DATE, ${dailyOpenPrice}, ${upperRange}, ${lowerRange},
         ${JSON.stringify(upLevels)}, ${JSON.stringify(dnLevels)}, ${calculatedVolatility}, ${subdivisions}
       )
       ON CONFLICT (symbol, date)

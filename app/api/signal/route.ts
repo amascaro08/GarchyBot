@@ -59,8 +59,8 @@ export async function POST(request: NextRequest) {
       realtimePrice, // Pass real-time price for faster detection
     });
 
-    if (signal.signal) {
-      console.log(`[SIGNAL] ✓ Signal detected: ${signal.signal} @ ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
+    if (signal.side) {
+      console.log(`[SIGNAL] ✓ Signal detected: ${signal.side} @ ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
     } else {
       console.log(`[SIGNAL] No signal: ${signal.reason}`);
     }

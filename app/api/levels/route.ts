@@ -18,13 +18,19 @@ export async function POST(request: NextRequest) {
     try {
       const storedLevels = await getDailyLevels(validated.symbol);
       if (storedLevels) {
-        const storedDate = new Date(storedLevels.date);
-        const today = new Date();
-        today.setUTCHours(0, 0, 0, 0);
-        storedDate.setUTCHours(0, 0, 0, 0);
+        // Compare dates using UTC (stored date is in YYYY-MM-DD format)
+        const storedDateStr = storedLevels.date; // YYYY-MM-DD format
+        const nowUTC = new Date();
+        const todayUTC = new Date(Date.UTC(
+          nowUTC.getUTCFullYear(),
+          nowUTC.getUTCMonth(),
+          nowUTC.getUTCDate(),
+          0, 0, 0, 0
+        ));
+        const todayUTCStr = todayUTC.toISOString().split('T')[0]; // YYYY-MM-DD in UTC
         
-        // Check if stored levels are for today
-        if (storedDate.getTime() === today.getTime()) {
+        // Check if stored levels are for today (UTC)
+        if (storedDateStr === todayUTCStr) {
           console.log(`[LEVELS] Using stored daily levels for ${validated.symbol} (date: ${storedLevels.date})`);
           
           // Still need VWAP calculated from current candles for real-time display
