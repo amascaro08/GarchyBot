@@ -15,14 +15,35 @@ export async function GET(request: NextRequest) {
     console.log(`[GARCH-CALC] Calculating volatility for ${symbol}...`);
     
     // Fetch 1000+ days of historical data
-    const candles = await getKlines(symbol, '1d', 1000, false);
+    // Try testnet first, then mainnet if that fails
+    let candles;
+    let lastError;
+    
+    try {
+      console.log(`[GARCH-CALC] Trying testnet API...`);
+      candles = await getKlines(symbol, 'D', 1000, true); // Use 'D' for daily, testnet first
+    } catch (testnetError) {
+      lastError = testnetError;
+      console.warn(`[GARCH-CALC] Testnet failed, trying mainnet...`, testnetError instanceof Error ? testnetError.message : testnetError);
+      try {
+        candles = await getKlines(symbol, 'D', 1000, false); // Try mainnet
+      } catch (mainnetError) {
+        lastError = mainnetError;
+        console.error(`[GARCH-CALC] Both testnet and mainnet failed. Mainnet error:`, mainnetError instanceof Error ? mainnetError.message : mainnetError);
+        // The getKlines function should have already tried Binance/CoinGecko fallbacks
+        // If we get here, all APIs failed
+        throw new Error(`Failed to fetch data from Bybit, Binance, and CoinGecko: ${mainnetError instanceof Error ? mainnetError.message : 'Unknown error'}`);
+      }
+    }
     
     if (!candles || candles.length === 0) {
       return NextResponse.json(
-        { error: `No historical data for ${symbol}` },
+        { error: `No historical data for ${symbol} after trying all APIs` },
         { status: 400 }
       );
     }
+    
+    console.log(`[GARCH-CALC] Successfully fetched ${candles.length} candles for ${symbol}`);
     
     // Extract closing prices
     const closes = candles.map(c => c.close).filter(price => price > 0);
