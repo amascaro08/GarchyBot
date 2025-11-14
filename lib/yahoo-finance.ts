@@ -37,20 +37,23 @@ export async function getYahooFinanceKlines(
   try {
     // Fetch historical data using yahoo-finance2
     // The historical method expects a symbol and query options
-    const result = await yahooFinance.historical(yahooSymbol, {
+    const result: any = await yahooFinance.historical(yahooSymbol, {
       period1: Math.floor(startDate.getTime() / 1000), // Unix timestamp in seconds
       period2: Math.floor(endDate.getTime() / 1000),
       interval: '1d', // Daily interval
     });
     
-    if (!result || result.length === 0) {
+    // Type assertion: result should be an array
+    const historicalData = Array.isArray(result) ? result : [];
+    
+    if (historicalData.length === 0) {
       throw new Error(`No historical data returned from Yahoo Finance for ${yahooSymbol}`);
     }
     
     // Convert Yahoo Finance data to our candle format
     // Yahoo Finance returns an array of objects with date, open, high, low, close, volume, adjustedClose
     // Use adjusted close if available (matches yfinance's auto_adjust=True), otherwise use close
-    const candles = result
+    const candles = historicalData
       .map((item: any) => {
         // Use adjusted close if available (matches yfinance's auto_adjust=True)
         const closePrice = item.adjClose !== undefined && item.adjClose !== null
