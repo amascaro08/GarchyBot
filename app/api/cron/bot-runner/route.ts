@@ -438,6 +438,7 @@ export async function POST(request: NextRequest) {
                       leverage: botConfig.leverage,
                       pnl: 0,
                       reason: signal.reason,
+                      order_id: null, // Will be set after order is placed
                       entry_time: new Date(),
                       exit_time: null,
                     });
