@@ -1026,11 +1026,57 @@ export function calculateAverageVolatility(
   const returnsMean = returnsPct.reduce((a, b) => a + b, 0) / returnsPct.length;
   const returnsVariance = returnsPct.reduce((sum, r) => sum + Math.pow(r - returnsMean, 2), 0) / (returnsPct.length - 1);
   const returnsStdDevPct = Math.sqrt(returnsVariance);
+  
+  // Debug: Log sample returns to verify they look correct
+  if (symbol && timeframe) {
+    const sampleReturns = returnsPct.slice(0, 10);
+    const sampleReturnsDecimal = returnsPct.slice(0, 10).map(r => r / 100.0);
+    console.log(`[GARCH-DEBUG] ${symbol} ${timeframe} - Sample returns (first 10, in percentage units):`);
+    console.log(`  Percentage: ${sampleReturns.map(r => r.toFixed(4)).join(', ')}%`);
+    console.log(`  Decimal: ${sampleReturnsDecimal.map(r => r.toFixed(6)).join(', ')}`);
+    console.log(`  Returns count: ${returnsPct.length}, Mean: ${returnsMean.toFixed(4)}%, Std Dev: ${returnsStdDevPct.toFixed(4)}%`);
+    console.log(`  Expected std dev for BTC daily returns: ~2.4%. If much higher, data might be wrong timeframe.`);
+  }
 
   // Forecast h days ahead for each model
-  const garchForecasts = forecastVolatility(garchModel, horizon);
-  const gjrForecasts = forecastVolatility(gjrModel, horizon);
-  const egarchForecasts = forecastVolatility(egarchModel, horizon);
+  let garchForecasts: number[] = [];
+  let gjrForecasts: number[] = [];
+  let egarchForecasts: number[] = [];
+  
+  try {
+    garchForecasts = forecastVolatility(garchModel, horizon);
+  } catch (error) {
+    console.error(`[GARCH-DEBUG] Error forecasting GARCH:`, error);
+    garchForecasts = [returnsStdDevPct]; // Fallback to historical std dev
+  }
+  
+  try {
+    gjrForecasts = forecastVolatility(gjrModel, horizon);
+  } catch (error) {
+    console.error(`[GARCH-DEBUG] Error forecasting GJR:`, error);
+    gjrForecasts = [returnsStdDevPct]; // Fallback to historical std dev
+  }
+  
+  try {
+    egarchForecasts = forecastVolatility(egarchModel, horizon);
+  } catch (error) {
+    console.error(`[GARCH-DEBUG] Error forecasting EGARCH:`, error);
+    egarchForecasts = [returnsStdDevPct]; // Fallback to historical std dev
+  }
+  
+  // Validate forecasts
+  if (!garchForecasts || garchForecasts.length === 0) {
+    console.warn(`[GARCH-DEBUG] GARCH forecasts empty, using historical std dev`);
+    garchForecasts = [returnsStdDevPct];
+  }
+  if (!gjrForecasts || gjrForecasts.length === 0) {
+    console.warn(`[GARCH-DEBUG] GJR forecasts empty, using historical std dev`);
+    gjrForecasts = [returnsStdDevPct];
+  }
+  if (!egarchForecasts || egarchForecasts.length === 0) {
+    console.warn(`[GARCH-DEBUG] EGARCH forecasts empty, using historical std dev`);
+    egarchForecasts = [returnsStdDevPct];
+  }
 
   // Average the forecasted sigmas over h days for each model (in percentage units)
   // These are already in percentage units (e.g., 2.5 means 2.5%)

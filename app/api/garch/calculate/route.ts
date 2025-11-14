@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
     
     console.log(`[GARCH-CALC] Successfully fetched ${candles.length} candles for ${symbol}`);
     
-    // Extract closing prices
+    // Extract closing prices and validate
     const closes = candles.map(c => c.close).filter(price => price > 0);
     
     if (closes.length < 30) {
@@ -53,6 +53,19 @@ export async function GET(request: NextRequest) {
         { error: `Insufficient data: only ${closes.length} days` },
         { status: 400 }
       );
+    }
+    
+    // Debug: Log sample of data to verify it looks correct
+    console.log(`[GARCH-CALC] Sample data for ${symbol}:`);
+    console.log(`  First 5 closes: ${closes.slice(0, 5).map(c => c.toFixed(2)).join(', ')}`);
+    console.log(`  Last 5 closes: ${closes.slice(-5).map(c => c.toFixed(2)).join(', ')}`);
+    console.log(`  Price range: ${Math.min(...closes).toFixed(2)} - ${Math.max(...closes).toFixed(2)}`);
+    
+    // Check if data looks reasonable (BTC should be around 60k-100k)
+    const avgPrice = closes.reduce((a, b) => a + b, 0) / closes.length;
+    console.log(`  Average price: ${avgPrice.toFixed(2)}`);
+    if (symbol === 'BTCUSDT' && (avgPrice < 1000 || avgPrice > 200000)) {
+      console.warn(`  ⚠️ Warning: Average BTC price (${avgPrice.toFixed(2)}) looks suspicious - data might be wrong timeframe`);
     }
     
     // Calculate volatility using all three models

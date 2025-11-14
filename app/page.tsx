@@ -713,15 +713,17 @@ export default function Home() {
               console.log(`📊 Symbol: ${garchData.symbol}`);
               console.log(`📅 Data Points: ${garchData.dataPoints} days`);
               console.log(`\n📈 Results:`);
-              console.log(`  Historical Std Dev: ${garchData.debugInfo.historicalStdDev?.toFixed(4)}%`);
-              if (garchData.debugInfo.garchForecasts) {
-                console.log(`  GARCH Forecasts: ${garchData.debugInfo.garchForecasts.map((f: number) => f.toFixed(4)).join(', ')}%`);
+              console.log(`  Historical Std Dev: ${garchData.debugInfo.historicalStdDev?.toFixed(4) || 'N/A'}%`);
+              if (garchData.debugInfo.garchForecasts && Array.isArray(garchData.debugInfo.garchForecasts)) {
+                console.log(`  GARCH Forecasts: ${garchData.debugInfo.garchForecasts.map((f: number) => (f || 0).toFixed(4)).join(', ')}%`);
               }
-              if (garchData.debugInfo.gjrForecasts) {
-                console.log(`  GJR Forecasts: ${garchData.debugInfo.gjrForecasts.map((f: number) => f.toFixed(4)).join(', ')}%`);
+              if (garchData.debugInfo.gjrForecasts && Array.isArray(garchData.debugInfo.gjrForecasts)) {
+                console.log(`  GJR Forecasts: ${garchData.debugInfo.gjrForecasts.map((f: number) => (f || 0).toFixed(4)).join(', ')}%`);
               }
-              if (garchData.debugInfo.egarchForecasts) {
-                console.log(`  EGARCH Forecasts: ${garchData.debugInfo.egarchForecasts.map((f: number) => f.toFixed(4)).join(', ')}%`);
+              if (garchData.debugInfo.egarchForecasts && Array.isArray(garchData.debugInfo.egarchForecasts)) {
+                console.log(`  EGARCH Forecasts: ${garchData.debugInfo.egarchForecasts.map((f: number) => (f || 0).toFixed(4)).join(', ')}%`);
+              } else {
+                console.warn(`  ⚠️ EGARCH Forecasts: Missing or invalid`);
               }
               console.log(`\n📊 Model Averages:`);
               console.log(`  Prom GARCH: ${garchData.debugInfo.promGarch?.toFixed(4)}%`);
