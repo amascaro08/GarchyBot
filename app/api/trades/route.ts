@@ -118,9 +118,11 @@ export async function POST(request: NextRequest) {
 
     let orderResult: any = null;
     const orderQty = Math.max(0, Number(payload.positionSize));
-    console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
+    const tradeValueUSDT = orderQty * payload.entry;
+    console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
     if (botConfig.api_key && botConfig.api_secret && orderQty > 0) {
       try {
+        console.log(`[TRADE] Calling placeOrder with qty=${orderQty}...`);
         orderResult = await placeOrder({
           symbol: payload.symbol,
           side: payload.side === 'LONG' ? 'Buy' : 'Sell',
@@ -159,13 +161,18 @@ export async function POST(request: NextRequest) {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error placing order';
+        const errorDetails = error instanceof Error ? error.stack : String(error);
+        console.error(`[TRADE] Order placement failed:`, message);
+        console.error(`[TRADE] Error details:`, errorDetails);
         await addActivityLog(
           userId,
           'error',
           `Bybit order failed: ${message}`,
-          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize, error: message },
+          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize, error: message, errorDetails },
           botConfig.id
         );
+        // Don't throw - allow trade to remain in 'pending' status
+        // This way user can see the error in activity logs
       }
     }
 

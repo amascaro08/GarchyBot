@@ -519,19 +519,26 @@ export async function placeOrder(params: {
 
   // Round quantity to match Bybit's precision requirements
   let qty = originalQty;
+  console.log(`[Bybit API] Fetching instrument info for ${originalSymbol} (testnet=${testnet})...`);
   const instrumentInfo = await getInstrumentInfo(originalSymbol, testnet);
   if (instrumentInfo) {
+    console.log(`[Bybit API] Instrument info: minOrderQty=${instrumentInfo.minOrderQty}, qtyStep=${instrumentInfo.qtyStep}`);
     const roundedQty = roundQuantity(originalQty, instrumentInfo.qtyStep, instrumentInfo.minOrderQty);
     if (roundedQty === null) {
+      const tradeValue = originalQty * (params.price || 0);
       throw new BybitError(
         10001,
-        `Quantity ${originalQty} is below minimum order quantity ${instrumentInfo.minOrderQty} for ${originalSymbol} (qtyStep: ${instrumentInfo.qtyStep})`
+        `Quantity ${originalQty} ($${tradeValue.toFixed(2)} USDT) is below minimum order quantity ${instrumentInfo.minOrderQty} for ${originalSymbol} (qtyStep: ${instrumentInfo.qtyStep})`
       );
     }
     qty = roundedQty;
     if (qty !== originalQty) {
       console.log(`[Bybit API] Rounded quantity from ${originalQty} to ${qty} (qtyStep: ${instrumentInfo.qtyStep}, minOrderQty: ${instrumentInfo.minOrderQty})`);
+    } else {
+      console.log(`[Bybit API] Quantity ${qty} is valid (minOrderQty: ${instrumentInfo.minOrderQty}, qtyStep: ${instrumentInfo.qtyStep})`);
     }
+  } else {
+    console.warn(`[Bybit API] Could not fetch instrument info for ${originalSymbol}, using original quantity ${originalQty}`);
   }
   
   const symbol = originalSymbol;
