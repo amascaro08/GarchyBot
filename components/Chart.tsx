@@ -59,6 +59,7 @@ export default function Chart({
   const hasInitialFitRef = useRef<boolean>(false);
   const lastNotifiedPriceRef = useRef<number | null>(null);
   const onPriceUpdateRef = useRef<typeof onPriceUpdate | null>(null);
+  const updateCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     onPriceUpdateRef.current = onPriceUpdate;
