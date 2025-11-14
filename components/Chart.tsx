@@ -148,6 +148,10 @@ export default function Chart({
 
       return () => {
         window.removeEventListener('resize', handleResize);
+        if (updateCheckIntervalRef.current) {
+          clearInterval(updateCheckIntervalRef.current);
+          updateCheckIntervalRef.current = null;
+        }
         chart.remove();
         chartRef.current = null;
         seriesRef.current = null;
@@ -165,6 +169,13 @@ export default function Chart({
 
   useEffect(() => {
     hasInitialFitRef.current = false;
+    isInitialLoadRef.current = true; // Reset on symbol/interval change
+    lastCandleTimeRef.current = null; // Reset candle tracking
+    lastUpdateTimeRef.current = Date.now(); // Reset update timer
+    if (updateCheckIntervalRef.current) {
+      clearInterval(updateCheckIntervalRef.current);
+      updateCheckIntervalRef.current = null;
+    }
     if (chartRef.current) {
       chartRef.current.timeScale().fitContent();
       chartRef.current.priceScale('right').applyOptions({ mode: PriceScaleMode.Normal });
@@ -173,12 +184,19 @@ export default function Chart({
 
 
   // Use only websocket candles when available, otherwise fall back to static candles
+  // Use stringified length to ensure we detect changes even if array reference doesn't change
   const displayCandles = useMemo(() => {
     if (wsConnected && wsCandles.length > 0) {
       return wsCandles;
     }
     return candles.length > 0 ? candles : [];
-  }, [candles, wsCandles, wsConnected]);
+  }, [candles, wsCandles.length, wsCandles[wsCandles.length - 1]?.ts, wsCandles[wsCandles.length - 1]?.close, wsConnected]);
+
+  // Track last candle timestamp to detect new candles
+  const lastCandleTimeRef = useRef<number | null>(null);
+  const isInitialLoadRef = useRef<boolean>(true);
+  const lastUpdateTimeRef = useRef<number>(Date.now());
+  const updateCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Update chart data and price lines when props change
   useEffect(() => {
@@ -192,16 +210,56 @@ export default function Chart({
       return;
     }
 
-    // Always update candlestick data first
-    const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
-      time: (candle.ts / 1000) as Time,
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-    }));
+    const latestCandle = displayCandles[displayCandles.length - 1];
+    const latestCandleTime = latestCandle.ts;
 
-    seriesRef.current.setData(candlestickData);
+    // Check if this is initial load or if we need to reset data
+    if (isInitialLoadRef.current || lastCandleTimeRef.current === null) {
+      // Initial load - set all data
+      const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
+        time: (candle.ts / 1000) as Time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      }));
+
+      seriesRef.current.setData(candlestickData);
+      lastCandleTimeRef.current = latestCandleTime;
+      isInitialLoadRef.current = false;
+    } else {
+      // Incremental update - check if we need to update last candle or add new one
+      const lastStoredTime = lastCandleTimeRef.current;
+      
+      if (latestCandleTime === lastStoredTime) {
+        // Update the last candle (same timestamp, updated values)
+        const updateData: CandlestickData<Time> = {
+          time: (latestCandle.ts / 1000) as Time,
+          open: latestCandle.open,
+          high: latestCandle.high,
+          low: latestCandle.low,
+          close: latestCandle.close,
+        };
+        seriesRef.current.update(updateData);
+        lastUpdateTimeRef.current = Date.now();
+      } else if (latestCandleTime > lastStoredTime) {
+        // New candle detected - add it
+        const newCandleData: CandlestickData<Time> = {
+          time: (latestCandle.ts / 1000) as Time,
+          open: latestCandle.open,
+          high: latestCandle.high,
+          low: latestCandle.low,
+          close: latestCandle.close,
+        };
+        seriesRef.current.update(newCandleData);
+        lastCandleTimeRef.current = latestCandleTime;
+        lastUpdateTimeRef.current = Date.now();
+      } else {
+        // Candle timestamp went backwards - this shouldn't happen normally, but reset if it does
+        console.warn('Candle timestamp went backwards, resetting chart data');
+        isInitialLoadRef.current = true;
+      }
+    }
 
     const priceScale = seriesRef.current?.priceScale();
     if (priceScale) {
@@ -392,6 +450,35 @@ export default function Chart({
       }
     }
   }, [displayCandles, ticker, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
+
+  // Monitor for chart freezing - if no updates for 30 seconds, force refresh
+  useEffect(() => {
+    if (!wsConnected || displayCandles.length === 0) {
+      return;
+    }
+
+    const checkInterval = setInterval(() => {
+      const timeSinceLastUpdate = Date.now() - lastUpdateTimeRef.current;
+      // If we haven't updated in 30 seconds but have new data, force refresh
+      if (timeSinceLastUpdate > 30000 && displayCandles.length > 0) {
+        const latestCandle = displayCandles[displayCandles.length - 1];
+        if (latestCandle && latestCandle.ts !== lastCandleTimeRef.current) {
+          console.warn('Chart appears frozen, forcing refresh...');
+          isInitialLoadRef.current = true;
+          lastUpdateTimeRef.current = Date.now();
+        }
+      }
+    }, 5000); // Check every 5 seconds
+
+    updateCheckIntervalRef.current = checkInterval;
+
+    return () => {
+      if (updateCheckIntervalRef.current) {
+        clearInterval(updateCheckIntervalRef.current);
+        updateCheckIntervalRef.current = null;
+      }
+    };
+  }, [displayCandles, wsConnected]);
 
   // Update VWAP line independently whenever candles or vwapLine changes
   useEffect(() => {
