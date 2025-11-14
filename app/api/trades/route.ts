@@ -119,7 +119,55 @@ export async function POST(request: NextRequest) {
     let orderResult: any = null;
     const orderQty = Math.max(0, Number(payload.positionSize));
     const tradeValueUSDT = orderQty * payload.entry;
-    console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
+    const leverage = payload.leverage ?? botConfig.leverage;
+    const requiredMargin = tradeValueUSDT / leverage;
+    
+    console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, tradeValue=$${tradeValueUSDT.toFixed(2)} USDT, leverage=${leverage}x, requiredMargin=$${requiredMargin.toFixed(2)} USDT, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
+    
+    // Check available balance before attempting order
+    if (botConfig.api_key && botConfig.api_secret) {
+      try {
+        const { fetchWalletBalance } = await import('@/lib/bybit');
+        const walletInfo = await fetchWalletBalance({
+          apiKey: botConfig.api_key,
+          apiSecret: botConfig.api_secret,
+          testnet: botConfig.api_mode !== 'live',
+          accountType: 'UNIFIED',
+        });
+        
+        // Extract available USDT balance
+        const usdtCoin = walletInfo.result?.list?.[0]?.coin?.find((c: any) => c.coin === 'USDT');
+        const availableBalance = parseFloat(usdtCoin?.availableToWithdraw || usdtCoin?.availableBalance || '0');
+        const equity = parseFloat(usdtCoin?.equity || '0');
+        
+        console.log(`[TRADE] Account balance check: Available: $${availableBalance.toFixed(2)} USDT, Equity: $${equity.toFixed(2)} USDT, Required margin: $${requiredMargin.toFixed(2)} USDT`);
+        
+        // For futures, we need initial margin which might be higher than just notional/leverage
+        // Bybit typically requires a bit more than the calculated margin for safety
+        // Also account for potential maintenance margin and fees (typically 10-20% buffer needed)
+        const marginBuffer = 1.15; // 15% buffer for fees and safety margin
+        const totalRequiredMargin = requiredMargin * marginBuffer;
+        
+        if (availableBalance < totalRequiredMargin) {
+          const errorMsg = `Insufficient balance. Available: $${availableBalance.toFixed(2)} USDT, Required margin: $${requiredMargin.toFixed(2)} USDT + buffer (total: $${totalRequiredMargin.toFixed(2)} USDT needed)`;
+          console.warn(`[TRADE] ${errorMsg}`);
+          await addActivityLog(
+            userId,
+            'warning',
+            `Balance check warning: ${errorMsg}. Will still attempt order - Bybit will reject if insufficient.`,
+            { symbol: payload.symbol, side: payload.side, availableBalance, requiredMargin, leverage, tradeValueUSDT, totalRequiredMargin },
+            botConfig.id
+          );
+          // Don't throw - let Bybit decide if there's enough balance
+        } else {
+          console.log(`[TRADE] Balance check passed. Available: $${availableBalance.toFixed(2)} USDT, Required: $${totalRequiredMargin.toFixed(2)} USDT. Proceeding with order placement...`);
+        }
+      } catch (balanceError) {
+        console.warn(`[TRADE] Failed to check balance, proceeding anyway:`, balanceError);
+        // Continue with order placement if balance check fails
+      }
+    }
+    
     if (botConfig.api_key && botConfig.api_secret && orderQty > 0) {
       try {
         console.log(`[TRADE] Calling placeOrder with qty=${orderQty}...`);
@@ -164,11 +212,19 @@ export async function POST(request: NextRequest) {
         const errorDetails = error instanceof Error ? error.stack : String(error);
         console.error(`[TRADE] Order placement failed:`, message);
         console.error(`[TRADE] Error details:`, errorDetails);
+        
+        // Check for insufficient balance error and provide helpful message
+        let userFriendlyMessage = message;
+        if (message.includes('110007') || message.includes('not enough')) {
+          const requiredMargin = tradeValueUSDT / (payload.leverage || botConfig.leverage);
+          userFriendlyMessage = `Insufficient balance. Trade value: $${tradeValueUSDT.toFixed(2)} USDT, Required margin (${botConfig.leverage}x leverage): ~$${requiredMargin.toFixed(2)} USDT. Please check your available balance on Bybit.`;
+        }
+        
         await addActivityLog(
           userId,
           'error',
-          `Bybit order failed: ${message}`,
-          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize, error: message, errorDetails },
+          `Bybit order failed: ${userFriendlyMessage}`,
+          { symbol: payload.symbol, side: payload.side, qty: payload.positionSize, error: message, errorDetails, tradeValueUSDT },
           botConfig.id
         );
         // Don't throw - allow trade to remain in 'pending' status
