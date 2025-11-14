@@ -169,9 +169,7 @@ export default function Chart({
 
   useEffect(() => {
     hasInitialFitRef.current = false;
-    isInitialLoadRef.current = true; // Reset on symbol/interval change
-    lastCandleTimeRef.current = null; // Reset candle tracking
-    lastUpdateTimeRef.current = Date.now(); // Reset update timer
+    candlesSignatureRef.current = ''; // Reset signature on symbol/interval change
     if (updateCheckIntervalRef.current) {
       clearInterval(updateCheckIntervalRef.current);
       updateCheckIntervalRef.current = null;
@@ -184,82 +182,64 @@ export default function Chart({
 
 
   // Use only websocket candles when available, otherwise fall back to static candles
-  // Use stringified length to ensure we detect changes even if array reference doesn't change
+  // Track the last candles signature to detect changes
+  const candlesSignatureRef = useRef<string>('');
+  
+  // Create a string signature from wsCandles to detect changes (array reference might not change)
+  const wsCandlesSignature = useMemo(() => {
+    if (wsCandles.length === 0) return '';
+    // Use last 3 candles to detect updates
+    const lastThree = wsCandles.slice(-3);
+    return lastThree.map(c => `${c.ts}-${c.open}-${c.high}-${c.low}-${c.close}`).join('|');
+  }, [wsCandles.length, wsCandles[wsCandles.length - 1]?.ts, wsCandles[wsCandles.length - 1]?.open, wsCandles[wsCandles.length - 1]?.high, wsCandles[wsCandles.length - 1]?.low, wsCandles[wsCandles.length - 1]?.close]);
+  
+  // Use WebSocket candles when connected, otherwise use static candles
   const displayCandles = useMemo(() => {
+    // Prefer WebSocket candles if connected and we have data
     if (wsConnected && wsCandles.length > 0) {
       return wsCandles;
     }
+    // Fall back to static candles
     return candles.length > 0 ? candles : [];
-  }, [candles, wsCandles.length, wsCandles[wsCandles.length - 1]?.ts, wsCandles[wsCandles.length - 1]?.close, wsConnected]);
+  }, [candles, wsCandles, wsCandlesSignature, wsConnected]);
 
-  // Track last candle timestamp to detect new candles
-  const lastCandleTimeRef = useRef<number | null>(null);
-  const isInitialLoadRef = useRef<boolean>(true);
-  const lastUpdateTimeRef = useRef<number>(Date.now());
-  const updateCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Create a signature of the candles array to detect changes
+  const candlesSignature = useMemo(() => {
+    if (!displayCandles || displayCandles.length === 0) return '';
+    // Create signature from last 3 candles (most recent data) to detect updates
+    const lastThree = displayCandles.slice(-3);
+    return lastThree.map(c => `${c.ts}-${c.open}-${c.high}-${c.low}-${c.close}`).join('|');
+  }, [displayCandles]);
 
-  // Update chart data and price lines when props change
+  // Update chart data when candles change (from WebSocket or static)
   useEffect(() => {
     if (!seriesRef.current || !chartRef.current) {
-      // Chart not ready yet, wait for next render
       return;
     }
 
-    // Don't proceed if we don't have candle data
     if (!displayCandles || displayCandles.length === 0) {
       return;
     }
 
-    const latestCandle = displayCandles[displayCandles.length - 1];
-    const latestCandleTime = latestCandle.ts;
-
-    // Check if this is initial load or if we need to reset data
-    if (isInitialLoadRef.current || lastCandleTimeRef.current === null) {
-      // Initial load - set all data
-      const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
-        time: (candle.ts / 1000) as Time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      }));
-
-      seriesRef.current.setData(candlestickData);
-      lastCandleTimeRef.current = latestCandleTime;
-      isInitialLoadRef.current = false;
-    } else {
-      // Incremental update - check if we need to update last candle or add new one
-      const lastStoredTime = lastCandleTimeRef.current;
-      
-      if (latestCandleTime === lastStoredTime) {
-        // Update the last candle (same timestamp, updated values)
-        const updateData: CandlestickData<Time> = {
-          time: (latestCandle.ts / 1000) as Time,
-          open: latestCandle.open,
-          high: latestCandle.high,
-          low: latestCandle.low,
-          close: latestCandle.close,
-        };
-        seriesRef.current.update(updateData);
-        lastUpdateTimeRef.current = Date.now();
-      } else if (latestCandleTime > lastStoredTime) {
-        // New candle detected - add it
-        const newCandleData: CandlestickData<Time> = {
-          time: (latestCandle.ts / 1000) as Time,
-          open: latestCandle.open,
-          high: latestCandle.high,
-          low: latestCandle.low,
-          close: latestCandle.close,
-        };
-        seriesRef.current.update(newCandleData);
-        lastCandleTimeRef.current = latestCandleTime;
-        lastUpdateTimeRef.current = Date.now();
-      } else {
-        // Candle timestamp went backwards - this shouldn't happen normally, but reset if it does
-        console.warn('Candle timestamp went backwards, resetting chart data');
-        isInitialLoadRef.current = true;
-      }
+    // Only update if the signature changed (prevents unnecessary re-renders)
+    if (candlesSignature === candlesSignatureRef.current && candlesSignature !== '') {
+      return;
     }
+
+    candlesSignatureRef.current = candlesSignature;
+
+    // Convert candles to chart format
+    const candlestickData: CandlestickData<Time>[] = displayCandles.map((candle) => ({
+      time: (candle.ts / 1000) as Time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    }));
+
+    // Use setData to update chart - lightweight-charts handles this efficiently
+    // It only updates what changed internally
+    seriesRef.current.setData(candlestickData);
 
     const priceScale = seriesRef.current?.priceScale();
     if (priceScale) {
@@ -451,23 +431,27 @@ export default function Chart({
     }
   }, [displayCandles, ticker, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
 
-  // Monitor for chart freezing - if no updates for 30 seconds, force refresh
+  // Monitor for chart freezing - if candles signature stops updating but we have WebSocket data, force refresh
   useEffect(() => {
     if (!wsConnected || displayCandles.length === 0) {
       return;
     }
 
+    let lastSignature = candlesSignature;
+    let lastCheckTime = Date.now();
+
     const checkInterval = setInterval(() => {
-      const timeSinceLastUpdate = Date.now() - lastUpdateTimeRef.current;
-      // If we haven't updated in 30 seconds but have new data, force refresh
-      if (timeSinceLastUpdate > 30000 && displayCandles.length > 0) {
-        const latestCandle = displayCandles[displayCandles.length - 1];
-        if (latestCandle && latestCandle.ts !== lastCandleTimeRef.current) {
-          console.warn('Chart appears frozen, forcing refresh...');
-          isInitialLoadRef.current = true;
-          lastUpdateTimeRef.current = Date.now();
+      // If signature hasn't changed in 10 seconds but we have WebSocket connection, something might be wrong
+      if (candlesSignature === lastSignature && Date.now() - lastCheckTime > 10000) {
+        const currentSignature = displayCandles.slice(-3).map(c => `${c.ts}-${c.open}-${c.high}-${c.low}-${c.close}`).join('|');
+        if (currentSignature !== candlesSignatureRef.current) {
+          // New data available but signature didn't update - force refresh
+          console.warn('Chart update may be stuck, forcing refresh...');
+          candlesSignatureRef.current = ''; // Reset to force update
         }
       }
+      lastSignature = candlesSignature;
+      lastCheckTime = Date.now();
     }, 5000); // Check every 5 seconds
 
     updateCheckIntervalRef.current = checkInterval;
@@ -478,7 +462,7 @@ export default function Chart({
         updateCheckIntervalRef.current = null;
       }
     };
-  }, [displayCandles, wsConnected]);
+  }, [displayCandles, wsConnected, candlesSignature]);
 
   // Update VWAP line independently whenever candles or vwapLine changes
   useEffect(() => {
