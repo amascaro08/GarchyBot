@@ -118,6 +118,7 @@ export async function POST(request: NextRequest) {
 
     let orderResult: any = null;
     const orderQty = Math.max(0, Number(payload.positionSize));
+    console.log(`[TRADE] Attempting to place order: symbol=${payload.symbol}, side=${payload.side}, qty=${orderQty}, price=${payload.entry}, testnet=${botConfig.api_mode !== 'live'}, hasApiKey=${!!botConfig.api_key}, hasApiSecret=${!!botConfig.api_secret}`);
     if (botConfig.api_key && botConfig.api_secret && orderQty > 0) {
       try {
         orderResult = await placeOrder({
@@ -131,6 +132,8 @@ export async function POST(request: NextRequest) {
           timeInForce: 'GTC', // Good Till Cancel - matches Bybit API format
           positionIdx: 0, // One-way mode
         });
+
+        console.log(`[TRADE] Order placement response:`, JSON.stringify(orderResult, null, 2));
 
         // Check if order was actually created successfully
         if (orderResult?.retCode === 0 && orderResult?.result?.orderId) {

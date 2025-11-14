@@ -82,7 +82,7 @@ export function startOrderBook(symbol: string) {
           try {
             sockets[symbol].send(JSON.stringify({ op: 'ping' }));
           } catch (err) {
-            console.error(`Failed to ping WebSocket for ${symbol}:`, err);
+            // console.error(`Failed to ping WebSocket for ${symbol}:`, err); // Disabled for cleaner trade logs
           }
         }
       }, PING_INTERVAL);
@@ -99,17 +99,16 @@ export function startOrderBook(symbol: string) {
         
         // Handle subscription confirmation
         if (msg.op === 'subscribe') {
-          if (msg.success) {
-            console.log(`Order book subscription confirmed for ${symbol}`);
-          } else {
-            console.error(`Order book subscription failed for ${symbol}:`, msg.retMsg);
+          // console.log(`Order book subscription confirmed for ${symbol}`); // Disabled for cleaner trade logs
+          if (!msg.success) {
+            // console.error(`Order book subscription failed for ${symbol}:`, msg.retMsg); // Disabled for cleaner trade logs
           }
           return;
         }
         
         // Handle error messages
         if (msg.retCode && msg.retCode !== 0) {
-          console.error(`Order book error for ${symbol}:`, msg.retMsg);
+          // console.error(`Order book error for ${symbol}:`, msg.retMsg); // Disabled for cleaner trade logs
           return;
         }
         
@@ -120,7 +119,7 @@ export function startOrderBook(symbol: string) {
         const { a: asksRaw = [], b: bidsRaw = [] } = msg.data;
         
         if (!Array.isArray(asksRaw) || !Array.isArray(bidsRaw)) {
-          console.warn(`Invalid order book data format for ${symbol}`);
+          // console.warn(`Invalid order book data format for ${symbol}`); // Disabled for cleaner trade logs
           return;
         }
         
@@ -133,7 +132,7 @@ export function startOrderBook(symbol: string) {
           .filter((e: DepthEntry) => !isNaN(e.price) && !isNaN(e.size) && e.price > 0 && e.size > 0);
 
         if (asks.length === 0 || bids.length === 0) {
-          console.warn(`Empty order book data for ${symbol}`);
+          // console.warn(`Empty order book data for ${symbol}`); // Disabled for cleaner trade logs
           return;
         }
 
@@ -143,7 +142,7 @@ export function startOrderBook(symbol: string) {
         // keep last N snapshots (~ 10s worth)
         if (buf.length > 120) buf.shift();
       } catch (err) {
-        console.error(`Error processing order book message for ${symbol}:`, err);
+        // console.error(`Error processing order book message for ${symbol}:`, err); // Disabled for cleaner trade logs
       }
     };
 
@@ -166,10 +165,10 @@ export function startOrderBook(symbol: string) {
     };
     
     ws.onerror = (error) => {
-      console.error(`Order book WebSocket error for ${symbol}:`, error);
+      // console.error(`Order book WebSocket error for ${symbol}:`, error); // Disabled for cleaner trade logs
     };
   } catch (error) {
-    console.error(`Failed to create WebSocket for ${symbol}:`, error);
+    // console.error(`Failed to create WebSocket for ${symbol}:`, error); // Disabled for cleaner trade logs
     reconnectOrderBook(symbol, 1);
   }
 }

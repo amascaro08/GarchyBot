@@ -417,7 +417,10 @@ export async function getPendingTrades(userId: string, botConfigId?: string): Pr
  */
 export async function getExpiredPendingTrades(hours: number = 1): Promise<Array<Trade & { api_key: string | null; api_secret: string | null; api_mode: string }>> {
   try {
-    const result = await sql<Trade & { api_key: string | null; api_secret: string | null; api_mode: string }>`
+    // Use SQL with parameterized INTERVAL - PostgreSQL supports interval arithmetic
+    // For simplicity, we'll construct the interval string
+    const hoursParam = hours;
+    const result = await sql.query(`
       SELECT 
         t.*,
         bc.api_key,
@@ -426,12 +429,12 @@ export async function getExpiredPendingTrades(hours: number = 1): Promise<Array<
       FROM trades t
       JOIN bot_configs bc ON t.bot_config_id = bc.id
       WHERE t.status = 'pending'
-      AND t.entry_time < NOW() - INTERVAL '${hours} hour'
+      AND t.entry_time < NOW() - INTERVAL '1 hour' * $1
       AND t.order_id IS NOT NULL
       AND bc.api_key IS NOT NULL
       AND bc.api_secret IS NOT NULL
       ORDER BY t.entry_time ASC
-    `;
+    `, [hoursParam]);
     return result.rows;
   } catch (error) {
     console.error('Error getting expired pending trades:', error);

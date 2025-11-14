@@ -227,7 +227,9 @@ export async function getKlines(
 ): Promise<Array<{ ts: number; open: number; high: number; low: number; close: number; volume: number }>> {
   const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
   // Bybit v5 API format: /v5/market/kline
-  const url = `${baseUrl}/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  // Symbol must be uppercase according to Bybit API documentation
+  const normalizedSymbol = symbol.toUpperCase();
+  const url = `${baseUrl}/v5/market/kline?category=linear&symbol=${normalizedSymbol}&interval=${interval}&limit=${limit}`;
 
   try {
     const controller = new AbortController();
@@ -553,10 +555,10 @@ export async function cancelOrder(params: {
   const timestamp = Date.now();
   const recvWindow = 5000;
 
-  // Request body
+  // Request body according to Bybit v5 API
   const requestBody: Record<string, any> = {
     category: 'linear',
-    symbol,
+    symbol: symbol.toUpperCase(), // Ensure symbol is uppercase
   };
 
   if (orderId) {
