@@ -1,7 +1,8 @@
 import YahooFinance from 'yahoo-finance2';
 
 // Instantiate YahooFinance client (required for v3+)
-const yahooFinance = new YahooFinance();
+// Suppress deprecation notices for historical() method
+const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
 /**
  * Map exchange symbols to Yahoo Finance tickers

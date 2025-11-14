@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { calculateAverageVolatility } from '@/lib/vol';
 import { saveVolatilityData, getVolatilityData, saveDailyLevels, updatePhaseStatus, checkPhase1Completed } from '@/lib/db';
 import { getKlines } from '@/lib/bybit';
+import { getYahooFinanceKlines } from '@/lib/yahoo-finance';
 import { dailyOpenUTC, gridLevels } from '@/lib/strategy';
 
 /**
@@ -77,18 +78,24 @@ export async function POST(request: NextRequest) {
           // ================================
           // PHASE 1: Volatility Calculation
           // ================================
-          console.log(`[DAILY-SETUP] Phase 1: Calculating volatility for ${symbol}`);
+          console.log(`[DAILY-SETUP] Phase 1: Calculating volatility for ${symbol} using Yahoo Finance`);
 
-          // Fetch 3 years of historical data (limit=1095 for ~3 years)
-          const klinesRes = await fetch(
-            `${baseUrl}/api/klines?symbol=${symbol}&interval=1d&limit=1095&testnet=false`
-          );
-
-          if (!klinesRes.ok) {
-            throw new Error(`Failed to fetch historical data for ${symbol}`);
+          // Fetch 3 years of historical data from Yahoo Finance (matches Python script's yfinance)
+          let candles;
+          try {
+            candles = await getYahooFinanceKlines(symbol, 1095); // 3 years
+          } catch (yahooError) {
+            console.error(`[DAILY-SETUP] Yahoo Finance failed for ${symbol}, falling back to Bybit:`, yahooError);
+            // Fallback to Bybit if Yahoo Finance fails
+            const klinesRes = await fetch(
+              `${baseUrl}/api/klines?symbol=${symbol}&interval=1d&limit=1095&testnet=false`
+            );
+            if (!klinesRes.ok) {
+              throw new Error(`Failed to fetch historical data for ${symbol} from both Yahoo Finance and Bybit`);
+            }
+            candles = await klinesRes.json();
           }
 
-          const candles = await klinesRes.json();
           if (!candles || candles.length === 0) {
             throw new Error(`No historical data received for ${symbol}`);
           }

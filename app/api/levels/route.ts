@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { LevelsRequestSchema } from '@/lib/types';
 import { getKlines } from '@/lib/bybit';
+import { getYahooFinanceKlines } from '@/lib/yahoo-finance';
+import { getVolatilityData } from '@/lib/db';
 import { dailyOpenUTC, gridLevels } from '@/lib/strategy';
 import { computeSessionAnchoredVWAP, computeSessionAnchoredVWAPLine } from '@/lib/vwap';
-import { estimateKPercent } from '@/lib/vol';
+import { calculateAverageVolatility } from '@/lib/vol';
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,19 +30,67 @@ export async function POST(request: NextRequest) {
       intraday = await getKlines(validated.symbol, '5', 288, testnet);
     }
 
-    // Use custom kPct if provided, otherwise calculate from daily candles
+    // Use custom kPct if provided, otherwise calculate from Yahoo Finance (3 years of data)
     let kPct: number;
     if (validated.customKPct !== undefined) {
       // Use custom kPct provided by user (already validated to be between 0.01 and 0.1)
       kPct = validated.customKPct;
     } else {
-      // Calculate from daily candles (default behavior)
-      const dailyAsc = daily.slice().reverse(); // Ensure ascending order
-      const dailyCloses = dailyAsc.map(c => c.close);
-      const rawKPct = estimateKPercent(dailyCloses, { clampPct: [1, 10] }); // Returns as decimal (0.01-0.10)
+      // Try to get stored volatility from database first (from daily-setup)
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const storedVol = await getVolatilityData(validated.symbol, today);
+        if (storedVol && storedVol.calculated_volatility) {
+          console.log(`[LEVELS] Using stored volatility from database for ${validated.symbol}: ${(storedVol.calculated_volatility * 100).toFixed(4)}%`);
+          kPct = Number(storedVol.calculated_volatility);
+        } else {
+          // Calculate from Yahoo Finance (3 years of data, matches Python script)
+          console.log(`[LEVELS] Calculating volatility from Yahoo Finance for ${validated.symbol}...`);
+          let yahooCandles;
+          try {
+            yahooCandles = await getYahooFinanceKlines(validated.symbol, 1095); // 3 years
+          } catch (yahooError) {
+            console.warn(`[LEVELS] Yahoo Finance failed, falling back to Bybit data:`, yahooError);
+            // Fallback to Bybit if Yahoo Finance fails
+            const dailyAsc = daily.slice().reverse();
+            const dailyCloses = dailyAsc.map(c => c.close);
+            const volatilityResult = calculateAverageVolatility(dailyCloses, {
+              clampPct: [1, 10],
+              symbol: validated.symbol,
+              timeframe: '1d',
+              horizon: 5,
+            });
+            kPct = volatilityResult.averaged.kPct;
+          }
+          
+          if (yahooCandles && yahooCandles.length > 0) {
+            const yahooCloses = yahooCandles.map(c => c.close);
+            const volatilityResult = calculateAverageVolatility(yahooCloses, {
+              clampPct: [1, 10],
+              symbol: validated.symbol,
+              timeframe: '1d',
+              horizon: 5, // Forecast 5 days ahead, then average
+            });
+            kPct = volatilityResult.averaged.kPct;
+            console.log(`[LEVELS] Calculated volatility from Yahoo Finance: ${(kPct * 100).toFixed(4)}%`);
+          }
+        }
+      } catch (error) {
+        console.error(`[LEVELS] Error getting volatility, using fallback:`, error);
+        // Fallback: use Bybit data (limited accuracy)
+        const dailyAsc = daily.slice().reverse();
+        const dailyCloses = dailyAsc.map(c => c.close);
+        const volatilityResult = calculateAverageVolatility(dailyCloses, {
+          clampPct: [1, 10],
+          symbol: validated.symbol,
+          timeframe: '1d',
+          horizon: 5,
+        });
+        kPct = volatilityResult.averaged.kPct;
+      }
       
       // Final safety clamp to prevent extreme values
-      kPct = Math.max(0.01, Math.min(0.10, rawKPct));
+      kPct = Math.max(0.01, Math.min(0.10, kPct));
     }
 
     const intradayAsc = intraday.slice().reverse(); // Ensure ascending order

@@ -1155,9 +1155,17 @@ export function calculateAverageVolatility(
     ? validGjrForecasts.reduce((a, b) => a + b, 0) / validGjrForecasts.length
     : returnsStdDevPct; // Fallback to historical std dev
   
-  const promEgarch = validEgarchForecasts.length > 0
+  let promEgarch = validEgarchForecasts.length > 0
     ? validEgarchForecasts.reduce((a, b) => a + b, 0) / validEgarchForecasts.length
     : returnsStdDevPct; // Fallback to historical std dev
+  
+  // If EGARCH forecast is unreasonably low (< 10% of historical std dev or < 1%),
+  // it's likely a parameter/calculation issue - use historical std dev instead
+  // This prevents EGARCH from dragging down the average when it's clearly wrong
+  if (promEgarch < Math.max(returnsStdDevPct * 0.1, 1.0)) {
+    console.warn(`[GARCH-DEBUG] EGARCH forecast (${promEgarch.toFixed(4)}%) is unreasonably low, using historical std dev (${returnsStdDevPct.toFixed(4)}%) instead`);
+    promEgarch = returnsStdDevPct;
+  }
 
   // Debug logging - print prominently to console
   if (symbol && timeframe) {
