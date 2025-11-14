@@ -65,7 +65,19 @@ export default function Chart({
   }, [onPriceUpdate]);
 
   // Use WebSocket hook for real-time data, initialize with static candles
-  const { candles: wsCandles, isConnected: wsConnected } = useWebSocket(symbol, interval, candles);
+  const { candles: wsCandles, isConnected: wsConnected, ticker } = useWebSocket(symbol, interval, candles);
+
+  // Update price from ticker in real-time (separate from candle updates)
+  useEffect(() => {
+    if (ticker?.lastPrice && ticker.lastPrice > 0) {
+      if (ticker.lastPrice !== lastNotifiedPriceRef.current) {
+        lastNotifiedPriceRef.current = ticker.lastPrice;
+        if (onPriceUpdateRef.current) {
+          onPriceUpdateRef.current(ticker.lastPrice);
+        }
+      }
+    }
+  }, [ticker?.lastPrice, ticker?.timestamp]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -196,11 +208,15 @@ export default function Chart({
       priceScale.applyOptions({ mode: PriceScaleMode.Normal });
     }
 
-    const latestCandle = displayCandles[displayCandles.length - 1];
-    if (latestCandle && latestCandle.close !== lastNotifiedPriceRef.current) {
-      lastNotifiedPriceRef.current = latestCandle.close;
+    // Update price from ticker if available (real-time), otherwise use latest candle close
+    const priceToUse = ticker?.lastPrice && ticker.lastPrice > 0 
+      ? ticker.lastPrice 
+      : displayCandles[displayCandles.length - 1]?.close;
+    
+    if (priceToUse && priceToUse !== lastNotifiedPriceRef.current) {
+      lastNotifiedPriceRef.current = priceToUse;
       if (onPriceUpdateRef.current) {
-        onPriceUpdateRef.current(latestCandle.close);
+        onPriceUpdateRef.current(priceToUse);
       }
     }
 
@@ -375,7 +391,7 @@ export default function Chart({
         seriesRef.current.setMarkers([]);
       }
     }
-  }, [displayCandles, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
+  }, [displayCandles, ticker, dOpen, vwap, vwapLine, upLevels, dnLevels, upper, lower, markers, openTrades]);
 
   // Update VWAP line independently whenever candles or vwapLine changes
   useEffect(() => {

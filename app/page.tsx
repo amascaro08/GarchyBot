@@ -1514,7 +1514,7 @@ export default function Home() {
           </div>
         )}
 
-        {loading && !loadingBotStatus && (
+        {loading && !loadingBotStatus && candles.length === 0 && !currentPrice && (
           <div className="text-center py-12">
             <div className="inline-flex items-center gap-3 text-cyan-300">
               <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">

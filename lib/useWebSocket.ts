@@ -28,6 +28,20 @@ interface MarketData {
   timestamp: number;
 }
 
+interface TickerData {
+  lastPrice: number;
+  bid1Price: number;
+  bid1Size: number;
+  ask1Price: number;
+  ask1Size: number;
+  highPrice24h: number;
+  lowPrice24h: number;
+  volume24h: number;
+  turnover24h: number;
+  price24hPcnt: number;
+  timestamp: number;
+}
+
 interface WebSocketHook {
   // Connection state
   isConnected: boolean;
@@ -37,6 +51,7 @@ interface WebSocketHook {
   orderBook: OrderBookData | null;
   candles: Candle[];
   trades: TradeData[];
+  ticker: TickerData | null;
 
   // Controls
   connect: () => void;
@@ -62,6 +77,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
   const [orderBook, setOrderBook] = useState<OrderBookData | null>(null);
   const [candles, setCandles] = useState<Candle[]>(initialCandles);
+  const [ticker, setTicker] = useState<TickerData | null>(null);
 
   // Update candles state when initialCandles changes (but don't reset if we already have WS data)
   useEffect(() => {
@@ -70,16 +86,18 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
     }
   }, [initialCandles, candles.length]);
 
+  const [trades, setTrades] = useState<TradeData[]>([]);
+
   useEffect(() => {
     intervalRef.current = interval;
     setCandles(initialCandles.length > 0 ? initialCandles : []);
     setOrderBook(null);
     setTrades([]);
+    setTicker(null);
     lastCandleRef.current = null;
     setIsConnected(false);
     setConnectionStatus('connecting');
   }, [symbol, interval, initialCandles]);
-  const [trades, setTrades] = useState<TradeData[]>([]);
 
   // Get WebSocket URL based on environment
   const getWsUrl = () => {
@@ -155,6 +173,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
         // Subscribe to streams
         const klineInterval = VALID_INTERVALS.has(intervalRef.current) ? intervalRef.current : '5';
         const subscriptions = [
+          `tickers.${symbol}`, // Ticker stream for real-time price updates
           `orderbook.50.${symbol}`, // Order book depth 50
           `kline.${klineInterval}.${symbol}`,      // Candles
           `publicTrade.${symbol}`, // Recent trades
@@ -196,7 +215,9 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
 
           // Process stream data only if we have valid data
           if (message.topic && message.data) {
-            if (message.topic.startsWith('orderbook.')) {
+            if (message.topic.startsWith('tickers.')) {
+              handleTickerMessage(message);
+            } else if (message.topic.startsWith('orderbook.')) {
               handleOrderBookMessage(message);
             } else if (message.topic.startsWith('kline.')) {
               handleKlineMessage(message);
@@ -256,7 +277,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
           const klineInterval = VALID_INTERVALS.has(intervalRef.current) ? intervalRef.current : '5';
           wsRef.current.send(JSON.stringify({
             op: 'unsubscribe',
-            args: [`orderbook.50.${symbol}`, `kline.${klineInterval}.${symbol}`, `publicTrade.${symbol}`]
+            args: [`tickers.${symbol}`, `orderbook.50.${symbol}`, `kline.${klineInterval}.${symbol}`, `publicTrade.${symbol}`]
           }));
         }
         wsRef.current.close();
@@ -269,6 +290,82 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
     setIsConnected(false);
     setConnectionStatus('disconnected');
   }, [symbol]);
+
+  // Handle ticker messages
+  const handleTickerMessage = (message: any) => {
+    try {
+      // Bybit ticker format: data can be an array or object
+      // For linear perpetual: data is an object
+      // For spot: data is an array with one element
+      const tickerData = Array.isArray(message.data) ? message.data[0] : message.data;
+      
+      if (!tickerData) {
+        return;
+      }
+
+      // Handle snapshot vs delta updates
+      // Delta updates only include changed fields, so merge with previous state
+      setTicker(prevTicker => {
+        const isDelta = message.type === 'delta';
+        const baseTicker = isDelta && prevTicker ? prevTicker : {
+          lastPrice: 0,
+          bid1Price: 0,
+          bid1Size: 0,
+          ask1Price: 0,
+          ask1Size: 0,
+          highPrice24h: 0,
+          lowPrice24h: 0,
+          volume24h: 0,
+          turnover24h: 0,
+          price24hPcnt: 0,
+          timestamp: Date.now(),
+        };
+
+        const newTicker: TickerData = {
+          lastPrice: tickerData.lastPrice !== undefined 
+            ? parseFloat(tickerData.lastPrice || '0') 
+            : baseTicker.lastPrice,
+          bid1Price: tickerData.bid1Price !== undefined 
+            ? parseFloat(tickerData.bid1Price || '0') 
+            : baseTicker.bid1Price,
+          bid1Size: tickerData.bid1Size !== undefined 
+            ? parseFloat(tickerData.bid1Size || '0') 
+            : baseTicker.bid1Size,
+          ask1Price: tickerData.ask1Price !== undefined 
+            ? parseFloat(tickerData.ask1Price || '0') 
+            : baseTicker.ask1Price,
+          ask1Size: tickerData.ask1Size !== undefined 
+            ? parseFloat(tickerData.ask1Size || '0') 
+            : baseTicker.ask1Size,
+          highPrice24h: tickerData.highPrice24h !== undefined 
+            ? parseFloat(tickerData.highPrice24h || '0') 
+            : baseTicker.highPrice24h,
+          lowPrice24h: tickerData.lowPrice24h !== undefined 
+            ? parseFloat(tickerData.lowPrice24h || '0') 
+            : baseTicker.lowPrice24h,
+          volume24h: tickerData.volume24h !== undefined 
+            ? parseFloat(tickerData.volume24h || '0') 
+            : baseTicker.volume24h,
+          turnover24h: tickerData.turnover24h !== undefined 
+            ? parseFloat(tickerData.turnover24h || '0') 
+            : baseTicker.turnover24h,
+          price24hPcnt: tickerData.price24hPcnt !== undefined 
+            ? parseFloat(tickerData.price24hPcnt || '0') 
+            : baseTicker.price24hPcnt,
+          timestamp: message.ts || Date.now(),
+        };
+
+        // Validate ticker data - only update if we have a valid lastPrice
+        if (newTicker.lastPrice > 0 && !isNaN(newTicker.lastPrice)) {
+          return newTicker;
+        }
+        
+        return prevTicker; // Keep previous ticker if new one is invalid
+      });
+    } catch (error) {
+      console.error('Error processing ticker message:', error);
+    }
+  };
 
   // Handle order book messages
   const handleOrderBookMessage = (message: any) => {
@@ -389,6 +486,7 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
     orderBook,
     candles,
     trades,
+    ticker,
     connect,
     disconnect,
   };
