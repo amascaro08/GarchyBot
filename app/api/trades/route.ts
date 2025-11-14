@@ -127,12 +127,7 @@ export async function POST(request: NextRequest) {
     );
 
     let orderResult: any = null;
-    // Recalculate trade value and position size from capital and leverage (the source of truth)
-    // Trade value = capital * leverage (e.g., $2 * 50x = $100 USDT)
-    // Position size = trade value / entry price (e.g., $100 / $99,629 = 0.001003 BTC)
-    const tradeValueUSDT = botConfig.capital * leverage;
-    const entryPrice = payload.entry;
-    const calculatedPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
+    // Use the already calculated position size (calculated above)
     const orderQty = Math.max(0, Number.isFinite(calculatedPositionSize) ? calculatedPositionSize : 0);
     const requiredMargin = tradeValueUSDT / leverage;
     
