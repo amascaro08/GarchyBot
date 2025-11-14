@@ -144,17 +144,19 @@ function findClosestGridLevels(
  /**
   * Check if a level was touched in a candle (more sensitive detection)
   * Also checks if price crossed through the level (went from above to below or vice versa)
+  * Uses tighter tolerance for more precise detection
   */
  function checkLevelTouch(candle: Candle, level: number, previousCandle?: Candle): boolean {
    const { low, high, open, close } = candle;
    const roundedLevel = roundLevel(level);
    
-   // Standard check: level is within candle's high/low range
+   // Primary check: level is within candle's high/low range (most reliable)
+   // This means the price definitely touched the level during the candle
    if (low <= roundedLevel && roundedLevel <= high) {
      return true;
    }
    
-   // Enhanced check: price crossed through the level
+   // Enhanced check: price crossed through the level between candles
    // For LONG signals: price was above level, now below (pulled back to support)
    // For SHORT signals: price was below level, now above (rallied to resistance)
    if (previousCandle) {
@@ -165,13 +167,17 @@ function findClosestGridLevels(
      const crossedDown = prevClose >= roundedLevel && currentClose < roundedLevel;
      const crossedUp = prevClose <= roundedLevel && currentClose > roundedLevel;
      
-     // Also check if the level is very close to the candle (within 0.1% tolerance)
-     const tolerance = roundedLevel * 0.001; // 0.1% tolerance
-     const nearLevel = Math.abs(low - roundedLevel) <= tolerance || 
-                       Math.abs(high - roundedLevel) <= tolerance ||
-                       Math.abs(close - roundedLevel) <= tolerance;
+     if (crossedDown || crossedUp) {
+       return true;
+     }
      
-     if (crossedDown || crossedUp || nearLevel) {
+     // Tight tolerance check: level is very close to candle boundaries (within 0.05% tolerance)
+     // This catches cases where the level is just outside the candle but very close
+     const tolerance = roundedLevel * 0.0005; // 0.05% tolerance (tighter)
+     const nearLevel = Math.abs(low - roundedLevel) <= tolerance || 
+                       Math.abs(high - roundedLevel) <= tolerance;
+     
+     if (nearLevel) {
        return true;
      }
    }
@@ -181,10 +187,11 @@ function findClosestGridLevels(
 
  /**
   * Check if real-time price touches a level (for immediate signal detection)
+  * Uses tighter tolerance for more precise detection
   */
- function checkRealtimeLevelTouch(currentPrice: number, level: number, tolerance: number = 0.001): boolean {
+ function checkRealtimeLevelTouch(currentPrice: number, level: number, tolerance: number = 0.0005): boolean {
    const roundedLevel = roundLevel(level);
-   const priceTolerance = roundedLevel * tolerance; // Default 0.1% tolerance
+   const priceTolerance = roundedLevel * tolerance; // Default 0.05% tolerance (tighter)
    
    // Check if current price is within tolerance of the level
    return Math.abs(currentPrice - roundedLevel) <= priceTolerance;

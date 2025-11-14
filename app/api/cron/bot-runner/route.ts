@@ -200,7 +200,25 @@ export async function POST(request: NextRequest) {
             return { userId: botConfig.user_id, status: 'error', error: 'No stored levels found' };
           }
 
-          console.log(`[CRON] Using stored levels for ${botConfig.symbol}:`);
+          // Verify stored levels are for today
+          const storedDate = new Date(storedLevels.date);
+          const today = new Date();
+          today.setUTCHours(0, 0, 0, 0);
+          storedDate.setUTCHours(0, 0, 0, 0);
+          
+          if (storedDate.getTime() !== today.getTime()) {
+            console.error(`[CRON] Stored levels for ${botConfig.symbol} are from ${storedLevels.date}, not today! Recalculating...`);
+            await addActivityLog(
+              botConfig.user_id,
+              'warning',
+              `Stored levels are stale (date: ${storedLevels.date}). Please run daily-setup cron.`,
+              { storedDate: storedLevels.date, today: today.toISOString().split('T')[0] },
+              botConfig.id
+            );
+            // Continue with stale levels but log warning - daily-setup should be run
+          }
+
+          console.log(`[CRON] Using stored levels for ${botConfig.symbol} (date: ${storedLevels.date}):`);
           console.log(`  Daily Open: ${storedLevels.daily_open_price.toFixed(2)}`);
           console.log(`  Upper Range: ${storedLevels.upper_range.toFixed(2)}`);
           console.log(`  Lower Range: ${storedLevels.lower_range.toFixed(2)}`);

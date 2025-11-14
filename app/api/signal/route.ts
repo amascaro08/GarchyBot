@@ -36,6 +36,15 @@ export async function POST(request: NextRequest) {
       ? body.realtimePrice
       : undefined;
 
+    // Log the levels being used for debugging
+    console.log(`[SIGNAL] Checking signal for ${validated.symbol}:`);
+    console.log(`  Daily Open: ${dOpen.toFixed(2)}`);
+    console.log(`  VWAP: ${vwap.toFixed(2)}`);
+    console.log(`  Real-time price: ${realtimePrice ? realtimePrice.toFixed(2) : 'N/A'}`);
+    console.log(`  Last candle close: ${validated.candles[validated.candles.length - 1]?.close.toFixed(2)}`);
+    console.log(`  Upper levels: ${upLevels.map(l => l.toFixed(2)).join(', ')}`);
+    console.log(`  Lower levels: ${dnLevels.map(l => l.toFixed(2)).join(', ')}`);
+
     // Get signal
     const signal = strictSignalWithDailyOpen({
       candles: validated.candles,
@@ -49,6 +58,12 @@ export async function POST(request: NextRequest) {
       subdivisions: validated.subdivisions,
       realtimePrice, // Pass real-time price for faster detection
     });
+
+    if (signal.signal) {
+      console.log(`[SIGNAL] ✓ Signal detected: ${signal.signal} @ ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
+    } else {
+      console.log(`[SIGNAL] No signal: ${signal.reason}`);
+    }
 
     return NextResponse.json({
       symbol: validated.symbol,
