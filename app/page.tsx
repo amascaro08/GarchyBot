@@ -537,17 +537,18 @@ export default function Home() {
             if (duplicateTrade) {
               addLog('warning', `Duplicate trade detected at $${signalData.touchedLevel!.toFixed(2)}. Skipping.`);
             } else {
-              const riskPerTrade = riskType === 'percent'
-                ? (capital * riskAmount) / 100
-                : riskAmount;
-
-              const stopLossDistance = Math.abs(signalData.touchedLevel! - signalData.sl!);
-              const rawPositionSize = stopLossDistance > 0 ? riskPerTrade / stopLossDistance : 0;
+              // Calculate position size based on USDT trade value
+              // Order value in USDT = capital * leverage
+              // Position size in base asset = (capital * leverage) / entry_price
+              const tradeValueUSDT = capital * leverage;
+              const entryPrice = signalData.touchedLevel!;
+              const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
               const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
 
               if (positionSize <= 0) {
                 addLog('warning', 'Calculated position size is zero. Skipping trade.');
               } else {
+                addLog('info', `Trade value: $${tradeValueUSDT.toFixed(2)} USDT (capital: $${capital.toFixed(2)} * leverage: ${leverage}x), Position size: ${positionSize.toFixed(8)}`);
                 await openTradeOnServer({
                   entry: signalData.touchedLevel!,
                   tp: signalData.tp!,

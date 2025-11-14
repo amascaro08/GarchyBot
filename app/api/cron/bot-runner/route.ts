@@ -408,20 +408,18 @@ export async function POST(request: NextRequest) {
                 }
 
                 if (approved) {
-                  // Calculate position size based on risk management
-                  // Rules: Risk amount per trade, with stop loss at next grid level
-                  const riskPerTrade = botConfig.risk_type === 'percent'
-                    ? (botConfig.capital * botConfig.risk_amount) / 100
-                    : botConfig.risk_amount;
-
-                  const stopLossDistance = Math.abs(signal.touchedLevel - signal.sl);
-                  const rawPositionSize = stopLossDistance > 0 ? riskPerTrade / stopLossDistance : 0;
+                  // Calculate position size based on USDT trade value
+                  // Order value in USDT = capital * leverage
+                  // Position size in base asset = (capital * leverage) / entry_price
+                  const tradeValueUSDT = botConfig.capital * botConfig.leverage;
+                  const entryPrice = signal.touchedLevel;
+                  const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
                   const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
                   
                   if (positionSize <= 0) {
                     console.log('[CRON] Skipping trade - calculated position size <= 0');
                   } else {
-                    console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Risk: $${riskPerTrade.toFixed(2)}, Position size: ${positionSize.toFixed(4)}`);
+                    console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (capital: $${botConfig.capital.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
 
                   const tradeRecord = await createTrade({
                       user_id: botConfig.user_id,

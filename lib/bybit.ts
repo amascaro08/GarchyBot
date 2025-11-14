@@ -359,6 +359,99 @@ export async function getKlines(
 }
 
 /**
+ * Fetch instrument info for a specific symbol from Bybit
+ * Returns lotSizeFilter with minOrderQty and qtyStep
+ */
+export async function getInstrumentInfo(
+  symbol: string,
+  testnet: boolean = true
+): Promise<{ minOrderQty: number; qtyStep: number } | null> {
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const normalizedSymbol = symbol.toUpperCase();
+  const endpoint = `${baseUrl}/v5/market/instruments-info?category=linear&symbol=${normalizedSymbol}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+
+    if (data.retCode !== 0 || !data.result?.list || data.result.list.length === 0) {
+      return null;
+    }
+
+    const instrument = data.result.list[0];
+    const lotSizeFilter = instrument?.lotSizeFilter;
+    
+    if (!lotSizeFilter) {
+      return null;
+    }
+
+    return {
+      minOrderQty: parseFloat(lotSizeFilter.minOrderQty || '0.001'),
+      qtyStep: parseFloat(lotSizeFilter.qtyStep || '0.001'),
+    };
+  } catch (error) {
+    console.error(`[Bybit API] Failed to fetch instrument info for ${symbol}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Round quantity to match Bybit's qtyStep precision
+ * Returns null if quantity is below minimum
+ */
+export function roundQuantity(
+  qty: number,
+  qtyStep: number,
+  minOrderQty: number
+): number | null {
+  if (qty <= 0 || qtyStep <= 0 || minOrderQty <= 0) {
+    return null;
+  }
+
+  // Round to nearest qtyStep
+  const rounded = Math.round(qty / qtyStep) * qtyStep;
+  
+  // Calculate precision based on qtyStep
+  // For qtyStep = 0.001, we need 3 decimal places
+  // For qtyStep = 0.01, we need 2 decimal places
+  // For qtyStep = 0.1, we need 1 decimal place
+  // Count decimal places by converting to string and checking
+  const qtyStepStr = qtyStep.toString();
+  let precision = 0;
+  if (qtyStepStr.includes('.')) {
+    precision = qtyStepStr.split('.')[1].length;
+  } else if (qtyStepStr.includes('e')) {
+    // Handle scientific notation
+    const match = qtyStepStr.match(/e-(\d+)/);
+    if (match) {
+      precision = parseInt(match[1]);
+    }
+  }
+  
+  // Ensure precision is reasonable (max 8 decimal places)
+  precision = Math.min(precision, 8);
+  
+  const finalQty = parseFloat(rounded.toFixed(precision));
+
+  // Check if it meets minimum
+  if (finalQty < minOrderQty) {
+    return null;
+  }
+
+  return finalQty;
+}
+
+/**
  * Fetch tradable linear instruments from Bybit
  */
 export async function fetchLinearInstruments(testnet: boolean = true): Promise<string[]> {
@@ -413,9 +506,9 @@ export async function placeOrder(params: {
   positionIdx?: 0 | 1 | 2; // 0=one-way, 1=buy side of hedge-mode, 2=sell side of hedge-mode
 }): Promise<any> {
   const {
-    symbol,
+    symbol: originalSymbol,
     side,
-    qty,
+    qty: originalQty,
     price,
     testnet = true,
     apiKey: overrideApiKey,
@@ -423,6 +516,25 @@ export async function placeOrder(params: {
     timeInForce = 'GTC', // Changed to match Bybit API: GTC, IOC, FOK, PostOnly
     positionIdx = 0, // Default to one-way mode
   } = params;
+
+  // Round quantity to match Bybit's precision requirements
+  let qty = originalQty;
+  const instrumentInfo = await getInstrumentInfo(originalSymbol, testnet);
+  if (instrumentInfo) {
+    const roundedQty = roundQuantity(originalQty, instrumentInfo.qtyStep, instrumentInfo.minOrderQty);
+    if (roundedQty === null) {
+      throw new BybitError(
+        10001,
+        `Quantity ${originalQty} is below minimum order quantity ${instrumentInfo.minOrderQty} for ${originalSymbol} (qtyStep: ${instrumentInfo.qtyStep})`
+      );
+    }
+    qty = roundedQty;
+    if (qty !== originalQty) {
+      console.log(`[Bybit API] Rounded quantity from ${originalQty} to ${qty} (qtyStep: ${instrumentInfo.qtyStep}, minOrderQty: ${instrumentInfo.minOrderQty})`);
+    }
+  }
+  
+  const symbol = originalSymbol;
 
   const apiKey = overrideApiKey || process.env.BYBIT_API_KEY;
   const apiSecret = overrideApiSecret || process.env.BYBIT_API_SECRET;
