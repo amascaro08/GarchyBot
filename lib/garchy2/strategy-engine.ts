@@ -163,8 +163,9 @@ export class Garchy2StrategyEngine {
     timestamp: number;
     candles: Candle[];
     symbol: string;
+    vwap?: number; // Optional VWAP for fallback bias calculation
   }): Promise<TradeSignal | null> {
-    const { currentPrice, timestamp, candles, symbol } = params;
+    const { currentPrice, timestamp, candles, symbol, vwap } = params;
 
     // Update all modules with latest data
     this.orderflow.updateCandles(candles);
@@ -175,19 +176,15 @@ export class Garchy2StrategyEngine {
       this.sessionBias = orbSignal.sessionBias;
     }
 
-    // Update session bias from VWAP if available
-    if (candles.length > 0) {
-      const lastCandle = candles[candles.length - 1];
-      // Simple VWAP approximation: use volume-weighted close
-      // If price > recent average, bias is long
-      if (candles.length >= 20) {
-        const recent20 = candles.slice(-20);
-        const avgPrice = recent20.reduce((sum, c) => sum + c.close, 0) / recent20.length;
-        if (lastCandle.close > avgPrice && this.sessionBias === 'neutral') {
-          this.sessionBias = 'long';
-        } else if (lastCandle.close < avgPrice && this.sessionBias === 'neutral') {
-          this.sessionBias = 'short';
-        }
+    // Update session bias from VWAP if ORB didn't set a bias
+    // VWAP logic: price < VWAP → short bias (bearish), price > VWAP → long bias (bullish)
+    if (this.sessionBias === 'neutral' && vwap && vwap > 0) {
+      if (currentPrice < vwap) {
+        this.sessionBias = 'short';
+        console.log(`[GARCHY2] Fallback bias: SHORT (price ${currentPrice.toFixed(2)} < VWAP ${vwap.toFixed(2)})`);
+      } else if (currentPrice > vwap) {
+        this.sessionBias = 'long';
+        console.log(`[GARCHY2] Fallback bias: LONG (price ${currentPrice.toFixed(2)} > VWAP ${vwap.toFixed(2)})`);
       }
     }
 

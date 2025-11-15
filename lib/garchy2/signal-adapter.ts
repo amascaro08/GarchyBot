@@ -123,12 +123,13 @@ export class SignalAdapter {
         });
       }
 
-      // Evaluate strategy
+      // Evaluate strategy (pass VWAP for fallback bias calculation)
       const signal = await this.engine.evaluate({
         currentPrice,
         timestamp,
         candles: params.candles,
         symbol: params.symbol,
+        vwap: params.vwap, // Pass VWAP for fallback session bias
       });
 
       if (signal) {
