@@ -16,9 +16,10 @@ import {
   checkPhase2Completed,
   updateTrade,
 } from '@/lib/db';
-import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
-import { placeOrder, cancelOrder } from '@/lib/bybit';
+import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip, strictSignalWithDailyOpen } from '@/lib/strategy';
+import { placeOrder, cancelOrder, getKlines, getTicker } from '@/lib/bybit';
 import { confirmLevelTouch } from '@/lib/orderbook';
+import { computeSessionAnchoredVWAP, computeSessionAnchoredVWAPLine } from '@/lib/vwap';
 import type { Candle } from '@/lib/types';
 
 const NO_TRADE_BAND_PCT = 0.001;
@@ -49,12 +50,6 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[CRON] Bot runner started at', new Date().toISOString());
-
-    // Build base URL for internal API calls
-    // On Vercel, VERCEL_URL doesn't include protocol, so we need to add https://
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3000';
 
     // Reset daily P&L if new day
     await resetDailyPnL();
@@ -152,25 +147,24 @@ export async function POST(request: NextRequest) {
             return { userId: botConfig.user_id, status: 'stopped', reason };
           }
 
-          // Fetch current market data
-          let klinesRes;
+          // Fetch current market data directly (bypass HTTP calls to avoid Vercel auth issues)
+          let candles: Candle[];
           try {
-            klinesRes = await fetch(
-              `${baseUrl}/api/klines?symbol=${botConfig.symbol}&interval=${botConfig.candle_interval}&limit=200&testnet=false`
-            );
-
-            if (!klinesRes.ok) {
-              const errorText = await klinesRes.text();
-              throw new Error(`Failed to fetch klines for bot ${botConfig.id} (${botConfig.symbol}): ${klinesRes.status} ${errorText}`);
+            // Try mainnet first for accurate data
+            try {
+              candles = await getKlines(botConfig.symbol, botConfig.candle_interval, 200, false);
+            } catch (mainnetError) {
+              // Fallback to testnet if mainnet fails
+              console.warn(`[CRON] Mainnet failed for ${botConfig.symbol}, trying testnet:`, mainnetError);
+              candles = await getKlines(botConfig.symbol, botConfig.candle_interval, 200, true);
+            }
+            
+            if (!candles || candles.length === 0) {
+              throw new Error('No candles received from Bybit API');
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             throw new Error(`Failed to fetch klines for bot ${botConfig.id} (${botConfig.symbol}): ${errorMsg}`);
-          }
-
-          const candles: Candle[] = await klinesRes.json();
-          if (!candles || candles.length === 0) {
-            throw new Error('No candles received');
           }
 
           const lastClose = candles[candles.length - 1].close;
@@ -178,7 +172,6 @@ export async function POST(request: NextRequest) {
           // Fetch real-time ticker data for faster signal detection
           let realtimePrice: number | undefined = undefined;
           try {
-            const { getTicker } = await import('@/lib/bybit');
             const ticker = await getTicker(botConfig.symbol, botConfig.api_mode !== 'live');
             if (ticker && ticker.lastPrice > 0) {
               realtimePrice = ticker.lastPrice;
@@ -240,36 +233,33 @@ export async function POST(request: NextRequest) {
           console.log(`  Lower Range: ${storedLevels.lower_range.toFixed(2)}`);
           console.log(`  Grid Levels - Up: ${storedLevels.up_levels.length}, Down: ${storedLevels.dn_levels.length}`);
 
-          // Fetch current VWAP for signal calculation
-          const vwapRes = await fetch(
-            `${baseUrl}/api/levels`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                symbol: botConfig.symbol,
-                subdivisions: botConfig.subdivisions,
-                testnet: false,
-                // Use stored volatility for consistency
-                customKPct: storedLevels.calculated_volatility,
-              }),
+          // Calculate current VWAP directly (bypass HTTP calls to avoid Vercel auth issues)
+          // We need intraday candles for VWAP calculation
+          let intradayCandles: Candle[];
+          try {
+            try {
+              intradayCandles = await getKlines(botConfig.symbol, '5', 288, false);
+            } catch (mainnetError) {
+              intradayCandles = await getKlines(botConfig.symbol, '5', 288, true);
             }
-          );
-
-          if (!vwapRes.ok) {
-            throw new Error('Failed to fetch VWAP data');
+          } catch (error) {
+            // Fallback to using the candles we already fetched
+            console.warn(`[CRON] Failed to fetch intraday candles for VWAP, using existing candles:`, error);
+            intradayCandles = candles;
           }
-
-          const vwapData = await vwapRes.json();
-          console.log(`[CRON] VWAP calculated: ${vwapData.vwap.toFixed(2)}`);
+          
+          const intradayAsc = intradayCandles.slice().reverse(); // Ensure ascending order
+          const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hlc3', useAllCandles: true });
+          const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hlc3', useAllCandles: true });
+          console.log(`[CRON] VWAP calculated: ${vwap.toFixed(2)}`);
 
           // Combine stored levels with current VWAP
           // getDailyLevels now returns properly typed values (numbers/arrays)
           // But ensure VWAP is a number and validate everything
           const levels = {
             ...storedLevels,
-            vwap: Number(vwapData.vwap),
-            vwapLine: vwapData.vwapLine,
+            vwap: Number(vwap),
+            vwapLine: vwapLine,
             kPct: storedLevels.calculated_volatility, // Already a number from getDailyLevels
             dOpen: storedLevels.daily_open_price, // Already a number from getDailyLevels
             upper: storedLevels.upper_range, // Already a number from getDailyLevels
@@ -905,54 +895,41 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          // Calculate signal using stored levels, current candles, and real-time price
-          const signalPayload = {
-            symbol: botConfig.symbol,
+          // Calculate signal directly using stored levels, current candles, and real-time price
+          // Bypass HTTP calls to avoid Vercel auth issues
+          console.log(`[CRON] Calculating signal for ${botConfig.symbol}:`);
+          console.log(`  dOpen: ${levels.dOpen} (type: ${typeof levels.dOpen})`);
+          console.log(`  vwap: ${levels.vwap} (type: ${typeof levels.vwap})`);
+          console.log(`  upperLevels: ${Array.isArray(levels.upLevels) ? `array[${levels.upLevels.length}]` : typeof levels.upLevels}`);
+          console.log(`  lowerLevels: ${Array.isArray(levels.dnLevels) ? `array[${levels.dnLevels.length}]` : typeof levels.dnLevels}`);
+          console.log(`  realtimePrice: ${realtimePrice || 'N/A'}`);
+
+          // Call signal function directly (bypass HTTP)
+          const signal = strictSignalWithDailyOpen({
+            candles,
+            vwap: levels.vwap,
+            dOpen: levels.dOpen,
+            upLevels: levels.upLevels,
+            dnLevels: levels.dnLevels,
+            noTradeBandPct: botConfig.no_trade_band_pct || 0.001,
+            useDailyOpenEntry: botConfig.use_daily_open_entry ?? true,
             kPct: levels.kPct,
             subdivisions: botConfig.subdivisions,
-            noTradeBandPct: botConfig.no_trade_band_pct,
-            useDailyOpenEntry: botConfig.use_daily_open_entry,
-            candles,
-            // Pass stored levels directly to avoid recalculation
-            dOpen: levels.dOpen,
-            upperLevels: levels.upLevels,
-            lowerLevels: levels.dnLevels,
-            vwap: levels.vwap,
-            // Pass real-time price for faster signal detection
             realtimePrice,
-          };
-
-          // Log what we're sending to signal API
-          console.log(`[CRON] Sending signal request for ${botConfig.symbol}:`);
-          console.log(`  dOpen: ${signalPayload.dOpen} (type: ${typeof signalPayload.dOpen})`);
-          console.log(`  vwap: ${signalPayload.vwap} (type: ${typeof signalPayload.vwap})`);
-          console.log(`  upperLevels: ${Array.isArray(signalPayload.upperLevels) ? `array[${signalPayload.upperLevels.length}]` : typeof signalPayload.upperLevels}`);
-          console.log(`  lowerLevels: ${Array.isArray(signalPayload.lowerLevels) ? `array[${signalPayload.lowerLevels.length}]` : typeof signalPayload.lowerLevels}`);
-          console.log(`  realtimePrice: ${signalPayload.realtimePrice || 'N/A'}`);
-
-          const signalRes = await fetch(
-            `${baseUrl}/api/signal`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(signalPayload),
-            }
-          );
-
-          const signal = await signalRes.json();
+          });
 
           // Log if signal is detected
-          if (signal.signal) {
-            console.log(`[CRON] Signal detected - ${signal.signal} at ${signal.touchedLevel?.toFixed(2)}, Reason: ${signal.reason}`);
+          if (signal.side) {
+            console.log(`[CRON] Signal detected - ${signal.side} at ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
             
             // Check if this is a daily open entry
             if (signal.reason && signal.reason.includes('daily open')) {
-              console.log(`[CRON] ✓ Daily open entry detected! Price touched ${signal.touchedLevel?.toFixed(2)}`);
+              console.log(`[CRON] ✓ Daily open entry detected! Price touched ${signal.entry?.toFixed(2)}`);
             }
           }
 
           // Check for new trade signal
-          if (signal.signal && signal.touchedLevel) {
+          if (signal.side && signal.entry) {
             const openTradesCount = openTrades.length;
 
             if (openTradesCount < botConfig.max_trades) {
@@ -960,8 +937,8 @@ export async function POST(request: NextRequest) {
               const isDuplicate = openTrades.some(
                 (t) =>
                   t.symbol === botConfig.symbol &&
-                  t.side === signal.signal &&
-                  Math.abs(Number(t.entry_price) - signal.touchedLevel) < 0.01
+                  t.side === signal.side &&
+                  Math.abs(Number(t.entry_price) - signal.entry) < 0.01
               );
 
               if (!isDuplicate) {
@@ -985,7 +962,7 @@ export async function POST(request: NextRequest) {
                       botConfig.user_id,
                       'info',
                       `Trade signal ignored - cooldown active (last trade ${Math.round(timeSinceLastTrade / 1000)}s ago)`,
-                      { signal: signal.signal, level: signal.touchedLevel, timeSinceLastTrade },
+                      { signal: signal.side, level: signal.entry, timeSinceLastTrade },
                       botConfig.id
                     );
                     // Skip this signal, wait for cooldown
@@ -1001,8 +978,8 @@ export async function POST(request: NextRequest) {
                     try {
                       approved = await confirmLevelTouch({
                         symbol: botConfig.symbol,
-                        level: signal.touchedLevel,
-                        side: signal.signal,
+                        level: signal.entry,
+                        side: signal.side,
                         windowMs: 8000, // 8 second window to observe order book activity
                         minNotional: 50000, // Minimum $50k notional for wall detection
                         proximityBps: 5, // 0.05% proximity to level
@@ -1030,22 +1007,22 @@ export async function POST(request: NextRequest) {
                       // Order value in USDT = capital_to_use * leverage
                       // Position size in base asset = (capital_to_use * leverage) / entry_price
                       const tradeValueUSDT = capitalToUse * botConfig.leverage;
-                      const entryPrice = signal.touchedLevel;
+                      const entryPrice = signal.entry;
                       const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
                       const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
                             
                       if (positionSize <= 0) {
                         console.log('[CRON] Skipping trade - calculated position size <= 0');
                       } else {
-                        console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
+                        console.log(`[CRON] New trade signal - ${signal.side} @ ${signal.entry.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
 
                         const tradeRecord = await createTrade({
                           user_id: botConfig.user_id,
                           bot_config_id: botConfig.id,
                           symbol: botConfig.symbol,
-                          side: signal.signal,
+                          side: signal.side,
                           status: 'pending',
-                          entry_price: signal.touchedLevel,
+                          entry_price: signal.entry,
                           tp_price: signal.tp,
                           sl_price: signal.sl,
                           current_sl: signal.sl,
@@ -1065,11 +1042,11 @@ export async function POST(request: NextRequest) {
                             const { placeOrder, setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
                             
                             // Place MARKET order for immediate execution (no price needed)
-                            console.log(`[CRON] Placing MARKET order: ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(8)}`);
+                            console.log(`[CRON] Placing MARKET order: ${signal.side} ${botConfig.symbol} qty ${orderQty.toFixed(8)}`);
                             
                             const orderResult = await placeOrder({
                         symbol: botConfig.symbol,
-                        side: signal.signal === 'LONG' ? 'Buy' : 'Sell',
+                        side: signal.side === 'LONG' ? 'Buy' : 'Sell',
                         qty: orderQty,
                         // No price parameter = Market order
                         testnet: botConfig.api_mode !== 'live',
@@ -1084,7 +1061,7 @@ export async function POST(request: NextRequest) {
                         const orderId = orderResult.result.orderId;
                         const orderStatus = orderResult.result.orderStatus;
                         const orderStatusLower = orderStatus?.toLowerCase() || '';
-                        const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || orderResult.result.avgPrice || signal.touchedLevel);
+                        const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || orderResult.result.avgPrice || signal.entry);
                         const executedQty = parseFloat(orderResult.result.executedQty || orderResult.result.executedQty || orderResult.result.qty || orderQty);
                         
                         // Market orders should be filled immediately
@@ -1092,7 +1069,7 @@ export async function POST(request: NextRequest) {
                         if (orderStatusLower === 'filled' || orderStatusLower === 'partiallyfilled' || 
                             orderStatus === 'Filled' || orderStatus === 'PartiallyFilled' ||
                             orderStatusLower.includes('fill')) {
-                          console.log(`[CRON] Market order FILLED: ${signal.signal} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
+                          console.log(`[CRON] Market order FILLED: ${signal.side} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
                           
                           // Round TP/SL prices to match Bybit's tick size
                           let roundedTP = signal.tp;
@@ -1143,7 +1120,7 @@ export async function POST(request: NextRequest) {
                               await addActivityLog(
                                 botConfig.user_id,
                                 'warning',
-                                `TP/SL not set yet for ${signal.signal} ${botConfig.symbol}, will retry on next cron run`,
+                                `TP/SL not set yet for ${signal.side} ${botConfig.symbol}, will retry on next cron run`,
                                 { orderId, tp: roundedTP, sl: roundedSL, error: retryError instanceof Error ? retryError.message : String(retryError) },
                                 botConfig.id
                               );
@@ -1161,7 +1138,7 @@ export async function POST(request: NextRequest) {
                           await addActivityLog(
                             botConfig.user_id,
                             'success',
-                            `Market order FILLED: ${signal.signal} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
+                            `Market order FILLED: ${signal.side} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
                             { orderResult, orderId, avgPrice, executedQty, tp: roundedTP, sl: roundedSL },
                             botConfig.id
                           );
@@ -1186,7 +1163,7 @@ export async function POST(request: NextRequest) {
                             if (order) {
                               const checkStatus = order.orderStatus?.toLowerCase() || '';
                               if (checkStatus === 'filled' || checkStatus === 'partiallyfilled' || checkStatus.includes('fill')) {
-                                const filledPrice = parseFloat(order.avgPrice || order.price || signal.touchedLevel);
+                                const filledPrice = parseFloat(order.avgPrice || order.price || signal.entry);
                                 const filledQty = parseFloat(order.executedQty || order.qty || orderQty);
                                 
                                 // Round TP/SL
@@ -1229,7 +1206,7 @@ export async function POST(request: NextRequest) {
                                 await addActivityLog(
                                   botConfig.user_id,
                                   'success',
-                                  `Market order FILLED (verified): ${signal.signal} ${botConfig.symbol} @ $${filledPrice.toFixed(2)}, qty: ${filledQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
+                                  `Market order FILLED (verified): ${signal.side} ${botConfig.symbol} @ $${filledPrice.toFixed(2)}, qty: ${filledQty.toFixed(8)}, TP: $${roundedTP.toFixed(2)}, SL: $${roundedSL.toFixed(2)}, Order ID: ${orderId}`,
                                   { orderResult, orderId, filledPrice, filledQty, tp: roundedTP, sl: roundedSL },
                                   botConfig.id
                                 );
@@ -1243,7 +1220,7 @@ export async function POST(request: NextRequest) {
                                 await addActivityLog(
                                   botConfig.user_id,
                                   'warning',
-                                  `Market order placed but not filled yet: ${signal.signal} ${botConfig.symbol}, Order ID: ${orderId}, Status: ${checkStatus}`,
+                                  `Market order placed but not filled yet: ${signal.side} ${botConfig.symbol}, Order ID: ${orderId}, Status: ${checkStatus}`,
                                   { orderResult, orderId, orderStatus: checkStatus },
                                   botConfig.id
                                 );
@@ -1274,7 +1251,7 @@ export async function POST(request: NextRequest) {
                           botConfig.user_id,
                           'error',
                           `Market order failed: ${errorMsg}`,
-                          { symbol: botConfig.symbol, side: signal.signal, qty: orderQty, error: errorMsg },
+                          { symbol: botConfig.symbol, side: signal.side, qty: orderQty, error: errorMsg },
                           botConfig.id
                         );
                       }
@@ -1286,7 +1263,7 @@ export async function POST(request: NextRequest) {
                         await addActivityLog(
                           botConfig.user_id,
                           'success',
-                          `Market order (demo): ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
+                          `Market order (demo): ${signal.side} @ $${signal.entry.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
                           { signal, positionSize },
                           botConfig.id
                         );
@@ -1297,7 +1274,7 @@ export async function POST(request: NextRequest) {
                 } // End if (lastTrade && lastTrade.entry_time)
               } // End if (!isDuplicate)
               } // End if (openTradesCount < botConfig.max_trades)
-            } // End if (signal.signal && signal.touchedLevel)
+            } // End if (signal.side && signal.entry)
 
           // Update last polled timestamp
           await updateLastPolled(botConfig.id);
