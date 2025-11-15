@@ -1132,30 +1132,43 @@ export async function POST(request: NextRequest) {
                   // Rules: The bot must scan the Level 2 Order Book at that exact level and see:
                   // - LONG: significant increase in buy-side limit orders (buy wall) OR rapid execution of sell orders
                   // - SHORT: significant increase in sell-side limit orders (sell wall) OR rapid execution of buy orders
-                  console.log(`[CRON] Checking order book confirmation for ${signal.side} @ ${entryPrice.toFixed(2)}...`);
+                  
+                  // For imbalance signals, entry level is a target (not current price), so check orderbook at current price
+                  // For other signals (ORB, GARCH), entry level is where price is/will be, so check at entry level
+                  const isImbalanceSignal = signal.garchy2Meta?.setupType?.includes('IMBALANCE') || false;
+                  const orderbookCheckLevel = isImbalanceSignal 
+                    ? (realtimePrice || candles[candles.length - 1]?.close || entryPrice)
+                    : entryPrice;
+                  
+                  if (isImbalanceSignal) {
+                    console.log(`[CRON] Imbalance signal detected - checking orderbook at current price (${orderbookCheckLevel.toFixed(2)}) instead of entry level (${entryPrice.toFixed(2)})`);
+                  } else {
+                    console.log(`[CRON] Checking order book confirmation for ${signal.side} @ ${entryPrice.toFixed(2)}...`);
+                  }
+                  
                   let approved = false;
                   try {
                     approved = await confirmLevelTouch({
                       symbol: botConfig.symbol,
-                      level: entryPrice,
+                      level: orderbookCheckLevel,
                       side: signal.side,
                       windowMs: 8000, // 8 second window to observe order book activity
                       minNotional: 50000, // Minimum $50k notional for wall detection
                       proximityBps: 5, // 0.05% proximity to level
                     });
-                    console.log(`[CRON] Order book confirmation result: ${approved ? 'APPROVED' : 'REJECTED'}`);
+                    console.log(`[CRON] Order book confirmation result: ${approved ? 'APPROVED' : 'REJECTED'} (checked at ${orderbookCheckLevel.toFixed(2)})`);
                   } catch (err) {
                     console.error('[CRON] Order book confirmation error:', err);
                     approved = false;
                   }
 
                   if (!approved) {
-                    console.log(`[CRON] Trade blocked - Order book confirmation failed (no $50k+ wall detected near ${entryPrice.toFixed(2)})`);
+                    console.log(`[CRON] Trade blocked - Order book confirmation failed (no $50k+ wall detected near ${orderbookCheckLevel.toFixed(2)})`);
                     await addActivityLog(
                       botConfig.user_id,
                       'info',
-                      `Trade signal ignored - order book confirmation failed (no significant wall detected at ${entryPrice.toFixed(2)})`,
-                      { signal: signal.side, level: entryPrice },
+                      `Trade signal ignored - order book confirmation failed (no significant wall detected at ${orderbookCheckLevel.toFixed(2)}${isImbalanceSignal ? `, entry target: ${entryPrice.toFixed(2)}` : ''})`,
+                      { signal: signal.side, level: orderbookCheckLevel, entryLevel: entryPrice, isImbalanceSignal },
                       botConfig.id
                     );
                   } else {
