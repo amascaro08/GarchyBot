@@ -173,18 +173,29 @@ export class Garchy2StrategyEngine {
     // Update ORB
     const orbSignal = this.orb.update(currentPrice, timestamp, candles);
     if (orbSignal.sessionBias !== 'neutral') {
+      // ORB has priority - if it sets a bias, use it
       this.sessionBias = orbSignal.sessionBias;
-    }
-
-    // Update session bias from VWAP if ORB didn't set a bias
-    // VWAP logic: price < VWAP → short bias (bearish), price > VWAP → long bias (bullish)
-    if (this.sessionBias === 'neutral' && vwap && vwap > 0) {
-      if (currentPrice < vwap) {
-        this.sessionBias = 'short';
-        console.log(`[GARCHY2] Fallback bias: SHORT (price ${currentPrice.toFixed(2)} < VWAP ${vwap.toFixed(2)})`);
-      } else if (currentPrice > vwap) {
-        this.sessionBias = 'long';
-        console.log(`[GARCHY2] Fallback bias: LONG (price ${currentPrice.toFixed(2)} > VWAP ${vwap.toFixed(2)})`);
+      console.log(`[GARCHY2] ORB set session bias: ${this.sessionBias}`);
+    } else {
+      // ORB didn't set a bias (no breakout detected) - use VWAP fallback
+      // VWAP logic: price < VWAP → short bias (bearish), price > VWAP → long bias (bullish)
+      if (vwap && vwap > 0) {
+        if (currentPrice < vwap) {
+          this.sessionBias = 'short';
+          console.log(`[GARCHY2] Fallback bias: SHORT (price ${currentPrice.toFixed(2)} < VWAP ${vwap.toFixed(2)})`);
+        } else if (currentPrice > vwap) {
+          this.sessionBias = 'long';
+          console.log(`[GARCHY2] Fallback bias: LONG (price ${currentPrice.toFixed(2)} > VWAP ${vwap.toFixed(2)})`);
+        } else {
+          // Price equals VWAP - keep neutral or reset to neutral
+          this.sessionBias = 'neutral';
+          console.log(`[GARCHY2] Price equals VWAP (${vwap.toFixed(2)}) - bias remains neutral`);
+        }
+      } else {
+        // No VWAP available - keep current bias or set to neutral
+        if (this.sessionBias === 'neutral') {
+          console.log(`[GARCHY2] No VWAP available and no ORB bias - keeping neutral`);
+        }
       }
     }
 
