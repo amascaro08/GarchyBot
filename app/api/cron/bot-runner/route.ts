@@ -14,6 +14,7 @@ import {
   getOrCreateUser,
   getDailyLevels,
   checkPhase2Completed,
+  updatePhaseStatus,
   updateTrade,
   updateBotConfig,
 } from '@/lib/db';
@@ -205,9 +206,37 @@ export async function POST(request: NextRequest) {
           }
 
           // Check if Phase 2 is completed for this symbol
-          const phase2Completed = await checkPhase2Completed(botConfig.symbol);
+          // Calculate today's UTC date for logging
+          const nowUTC = new Date();
+          const todayUTC = new Date(Date.UTC(
+            nowUTC.getUTCFullYear(),
+            nowUTC.getUTCMonth(),
+            nowUTC.getUTCDate(),
+            0, 0, 0, 0
+          ));
+          const todayUTCStr = todayUTC.toISOString().split('T')[0]; // YYYY-MM-DD
+          
+          let phase2Completed = await checkPhase2Completed(botConfig.symbol);
+          console.log(`[CRON] Phase 2 check for ${botConfig.symbol} (checking date: ${todayUTCStr}): ${phase2Completed ? 'COMPLETED' : 'NOT COMPLETED'}`);
+          
+          // Fallback: If Phase 2 status says not completed but daily levels exist for today,
+          // consider Phase 2 as completed (levels wouldn't exist without Phase 2)
           if (!phase2Completed) {
-            console.warn(`[CRON] Phase 2 not completed for ${botConfig.symbol}, skipping bot execution`);
+            const dailyLevels = await getDailyLevels(botConfig.symbol, todayUTCStr);
+            // Normalize date for comparison (getDailyLevels may return date in different format)
+            const levelsDateStr = dailyLevels?.date ? (typeof dailyLevels.date === 'string' ? dailyLevels.date : new Date(dailyLevels.date).toISOString().split('T')[0]) : null;
+            if (dailyLevels && levelsDateStr === todayUTCStr) {
+              console.log(`[CRON] Phase 2 status not marked, but daily levels exist for today (${todayUTCStr}). Treating Phase 2 as completed.`);
+              // Mark Phase 2 as completed retroactively
+              await updatePhaseStatus(botConfig.symbol, 2, true);
+              phase2Completed = true;
+            } else if (dailyLevels) {
+              console.log(`[CRON] Daily levels exist but date mismatch: levels date=${levelsDateStr}, today=${todayUTCStr}`);
+            }
+          }
+          
+          if (!phase2Completed) {
+            console.warn(`[CRON] Phase 2 not completed for ${botConfig.symbol} (date: ${todayUTCStr}), skipping bot execution`);
             await addActivityLog(botConfig.user_id, 'warning', `Bot execution skipped - Phase 2 not completed for ${botConfig.symbol}`, null, botConfig.id);
             await updateLastPolled(botConfig.id);
             return { userId: botConfig.user_id, status: 'skipped', reason: 'Phase 2 not completed' };
