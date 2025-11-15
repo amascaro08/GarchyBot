@@ -375,19 +375,39 @@ export class Garchy2StrategyEngine {
     const prevPrevCandle = last3[last3.length - 3];
 
     // Check for break + hold (for breakouts)
-    if (levelType === 'ORB' || (levelType === 'GARCH' && side === 'LONG' && currentPrice > level)) {
-      // Breakout above level - check if price broke and held
-      const brokeAbove = lastCandle.close > level && prevCandle.close <= level;
-      const holdingAbove = lastCandle.close > level && lastCandle.low > level * 0.999;
-      if (brokeAbove && holdingAbove) {
-        return { valid: true, reason: 'Break + hold confirmed' };
+    if (levelType === 'ORB') {
+      // ORB breakout: check direction based on side
+      if (side === 'LONG') {
+        // Long breakout above level
+        const brokeAbove = lastCandle.close > level && prevCandle.close <= level;
+        const holdingAbove = lastCandle.close > level && lastCandle.low > level * 0.999;
+        if (brokeAbove && holdingAbove) {
+          return { valid: true, reason: 'ORB break + hold confirmed' };
+        }
+      } else {
+        // Short breakdown below level
+        const brokeBelow = lastCandle.close < level && prevCandle.close >= level;
+        const holdingBelow = lastCandle.close < level && lastCandle.high < level * 1.001;
+        if (brokeBelow && holdingBelow) {
+          return { valid: true, reason: 'ORB break + hold confirmed' };
+        }
       }
-    } else if (levelType === 'ORB' || (levelType === 'GARCH' && side === 'SHORT' && currentPrice < level)) {
-      // Breakdown below level - check if price broke and held
-      const brokeBelow = lastCandle.close < level && prevCandle.close >= level;
-      const holdingBelow = lastCandle.close < level && lastCandle.high < level * 1.001;
-      if (brokeBelow && holdingBelow) {
-        return { valid: true, reason: 'Break + hold confirmed' };
+    } else if (levelType === 'GARCH') {
+      // GARCH breakout: check direction based on side and price position
+      if (side === 'LONG' && currentPrice > level) {
+        // Long breakout above GARCH boundary
+        const brokeAbove = lastCandle.close > level && prevCandle.close <= level;
+        const holdingAbove = lastCandle.close > level && lastCandle.low > level * 0.999;
+        if (brokeAbove && holdingAbove) {
+          return { valid: true, reason: 'GARCH break + hold confirmed' };
+        }
+      } else if (side === 'SHORT' && currentPrice < level) {
+        // Short breakdown below GARCH boundary
+        const brokeBelow = lastCandle.close < level && prevCandle.close >= level;
+        const holdingBelow = lastCandle.close < level && lastCandle.high < level * 1.001;
+        if (brokeBelow && holdingBelow) {
+          return { valid: true, reason: 'GARCH break + hold confirmed' };
+        }
       }
     }
 
