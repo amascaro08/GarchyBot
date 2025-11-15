@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { SignalRequestSchema } from '@/lib/types';
 import { dailyOpenUTC, vwapFromOHLCV, gridLevels, strictSignalWithDailyOpen } from '@/lib/strategy';
+import { SignalAdapter } from '@/lib/garchy2/signal-adapter';
 
 export async function POST(request: NextRequest) {
   try {
@@ -99,7 +100,78 @@ export async function POST(request: NextRequest) {
     console.log(`  Upper levels: ${upLevels.map(l => l.toFixed(2)).join(', ')}`);
     console.log(`  Lower levels: ${dnLevels.map(l => l.toFixed(2)).join(', ')}`);
 
-    // Get signal
+    // Try Garchy 2.0 strategy engine (if enabled via environment variable)
+    const useGarchy2 = process.env.ENABLE_GARCHY_2 === 'true' || process.env.ENABLE_GARCHY_2 === '1';
+    
+    if (useGarchy2) {
+      try {
+        console.log('[SIGNAL] Using Garchy 2.0 strategy engine');
+        
+        // Estimate GARCH% from zone levels
+        const upperRange = upLevels[upLevels.length - 1] || dOpen;
+        const lowerRange = dnLevels[dnLevels.length - 1] || dOpen;
+        const garchPct = ((upperRange - dOpen) / dOpen + (dOpen - lowerRange) / dOpen) / 2;
+        
+        // Get session start
+        const sessionStart = new Date(Date.UTC(
+          new Date().getUTCFullYear(),
+          new Date().getUTCMonth(),
+          new Date().getUTCDate(),
+          0, 0, 0, 0
+        )).getTime();
+        
+        // Create adapter and initialize
+        const adapter = new SignalAdapter({
+          enableGarchy2: true,
+          orbWindowMinutes: parseInt(process.env.ORB_WINDOW_MINUTES || '5', 10),
+          minSignalConfidence: parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.4'),
+        });
+        
+        adapter.initialize({
+          dailyOpen: dOpen,
+          garchPct,
+          sessionStart,
+          candles: validated.candles,
+        });
+        
+        // Evaluate
+        const signal = await adapter.evaluate({
+          candles: validated.candles,
+          vwap,
+          dOpen,
+          upLevels,
+          dnLevels,
+          symbol: validated.symbol,
+          currentPrice: realtimePrice,
+          timestamp: Date.now(),
+        });
+        
+        if (signal.side) {
+          console.log(`[SIGNAL] ✓ Garchy 2.0 signal detected: ${signal.side} @ ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
+          if (signal.garchy2Meta) {
+            console.log(`[SIGNAL]   Setup: ${signal.garchy2Meta.setupType}, Confidence: ${signal.garchy2Meta.confidence.toFixed(2)}, Bias: ${signal.garchy2Meta.sessionBias}`);
+          }
+        } else {
+          console.log(`[SIGNAL] No signal from Garchy 2.0: ${signal.reason}`);
+        }
+        
+        return NextResponse.json({
+          symbol: validated.symbol,
+          signal: signal.side,
+          touchedLevel: signal.entry,
+          tp: signal.tp,
+          sl: signal.sl,
+          reason: signal.reason,
+          garchy2Meta: signal.garchy2Meta,
+        });
+      } catch (garchy2Error) {
+        console.error('[SIGNAL] Error in Garchy 2.0 engine, falling back to v1:', garchy2Error);
+        // Fall through to v1 logic
+      }
+    }
+    
+    // Fallback to v1 logic (backward compatibility)
+    console.log('[SIGNAL] Using Garchy v1 strategy (strictSignalWithDailyOpen)');
     const signal = strictSignalWithDailyOpen({
       candles: validated.candles,
       vwap,
