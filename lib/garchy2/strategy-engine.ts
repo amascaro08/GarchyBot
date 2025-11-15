@@ -260,8 +260,10 @@ export class Garchy2StrategyEngine {
     );
 
     // Check orderflow confirmation
+    console.log(`[GARCHY2] ORB evaluation - Side: ${orbSignal.side}, Level: ${orbSignal.level.toFixed(2)}, Current Price: ${currentPrice.toFixed(2)}, Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}`);
+    
     if (!this.orderflow.confirmsTrade(orderflow, orbSignal.side)) {
-      console.log(`[GARCHY2] ORB signal rejected - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
+      console.log(`[GARCHY2] ORB signal rejected - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}, Min required: ${this.config.minSignalConfidence}`);
       return null; // Orderflow doesn't confirm
     }
 
@@ -285,10 +287,14 @@ export class Garchy2StrategyEngine {
       setupType: 'ORB',
     });
 
+    console.log(`[GARCHY2] ORB confidence calculation - Orderflow: ${orderflow.confidence.toFixed(2)}, Profile: ${profileContext.nodeType}, Session bias: ${orbSignal.sessionBias}, Final: ${confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
+
     if (confidence < this.config.minSignalConfidence) {
-      console.log(`[GARCHY2] ORB signal rejected - Confidence: ${confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
+      console.log(`[GARCHY2] ORB signal rejected - Final confidence: ${confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
       return null;
     }
+    
+    console.log(`[GARCHY2] ✓ ORB signal approved - ${orbSignal.side} @ ${orbSignal.level.toFixed(2)}, Confidence: ${confidence.toFixed(2)}`);
 
     return {
       setupType: 'ORB',

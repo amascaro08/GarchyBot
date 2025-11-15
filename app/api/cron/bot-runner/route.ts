@@ -724,9 +724,9 @@ export async function POST(request: NextRequest) {
                           trade.side as 'LONG' | 'SHORT',
                           entryPrice,
                           currentSl,
-                          0.005, // confirmationBufferPct (0.5% - requires significant move)
+                          0.01, // confirmationBufferPct (1% - requires significant move, increased from 0.5%)
                           entryTime, // entryTime for grace period
-                          300000 // 5 minutes grace period
+                          600000 // 10 minutes grace period (increased from 5 minutes)
                         );
                         
                         if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {
@@ -958,6 +958,34 @@ export async function POST(request: NextRequest) {
               );
 
               if (!isDuplicate) {
+                // Check trade cooldown: don't enter new trades within 5 minutes of last trade
+                const lastTrade = openTrades
+                  .filter(t => t.symbol === botConfig.symbol)
+                  .sort((a, b) => {
+                    const aTime = a.entry_time ? new Date(a.entry_time).getTime() : 0;
+                    const bTime = b.entry_time ? new Date(b.entry_time).getTime() : 0;
+                    return bTime - aTime;
+                  })[0];
+                
+                if (lastTrade && lastTrade.entry_time) {
+                  const lastTradeTime = new Date(lastTrade.entry_time).getTime();
+                  const timeSinceLastTrade = Date.now() - lastTradeTime;
+                  const cooldownMs = 300000; // 5 minutes cooldown
+                  
+                  if (timeSinceLastTrade < cooldownMs) {
+                    console.log(`[CRON] Trade cooldown active - last trade was ${Math.round(timeSinceLastTrade / 1000)}s ago, need ${cooldownMs / 1000}s`);
+                    await addActivityLog(
+                      botConfig.user_id,
+                      'info',
+                      `Trade signal ignored - cooldown active (last trade ${Math.round(timeSinceLastTrade / 1000)}s ago)`,
+                      { signal: signal.signal, level: signal.touchedLevel, timeSinceLastTrade },
+                      botConfig.id
+                    );
+                    // Skip this signal, wait for cooldown
+                    // Continue to next iteration - skip rest of trade creation
+                  } else {
+                    // Cooldown passed, proceed with trade creation
+                    
                 // Mandatory: Order book confirmation
                 // Rules: The bot must scan the Level 2 Order Book at that exact level and see:
                 // - LONG: significant increase in buy-side limit orders (buy wall) OR rapid execution of sell orders
