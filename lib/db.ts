@@ -786,19 +786,22 @@ export async function getDailyLevels(symbol: string, date?: string): Promise<Dai
     // Convert date to ISO string format (YYYY-MM-DD) for consistent comparison
     // PostgreSQL DATE type can come as Date object or string, normalize it
     let normalizedDate: string;
-    if (rawLevels.date instanceof Date) {
-      normalizedDate = rawLevels.date.toISOString().split('T')[0];
-    } else if (typeof rawLevels.date === 'string') {
+    // Type assertion: PostgreSQL might return Date object even though interface says string
+    const dateValue: any = rawLevels.date;
+    // Check if it's a Date object by checking for toISOString method (safer than instanceof)
+    if (dateValue && typeof dateValue === 'object' && typeof dateValue.toISOString === 'function') {
+      normalizedDate = dateValue.toISOString().split('T')[0];
+    } else if (typeof dateValue === 'string') {
       // If it's already a string, try to parse and normalize it
-      const dateObj = new Date(rawLevels.date);
+      const dateObj = new Date(dateValue);
       if (!isNaN(dateObj.getTime())) {
         normalizedDate = dateObj.toISOString().split('T')[0];
       } else {
         // If parsing fails, assume it's already in YYYY-MM-DD format
-        normalizedDate = rawLevels.date.split('T')[0];
+        normalizedDate = dateValue.split('T')[0];
       }
     } else {
-      normalizedDate = String(rawLevels.date).split('T')[0];
+      normalizedDate = String(dateValue).split('T')[0];
     }
     
     // Convert NUMERIC types from PostgreSQL (they come as strings) to numbers
