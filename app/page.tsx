@@ -281,16 +281,24 @@ export default function Home() {
   // Calculate signal
   const calculateSignal = async (candlesData: Candle[], kPct: number) => {
     try {
+      // Include real-time price if available from WebSocket
+      const requestBody: any = {
+        symbol,
+        kPct,
+        subdivisions: SUBDIVISIONS,
+        noTradeBandPct: NO_TRADE_BAND_PCT,
+        candles: candlesData,
+      };
+      
+      // Add real-time price if available
+      if (wsTicker?.lastPrice && wsTicker.lastPrice > 0) {
+        requestBody.realtimePrice = wsTicker.lastPrice;
+      }
+      
       const res = await fetch('/api/signal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol,
-          kPct,
-          subdivisions: SUBDIVISIONS,
-          noTradeBandPct: NO_TRADE_BAND_PCT,
-          candles: candlesData,
-        }),
+        body: JSON.stringify(requestBody),
       });
       if (!res.ok) throw new Error('Failed to calculate signal');
       const data = await res.json();
@@ -1105,16 +1113,24 @@ export default function Home() {
             addLog('success', `Levels loaded: k% = ${(levelsData.kPct * 100).toFixed(2)}%`);
             
             // Calculate signal using kPct from levels
+            // Include real-time price if available from WebSocket
+            const signalRequestBody: any = {
+              symbol,
+              kPct: levelsData.kPct,
+              subdivisions: SUBDIVISIONS,
+              noTradeBandPct: NO_TRADE_BAND_PCT,
+              candles: klinesData,
+            };
+            
+            // Add real-time price if available
+            if (wsTicker?.lastPrice && wsTicker.lastPrice > 0) {
+              signalRequestBody.realtimePrice = wsTicker.lastPrice;
+            }
+            
             const signalRes = await fetch('/api/signal', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                symbol,
-                kPct: levelsData.kPct,
-                subdivisions: SUBDIVISIONS,
-                noTradeBandPct: NO_TRADE_BAND_PCT,
-                candles: klinesData,
-              }),
+              body: JSON.stringify(signalRequestBody),
             });
             if (signalRes.ok) {
               const signalData = await signalRes.json();

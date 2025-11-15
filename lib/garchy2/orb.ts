@@ -210,7 +210,19 @@ export class ORBModule {
   getSignal(): ORBSignal {
     const confirmed = this.state === 'broken_up' || this.state === 'broken_down';
     
-    if (this.state === 'broken_up' && this.breakoutConfirmation) {
+    // Validate that we have valid levels before returning a confirmed signal
+    if (!this.levels || this.levels.orh <= 0 || this.levels.orl <= 0) {
+      // Invalid levels - return unconfirmed signal
+      return {
+        side: null,
+        level: null,
+        state: this.state === 'broken_up' || this.state === 'broken_down' ? 'closed' : this.state,
+        sessionBias: this.sessionBias,
+        confirmed: false,
+      };
+    }
+    
+    if (this.state === 'broken_up' && this.breakoutConfirmation && this.breakoutConfirmation.level > 0) {
       return {
         side: 'LONG',
         level: this.breakoutConfirmation.level,
@@ -220,7 +232,7 @@ export class ORBModule {
       };
     }
 
-    if (this.state === 'broken_down' && this.breakoutConfirmation) {
+    if (this.state === 'broken_down' && this.breakoutConfirmation && this.breakoutConfirmation.level > 0) {
       return {
         side: 'SHORT',
         level: this.breakoutConfirmation.level,
