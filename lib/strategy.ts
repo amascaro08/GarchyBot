@@ -697,9 +697,9 @@ export function computeTrailingBreakeven(
  * This invalidates the trade by moving stop loss to breakeven (entry price)
  * 
  * Requires a CONFIRMED direction change (not just a touch) to avoid whipsaws:
- * - Uses a small buffer (0.1% of VWAP) to confirm the direction change
+ * - Uses a significant buffer (0.5% of VWAP) to confirm the direction change
  * - Price must be clearly on the other side of VWAP, not just touching it
- * - Includes safeguards to prevent immediate triggers after entry
+ * - Includes safeguards to prevent immediate triggers after entry (5 minute grace period)
  * 
  * Logic:
  * - LONG trades: entered when price > VWAP (bullish bias). If price < VWAP - buffer, trade is invalidated → move to breakeven
@@ -721,9 +721,9 @@ export function applyBreakevenOnVWAPFlip(
   side: 'LONG' | 'SHORT',
   entry: number,
   currentSl: number,
-  confirmationBufferPct: number = 0.001, // 0.1% buffer to confirm direction change
+  confirmationBufferPct: number = 0.005, // 0.5% buffer to confirm direction change (increased from 0.1%)
   entryTime?: number | Date, // Optional entry time for grace period
-  gracePeriodMs: number = 60000 // 60 seconds grace period
+  gracePeriodMs: number = 300000 // 5 minutes grace period (increased from 60 seconds)
 ): number | null {
   // Only apply if current SL is not already at or beyond entry (breakeven)
   const isAlreadyAtBreakeven = side === 'LONG' 

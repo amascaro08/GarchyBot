@@ -523,9 +523,9 @@ export default function Home() {
             trade.side,
             trade.entry,
             trade.sl,
-            0.001, // confirmationBufferPct
+            0.005, // confirmationBufferPct (0.5% - requires significant move)
             entryTime, // entryTime for grace period
-            60000 // 60 seconds grace period
+            300000 // 5 minutes grace period
           );
 
           if (breakevenSl !== null && breakevenSl !== trade.sl) {
@@ -742,9 +742,9 @@ export default function Home() {
               trade.side,
               trade.entry,
               trade.sl,
-              0.001, // confirmationBufferPct
+              0.005, // confirmationBufferPct (0.5% - requires significant move)
               entryTime, // entryTime for grace period
-              60000 // 60 seconds grace period
+              300000 // 5 minutes grace period
             );
 
             if (breakevenSl !== null && breakevenSl !== trade.sl) {

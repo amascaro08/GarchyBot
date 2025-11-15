@@ -724,9 +724,9 @@ export async function POST(request: NextRequest) {
                           trade.side as 'LONG' | 'SHORT',
                           entryPrice,
                           currentSl,
-                          0.001, // confirmationBufferPct
+                          0.005, // confirmationBufferPct (0.5% - requires significant move)
                           entryTime, // entryTime for grace period
-                          60000 // 60 seconds grace period
+                          300000 // 5 minutes grace period
                         );
                         
                         if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {
@@ -817,9 +817,9 @@ export async function POST(request: NextRequest) {
                 trade.side as 'LONG' | 'SHORT',
                 entryPrice,
                 currentSl,
-                0.001, // confirmationBufferPct
+                0.005, // confirmationBufferPct (0.5% - requires significant move)
                 entryTime, // entryTime for grace period
-                60000 // 60 seconds grace period
+                300000 // 5 minutes grace period
               );
 
               if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {
