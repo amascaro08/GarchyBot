@@ -52,8 +52,8 @@ export class SignalAdapter {
 
   constructor(config: SignalAdapterConfig = { enableGarchy2: true }) {
     this.config = {
-      enableGarchy2: true,
       ...config,
+      enableGarchy2: config.enableGarchy2 ?? true, // Default to true if not explicitly set
     };
 
     if (this.config.enableGarchy2) {
