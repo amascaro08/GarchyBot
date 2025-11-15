@@ -325,7 +325,7 @@ export class Garchy2StrategyEngine {
    * Rule 3: Check if profile context makes sense
    */
   private isProfileContextValid(
-    profileContext: { nodeType: 'HVN' | 'LVN' | 'neutral'; proximity: number },
+    profileContext: ProfileContext,
     side: 'LONG' | 'SHORT',
     currentPrice: number,
     level: number
