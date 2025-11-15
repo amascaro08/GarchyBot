@@ -253,15 +253,8 @@ export async function POST(request: NextRequest) {
 
           // Verify stored levels are for today (UTC)
           // Parse stored date string (format: YYYY-MM-DD) and compare with UTC today
+          // Reuse the UTC date variables already calculated above for Phase 2 check
           const storedDateStr = storedLevels.date; // Should be in YYYY-MM-DD format
-          const nowUTC = new Date();
-          const todayUTC = new Date(Date.UTC(
-            nowUTC.getUTCFullYear(),
-            nowUTC.getUTCMonth(),
-            nowUTC.getUTCDate(),
-            0, 0, 0, 0
-          ));
-          const todayUTCStr = todayUTC.toISOString().split('T')[0]; // YYYY-MM-DD in UTC
           
           if (storedDateStr !== todayUTCStr) {
             console.error(`[CRON] Stored levels for ${botConfig.symbol} are from ${storedDateStr} (UTC), but today is ${todayUTCStr} (UTC)!`);
