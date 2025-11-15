@@ -324,8 +324,8 @@ export async function fetchOrderBookSnapshot(symbol: string, limit: number = 50)
     }
     
     // Calculate total notional for logging
-    const bidNotional = bids.reduce((sum, b) => sum + b.price * b.size, 0);
-    const askNotional = asks.reduce((sum, a) => sum + a.price * a.size, 0);
+    const bidNotional = bids.reduce((sum: number, b) => sum + b.price * b.size, 0);
+    const askNotional = asks.reduce((sum: number, a) => sum + a.price * a.size, 0);
     
     console.log(`[ORDERBOOK] ✓ REST API orderbook fetched for ${normalizedSymbol}:`);
     console.log(`  Bids: ${bids.length} levels, Total notional: $${bidNotional.toFixed(0)}`);
