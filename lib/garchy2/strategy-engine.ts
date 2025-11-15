@@ -189,6 +189,15 @@ export class Garchy2StrategyEngine {
       if (signal) {
         this.lastSignal = signal;
         return signal;
+      } else {
+        console.log(`[GARCHY2] ORB signal found but evaluation failed (likely orderflow/confidence)`);
+      }
+    } else {
+      const orbState = this.orb.getSignal();
+      if (orbState.state === 'tracking') {
+        console.log(`[GARCHY2] ORB window still active (tracking)`);
+      } else if (orbState.state === 'closed' && !orbState.confirmed) {
+        console.log(`[GARCHY2] ORB window closed, no breakout detected`);
       }
     }
 
@@ -201,6 +210,12 @@ export class Garchy2StrategyEngine {
     if (garchSignal) {
       this.lastSignal = garchSignal;
       return garchSignal;
+    } else {
+      const zoneInfo = this.garchZones.getCurrentZone(currentPrice);
+      const boundaries = this.garchZones.getAllBoundaries();
+      const nearestBoundary = this.garchZones.getNearestBoundary(currentPrice);
+      const distancePct = ((Math.abs(currentPrice - nearestBoundary) / currentPrice) * 100).toFixed(3);
+      console.log(`[GARCHY2] No GARCH zone signal - Current zone: ${zoneInfo.quadrant}, Nearest boundary: ${nearestBoundary.toFixed(2)}, Distance: ${distancePct}%`);
     }
 
     const imbalanceSignal = await this.evaluateImbalances(
@@ -211,8 +226,13 @@ export class Garchy2StrategyEngine {
     if (imbalanceSignal) {
       this.lastSignal = imbalanceSignal;
       return imbalanceSignal;
+    } else {
+      const imbalances = this.imbalanceDetector.getActiveImbalances();
+      const imbalancesNear = this.imbalanceDetector.getImbalancesNearLevel(currentPrice, 0.002);
+      console.log(`[GARCHY2] No imbalance signal - Active imbalances: ${imbalances.length}, Near current price: ${imbalancesNear.length}`);
     }
 
+    console.log(`[GARCHY2] No signal found - Price: ${currentPrice.toFixed(2)}, Session bias: ${this.sessionBias}, Zone: ${this.garchZones.getCurrentZone(currentPrice).quadrant}`);
     return null;
   }
 
@@ -241,6 +261,7 @@ export class Garchy2StrategyEngine {
 
     // Check orderflow confirmation
     if (!this.orderflow.confirmsTrade(orderflow, orbSignal.side)) {
+      console.log(`[GARCHY2] ORB signal rejected - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
       return null; // Orderflow doesn't confirm
     }
 
@@ -265,6 +286,7 @@ export class Garchy2StrategyEngine {
     });
 
     if (confidence < this.config.minSignalConfidence) {
+      console.log(`[GARCHY2] ORB signal rejected - Confidence: ${confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
       return null;
     }
 
@@ -361,6 +383,7 @@ export class Garchy2StrategyEngine {
         );
 
         if (!this.orderflow.confirmsTrade(orderflow, side)) {
+          console.log(`[GARCHY2] GARCH ${setupType} signal rejected at ${boundary.toFixed(2)} - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}`);
           continue;
         }
 
@@ -374,6 +397,7 @@ export class Garchy2StrategyEngine {
         });
 
         if (confidence < this.config.minSignalConfidence) {
+          console.log(`[GARCHY2] GARCH ${setupType} signal rejected at ${boundary.toFixed(2)} - Confidence: ${confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
           continue;
         }
 
@@ -457,6 +481,7 @@ export class Garchy2StrategyEngine {
     );
 
     if (!this.orderflow.confirmsTrade(orderflow, side)) {
+      console.log(`[GARCHY2] Imbalance ${setupType} signal rejected at ${imbalance.midpoint.toFixed(2)} - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}`);
       return null;
     }
 
@@ -474,6 +499,7 @@ export class Garchy2StrategyEngine {
     });
 
     if (confidence < this.config.minSignalConfidence) {
+      console.log(`[GARCHY2] Imbalance ${setupType} signal rejected at ${imbalance.midpoint.toFixed(2)} - Confidence: ${confidence.toFixed(2)}, Required: ${this.config.minSignalConfidence}`);
       return null;
     }
 
