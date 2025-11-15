@@ -1243,45 +1243,10 @@ export default function Home() {
     setSessionPnL(0);
     setError(null);
     
-    // Fetch latest bot config to get current P&L from database
-    let shouldOverrideLimits = !canTrade;
-    try {
-      const statusRes = await fetch('/api/bot/status');
-      if (statusRes.ok) {
-        const statusData = await statusRes.json();
-        if (statusData.botConfig) {
-          const dbDailyPnL = Number(statusData.botConfig.daily_pnl || 0);
-          const dbDailyTargetValue = statusData.botConfig.daily_target_type === 'percent'
-            ? (statusData.botConfig.capital * statusData.botConfig.daily_target_amount) / 100
-            : statusData.botConfig.daily_target_amount;
-          const dbDailyStopValue = statusData.botConfig.daily_stop_type === 'percent'
-            ? (statusData.botConfig.capital * statusData.botConfig.daily_stop_amount) / 100
-            : statusData.botConfig.daily_stop_amount;
-          
-          const dbIsTargetHit = dbDailyPnL >= dbDailyTargetValue && dbDailyTargetValue > 0;
-          const dbIsStopHit = dbDailyPnL <= -dbDailyStopValue && dbDailyStopValue > 0;
-          
-          if (dbIsTargetHit || dbIsStopHit) {
-            shouldOverrideLimits = true;
-            console.log('[BOT START] Database shows daily limits hit - will override:', {
-              dailyPnL: dbDailyPnL,
-              targetValue: dbDailyTargetValue,
-              stopValue: dbDailyStopValue,
-              isTargetHit: dbIsTargetHit,
-              isStopHit: dbIsStopHit,
-            });
-            addLog('info', `Daily limits reached (P&L: $${dbDailyPnL.toFixed(2)}). Starting new session with P&L reset...`);
-          }
-          
-          // Sync frontend state with database
-          setDailyPnL(dbDailyPnL);
-        }
-      }
-    } catch (err) {
-      console.warn('[BOT START] Failed to fetch latest status, using frontend state:', err);
+    // Check if we should show a message about resetting limits
+    if (!canTrade) {
+      addLog('info', `Daily limits reached. Starting new session with P&L reset...`);
     }
-    
-    setOverrideDailyLimits(shouldOverrideLimits);
 
     // Check if phases are completed before starting (Phase 1 and Phase 2 must be completed)
     try {
@@ -1289,7 +1254,6 @@ export default function Home() {
         const errorMsg = 'Live mode requires Bybit API key and secret.';
         setError(errorMsg);
         addLog('error', errorMsg);
-        setOverrideDailyLimits(false);
         return;
       }
 
@@ -1307,22 +1271,21 @@ export default function Home() {
         const errorMsg = 'Cannot start bot: Daily setup not completed. Please wait for Phase 1 & 2 to finish.';
         setError(errorMsg);
         addLog('error', errorMsg);
-        setOverrideDailyLimits(false);
         return;
       }
     } catch (err) {
       const errorMsg = 'Cannot start bot: Unable to verify daily setup completion.';
       setError(errorMsg);
       addLog('error', errorMsg);
-      setOverrideDailyLimits(false);
       return;
     }
     
     try {
+      // Backend automatically resets and starts new session if limits are hit
       const res = await fetch('/api/bot/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ overrideDailyLimits: shouldOverrideLimits }),
+        body: JSON.stringify({}),
       });
       
       const data = await res.json();
@@ -1332,25 +1295,29 @@ export default function Home() {
         console.error('[BOT START] Error:', errorMsg);
         setError(errorMsg);
         addLog('error', errorMsg);
-        setOverrideDailyLimits(false);
         return; // Don't continue if there's an error
       }
       
       setBotRunning(true);
       setError(null);
-      if (shouldOverrideLimits) {
+      
+      // If limits were hit, backend reset the P&L, so sync frontend state
+      if (!canTrade) {
         setDailyPnL(0);
         setDailyStartDate(new Date().toISOString().split('T')[0]);
-        addLog('info', 'Daily limits overridden - starting new session');
       }
-      setOverrideDailyLimits(false);
+      
+      // Update daily P&L from response if provided
+      if (data.botConfig?.daily_pnl !== undefined) {
+        setDailyPnL(Number(data.botConfig.daily_pnl));
+      }
+      
       addLog('success', `Bot started for ${symbol} - running in background`);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to start bot';
       console.error('[BOT START] Exception:', err);
       setError(errorMsg);
       addLog('error', errorMsg);
-      setOverrideDailyLimits(false);
     }
   };
 

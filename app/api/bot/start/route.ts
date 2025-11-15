@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
       botConfig = await createBotConfig(user.id);
     }
 
-    // Check daily limits
+    // Check daily limits - if hit, automatically reset and start new session
     const dailyTargetValue = botConfig.daily_target_type === 'percent'
       ? (botConfig.capital * botConfig.daily_target_amount) / 100
       : botConfig.daily_target_amount;
@@ -47,25 +47,22 @@ export async function POST(request: NextRequest) {
     const isDailyTargetHit = botConfig.daily_pnl >= dailyTargetValue && dailyTargetValue > 0;
     const isDailyStopHit = botConfig.daily_pnl <= -dailyStopValue && dailyStopValue > 0;
 
+    // If user explicitly clicks "Start Bot", always allow it - reset limits and start new session
     if (isDailyTargetHit || isDailyStopHit) {
-      if (!overrideLimits) {
-        const errorMsg = isDailyTargetHit
-          ? 'Daily target reached. Cannot start bot.'
-          : 'Daily stop loss hit. Cannot start bot.';
-        return NextResponse.json(
-          { error: errorMsg },
-          { status: 400 }
-        );
-      }
-
+      const limitType = isDailyTargetHit ? 'target' : 'stop loss';
+      const previousPnL = botConfig.daily_pnl;
+      
+      // Always reset when user explicitly starts the bot
       botConfig = await resetDailyPnLForUser(user.id);
       await addActivityLog(
         user.id,
         'info',
-        `Daily limits reset manually. New session started with P&L = 0`,
-        null,
+        `Daily ${limitType} reached (P&L: $${previousPnL.toFixed(2)}). Starting new session with P&L reset to $0`,
+        { previousPnL, limitType },
         botConfig.id
       );
+      
+      console.log(`[BOT START] Daily ${limitType} hit (P&L: $${previousPnL.toFixed(2)}), resetting and starting new session`);
     }
 
     // Start the bot
