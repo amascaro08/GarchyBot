@@ -18,7 +18,8 @@ import {
   updateTrade,
   updateBotConfig,
 } from '@/lib/db';
-import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip, strictSignalWithDailyOpen } from '@/lib/strategy';
+import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
+import { SignalAdapter } from '@/lib/garchy2/signal-adapter';
 import { placeOrder, cancelOrder, getKlines, getTicker } from '@/lib/bybit';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import { computeSessionAnchoredVWAP, computeSessionAnchoredVWAPLine } from '@/lib/vwap';
@@ -939,7 +940,7 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          // Calculate signal directly using stored levels, current candles, and real-time price
+          // Calculate signal using Garchy 2.0 strategy engine
           // Bypass HTTP calls to avoid Vercel auth issues
           console.log(`[CRON] Calculating signal for ${botConfig.symbol}:`);
           console.log(`  dOpen: ${levels.dOpen} (type: ${typeof levels.dOpen})`);
@@ -948,27 +949,108 @@ export async function POST(request: NextRequest) {
           console.log(`  lowerLevels: ${Array.isArray(levels.dnLevels) ? `array[${levels.dnLevels.length}]` : typeof levels.dnLevels}`);
           console.log(`  realtimePrice: ${realtimePrice || 'N/A'}`);
 
-          // Call signal function directly (bypass HTTP)
-          const signal = strictSignalWithDailyOpen({
-            candles,
-            vwap: levels.vwap,
-            dOpen: levels.dOpen,
-            upLevels: levels.upLevels,
-            dnLevels: levels.dnLevels,
-            noTradeBandPct: botConfig.no_trade_band_pct || 0.001,
-            useDailyOpenEntry: botConfig.use_daily_open_entry ?? true,
-            kPct: levels.kPct,
-            subdivisions: botConfig.subdivisions,
-            realtimePrice,
-          });
-
-          // Log if signal is detected
-          if (signal.side) {
-            console.log(`[CRON] Signal detected - ${signal.side} at ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
-            
-            // Check if this is a daily open entry
-            if (signal.reason && signal.reason.includes('daily open')) {
-              console.log(`[CRON] ✓ Daily open entry detected! Price touched ${signal.entry?.toFixed(2)}`);
+          // Use Garchy 2.0 strategy engine (default enabled, can be disabled via env var)
+          const useGarchy2 = process.env.ENABLE_GARCHY_2 !== 'false' && process.env.ENABLE_GARCHY_2 !== '0';
+          let signal: { side: 'LONG' | 'SHORT' | null; entry: number | null; tp: number | null; sl: number | null; reason: string; garchy2Meta?: any };
+          
+          if (useGarchy2) {
+            try {
+              console.log('[CRON] Using Garchy 2.0 strategy engine');
+              
+              // Estimate GARCH% from zone levels
+              const upperRange = levels.upLevels[levels.upLevels.length - 1] || levels.dOpen;
+              const lowerRange = levels.dnLevels[levels.dnLevels.length - 1] || levels.dOpen;
+              const garchPct = ((upperRange - levels.dOpen) / levels.dOpen + (levels.dOpen - lowerRange) / levels.dOpen) / 2;
+              
+              // Get session start (UTC midnight)
+              const sessionStart = new Date(Date.UTC(
+                nowUTC.getUTCFullYear(),
+                nowUTC.getUTCMonth(),
+                nowUTC.getUTCDate(),
+                0, 0, 0, 0
+              )).getTime();
+              
+              // Create adapter and initialize
+              const adapter = new SignalAdapter({
+                enableGarchy2: true,
+                orbWindowMinutes: parseInt(process.env.ORB_WINDOW_MINUTES || '5', 10),
+                minSignalConfidence: parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.4'),
+              });
+              
+              adapter.initialize({
+                dailyOpen: levels.dOpen,
+                garchPct,
+                sessionStart,
+                candles,
+              });
+              
+              // Use real-time price if available, otherwise use last candle close
+              const currentPrice = realtimePrice || candles[candles.length - 1]?.close || levels.dOpen;
+              
+              console.log(`[CRON] Garchy 2.0 evaluation - Using price: ${currentPrice.toFixed(2)} (${realtimePrice ? 'real-time' : 'last candle'})`);
+              
+              // Evaluate
+              const garchy2Signal = await adapter.evaluate({
+                candles,
+                vwap: levels.vwap,
+                dOpen: levels.dOpen,
+                upLevels: levels.upLevels,
+                dnLevels: levels.dnLevels,
+                symbol: botConfig.symbol,
+                currentPrice,
+                timestamp: Date.now(),
+              });
+              
+              signal = garchy2Signal;
+              
+              if (signal.side) {
+                console.log(`[CRON] ✓ Garchy 2.0 signal detected: ${signal.side} @ ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
+                if (signal.garchy2Meta) {
+                  console.log(`[CRON]   Setup: ${signal.garchy2Meta.setupType}, Confidence: ${signal.garchy2Meta.confidence.toFixed(2)}, Bias: ${signal.garchy2Meta.sessionBias}`);
+                  console.log(`[CRON]   Profile Context: ${signal.garchy2Meta.profileContext.nodeType} (confidence: ${signal.garchy2Meta.profileContext.confidence.toFixed(2)})`);
+                }
+              } else {
+                console.log(`[CRON] No signal from Garchy 2.0: ${signal.reason}`);
+              }
+            } catch (garchy2Error) {
+              const errorMessage = garchy2Error instanceof Error ? garchy2Error.message : String(garchy2Error);
+              console.error('[CRON] Error in Garchy 2.0 engine, falling back to v1:', errorMessage);
+              // Fall through to v1 logic
+              const { strictSignalWithDailyOpen } = await import('@/lib/strategy');
+              signal = strictSignalWithDailyOpen({
+                candles,
+                vwap: levels.vwap,
+                dOpen: levels.dOpen,
+                upLevels: levels.upLevels,
+                dnLevels: levels.dnLevels,
+                noTradeBandPct: botConfig.no_trade_band_pct || 0.001,
+                useDailyOpenEntry: botConfig.use_daily_open_entry ?? true,
+                kPct: levels.kPct,
+                subdivisions: botConfig.subdivisions,
+                realtimePrice,
+              });
+              if (signal.side) {
+                console.log(`[CRON] ✓ Fallback v1 signal detected: ${signal.side} @ ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
+              }
+            }
+          } else {
+            // Fallback to v1 logic (if explicitly disabled)
+            console.log('[CRON] Using Garchy v1 strategy (strictSignalWithDailyOpen)');
+            const { strictSignalWithDailyOpen } = await import('@/lib/strategy');
+            signal = strictSignalWithDailyOpen({
+              candles,
+              vwap: levels.vwap,
+              dOpen: levels.dOpen,
+              upLevels: levels.upLevels,
+              dnLevels: levels.dnLevels,
+              noTradeBandPct: botConfig.no_trade_band_pct || 0.001,
+              useDailyOpenEntry: botConfig.use_daily_open_entry ?? true,
+              kPct: levels.kPct,
+              subdivisions: botConfig.subdivisions,
+              realtimePrice,
+            });
+            if (signal.side) {
+              console.log(`[CRON] ✓ Signal detected: ${signal.side} @ ${signal.entry?.toFixed(2)}, Reason: ${signal.reason}`);
             }
           }
 
