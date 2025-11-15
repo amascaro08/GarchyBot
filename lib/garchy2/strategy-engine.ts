@@ -59,23 +59,23 @@ export interface TradeSignal {
 
 export interface Garchy2Config {
   /** ORB configuration */
-  orb: Partial<ORBConfig>;
+  orb?: Partial<ORBConfig>;
   /** Market Profile configuration */
-  marketProfile: {
+  marketProfile?: {
     bucketSizePct?: number;
     proximityThresholdPct?: number;
     hvnPercentile?: number;
     lvnPercentile?: number;
   };
   /** Orderflow configuration */
-  orderflow: {
+  orderflow?: {
     minWallNotional?: number;
     wallProximityBps?: number;
     volumeSurgeMultiplier?: number;
     minConfidence?: number;
   };
   /** Imbalance configuration */
-  imbalance: {
+  imbalance?: {
     minGapSizePct?: number;
     maxGapSizePct?: number;
     detectFVG?: boolean;
