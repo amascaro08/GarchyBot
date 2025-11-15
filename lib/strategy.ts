@@ -73,7 +73,7 @@ export function gridLevels(
 /**
  * Find next available grid levels for TP/SL based on entry position
  */
-function findClosestGridLevels(
+export function findClosestGridLevels(
   entry: number,
   dOpen: number,
   upLevels: number[],

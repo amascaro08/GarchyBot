@@ -6,10 +6,12 @@ import {
   createTrade,
   getBotConfig,
   getOrCreateUser,
+  getDailyLevels,
   BotConfig,
   Trade as DbTrade,
 } from '@/lib/db';
 import { placeOrder } from '@/lib/bybit';
+import { findClosestGridLevels } from '@/lib/strategy';
 
 const CreateTradeSchema = z.object({
   symbol: z.string(),
@@ -109,6 +111,38 @@ export async function POST(request: NextRequest) {
     const calculatedPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
     const storedPositionSize = calculatedPositionSize > 0 ? calculatedPositionSize : payload.positionSize;
     
+    // Fetch stored levels from database and recalculate TP/SL at the next corresponding levels
+    let tpPrice = payload.tp;
+    let slPrice = payload.sl;
+    
+    try {
+      const storedLevels = await getDailyLevels(payload.symbol);
+      if (storedLevels && storedLevels.daily_open_price > 0 && 
+          Array.isArray(storedLevels.up_levels) && storedLevels.up_levels.length > 0 &&
+          Array.isArray(storedLevels.dn_levels) && storedLevels.dn_levels.length > 0) {
+        
+        // Recalculate TP/SL based on entry price and stored levels from database
+        const { tp, sl } = findClosestGridLevels(
+          entryPrice,
+          storedLevels.daily_open_price,
+          storedLevels.up_levels,
+          storedLevels.dn_levels,
+          payload.side
+        );
+        
+        tpPrice = tp;
+        slPrice = sl;
+        
+        console.log(`[TRADE] Recalculated TP/SL from stored levels: Entry=$${entryPrice.toFixed(2)}, TP=$${tpPrice.toFixed(2)}, SL=$${slPrice.toFixed(2)}`);
+        console.log(`[TRADE]   Daily Open: ${storedLevels.daily_open_price.toFixed(2)}, Upper Levels: ${storedLevels.up_levels.length}, Lower Levels: ${storedLevels.dn_levels.length}`);
+      } else {
+        console.warn(`[TRADE] Could not fetch stored levels for ${payload.symbol}, using TP/SL from payload`);
+      }
+    } catch (levelError) {
+      console.warn(`[TRADE] Error fetching stored levels for ${payload.symbol}:`, levelError);
+      console.warn(`[TRADE] Using TP/SL from payload: TP=$${tpPrice.toFixed(2)}, SL=$${slPrice.toFixed(2)}`);
+    }
+    
     let tradeRecord = await createTrade({
       user_id: userId,
       bot_config_id: botConfig.id,
@@ -116,9 +150,9 @@ export async function POST(request: NextRequest) {
       side: payload.side,
       status: 'pending',
       entry_price: payload.entry,
-      tp_price: payload.tp,
-      sl_price: payload.sl,
-      current_sl: payload.sl,
+      tp_price: tpPrice, // Use recalculated TP from database levels
+      sl_price: slPrice, // Use recalculated SL from database levels
+      current_sl: slPrice,
       exit_price: null,
       position_size: storedPositionSize, // Use calculated position size
       leverage,
@@ -137,7 +171,7 @@ export async function POST(request: NextRequest) {
       await addActivityLog(
         userId,
         'success',
-        `Market order (demo): ${payload.side} @ $${payload.entry.toFixed(2)}, TP $${payload.tp.toFixed(2)}, SL $${payload.sl.toFixed(2)}`,
+        `Market order (demo): ${payload.side} @ $${payload.entry.toFixed(2)}, TP $${tpPrice.toFixed(2)}, SL $${slPrice.toFixed(2)}`,
         {
           symbol: payload.symbol,
           positionSize: payload.positionSize,
@@ -253,13 +287,13 @@ export async function POST(request: NextRequest) {
                           (orderResult.result.avgPrice && parseFloat(orderResult.result.avgPrice) > 0);
           
           // Round TP/SL prices to match Bybit's tick size
-          let roundedTP = payload.tp;
-          let roundedSL = payload.sl;
+          let roundedTP = tpPrice;
+          let roundedSL = slPrice;
           try {
             const instrumentInfo = await getInstrumentInfo(payload.symbol, botConfig.api_mode !== 'live');
             if (instrumentInfo && instrumentInfo.tickSize) {
-              roundedTP = roundPrice(payload.tp, instrumentInfo.tickSize);
-              roundedSL = roundPrice(payload.sl, instrumentInfo.tickSize);
+              roundedTP = roundPrice(tpPrice, instrumentInfo.tickSize);
+              roundedSL = roundPrice(slPrice, instrumentInfo.tickSize);
             }
           } catch (priceRoundError) {
             console.warn(`[TRADE] Failed to round TP/SL prices:`, priceRoundError);
