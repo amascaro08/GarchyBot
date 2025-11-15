@@ -1287,7 +1287,8 @@ export async function POST(request: NextRequest) {
                       } // End else block (positionSize > 0)
                     } // End if (approved)
                   } // End else block (cooldown check)
-                } // End if (!isDuplicate)
+                } // End if (lastTrade && lastTrade.entry_time)
+              } // End if (!isDuplicate)
               } // End if (openTradesCount < botConfig.max_trades)
             } // End if (signal.signal && signal.touchedLevel)
 
