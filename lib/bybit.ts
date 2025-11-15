@@ -1229,6 +1229,60 @@ export async function fetchPosition(params: {
 }
 
 /**
+ * Get execution history from Bybit (private endpoint)
+ * Returns list of executions (fills) for a symbol
+ */
+export async function getExecutionHistory(params: {
+  symbol: string;
+  limit?: number;
+  testnet?: boolean;
+  apiKey: string;
+  apiSecret: string;
+}): Promise<any> {
+  const {
+    symbol,
+    limit = 50,
+    testnet = true,
+    apiKey,
+    apiSecret,
+  } = params;
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/execution/list';
+  const recvWindow = '5000';
+  const timestamp = Date.now().toString();
+  const query = `category=linear&symbol=${symbol.toUpperCase()}&limit=${limit}`;
+  const prehash = `${timestamp}${apiKey}${recvWindow}${query}`;
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(prehash)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}?${query}`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'X-BAPI-API-KEY': apiKey,
+      'X-BAPI-SIGN': signature,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-RECV-WINDOW': recvWindow,
+    },
+  });
+
+  if (!response.ok) {
+    throw new BybitError(response.status, `HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.retCode !== 0) {
+    throw new BybitError(data.retCode, data.retMsg || 'Failed to fetch execution history');
+  }
+
+  return data;
+}
+
+/**
  * Fetch wallet balance from Bybit (private endpoint)
  */
 export async function fetchWalletBalance(params: {

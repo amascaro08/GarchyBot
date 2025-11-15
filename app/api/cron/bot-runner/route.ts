@@ -489,40 +489,92 @@ export async function POST(request: NextRequest) {
                         parseFloat(p.size || '0') !== 0
                       );
                       
-                      if (!position || parseFloat(position.size || '0') === 0) {
+                      // Get mark price from position if available, otherwise use lastClose
+                      const markPrice = position ? parseFloat(position.markPrice || '0') : lastClose;
+                      
+                      // Check if position is closed (size is 0 or position doesn't exist)
+                      const positionSize = parseFloat(position?.size || '0');
+                      if (!position || positionSize === 0) {
                         // Position doesn't exist on Bybit - trade was closed
-                        // Try to get the actual exit price and P&L from order history
+                        console.log(`[CRON] Position closed on Bybit for trade ${trade.id}: position size = ${positionSize}`);
+                        
+                        // Try to get the actual exit price and P&L from execution history
                         try {
-                          const orderStatus = await getOrderStatus({
-                            symbol: trade.symbol,
-                            orderId: trade.order_id,
-                            testnet: false,
-                            apiKey: botConfig.api_key,
-                            apiSecret: botConfig.api_secret,
-                          });
+                          const { getExecutionHistory } = await import('@/lib/bybit');
                           
-                          // Look for closed orders - find orders that closed the position
-                          const allOrders = orderStatus.result?.list || [];
-                          // Find the most recent filled order that might be a close order
-                          const closeOrder = allOrders.find((o: any) => 
-                            o.orderStatus?.toLowerCase() === 'filled' &&
-                            (o.side === (trade.side === 'LONG' ? 'Sell' : 'Buy')) // Opposite side = closing order
-                          );
+                          // Get recent executions for this symbol to find the close execution
+                          let exitPrice: number | null = null;
+                          let actualPnl: number | null = null;
                           
-                          // Calculate P&L from close order or use fallback
-                          let exitPrice = parseFloat(closeOrder?.avgPrice || trade.entry_price);
-                          const entryPrice = Number(trade.entry_price);
-                          const positionSize = Number(trade.position_size);
-                          let actualPnl = trade.side === 'LONG'
-                            ? (exitPrice - entryPrice) * positionSize
-                            : (entryPrice - exitPrice) * positionSize;
+                          try {
+                            const executions = await getExecutionHistory({
+                              symbol: trade.symbol,
+                              limit: 50, // Get last 50 executions
+                              testnet: botConfig.api_mode !== 'live',
+                              apiKey: botConfig.api_key,
+                              apiSecret: botConfig.api_secret,
+                            });
+                            
+                            // Find the most recent execution that closed this position
+                            // Look for executions after trade entry time
+                            const entryTime = trade.entry_time ? new Date(trade.entry_time).getTime() : 0;
+                            const closeExecutions = executions.result?.list?.filter((exec: any) => {
+                              const execTime = parseInt(exec.execTime || '0');
+                              return execTime >= entryTime && 
+                                     exec.side === (trade.side === 'LONG' ? 'Sell' : 'Buy'); // Opposite side = closing
+                            }) || [];
+                            
+                            if (closeExecutions.length > 0) {
+                              // Use the most recent close execution
+                              const latestClose = closeExecutions[closeExecutions.length - 1];
+                              exitPrice = parseFloat(latestClose.execPrice || '0');
+                              // Use closed PnL from execution if available
+                              if (latestClose.closedPnl) {
+                                actualPnl = parseFloat(latestClose.closedPnl);
+                              }
+                              console.log(`[CRON] Found close execution: price=${exitPrice}, pnl=${actualPnl}`);
+                            }
+                          } catch (execError) {
+                            console.warn(`[CRON] Failed to get execution history, trying order history:`, execError);
+                          }
                           
-                          // If no close order found, use mark price as fallback
-                          if (!closeOrder) {
-                            exitPrice = lastClose;
+                          // Fallback: Try to get from order history
+                          if (!exitPrice || exitPrice === 0) {
+                            const orderStatus = await getOrderStatus({
+                              symbol: trade.symbol,
+                              orderId: trade.order_id,
+                              testnet: botConfig.api_mode !== 'live',
+                              apiKey: botConfig.api_key,
+                              apiSecret: botConfig.api_secret,
+                            });
+                            
+                            // Look for closed orders - find orders that closed the position
+                            const allOrders = orderStatus.result?.list || [];
+                            // Find the most recent filled order that might be a close order
+                            const closeOrder = allOrders.find((o: any) => 
+                              o.orderStatus?.toLowerCase() === 'filled' &&
+                              (o.side === (trade.side === 'LONG' ? 'Sell' : 'Buy')) // Opposite side = closing order
+                            );
+                            
+                            if (closeOrder) {
+                              exitPrice = parseFloat(closeOrder.avgPrice || closeOrder.price || '0');
+                              console.log(`[CRON] Found close order: price=${exitPrice}`);
+                            }
+                          }
+                          
+                          // Final fallback: use mark price or last close
+                          if (!exitPrice || exitPrice === 0) {
+                            exitPrice = markPrice || lastClose;
+                            console.log(`[CRON] Using fallback price: ${exitPrice}`);
+                          }
+                          
+                          // Calculate P&L if not from execution
+                          if (actualPnl === null) {
+                            const entryPrice = Number(trade.entry_price);
+                            const posSize = Number(trade.position_size);
                             actualPnl = trade.side === 'LONG'
-                              ? (exitPrice - entryPrice) * positionSize
-                              : (entryPrice - exitPrice) * positionSize;
+                              ? (exitPrice - entryPrice) * posSize
+                              : (entryPrice - exitPrice) * posSize;
                           }
                           
                           // Determine if it was TP or SL based on exit price vs TP/SL levels
@@ -535,19 +587,20 @@ export async function POST(request: NextRequest) {
                             ? exitPrice <= slPrice * 1.01
                             : exitPrice >= slPrice * 0.99;
                           
-                          const closeStatus = isTP ? 'tp' : (isSL ? 'sl' : 'tp'); // Default to TP if unclear
+                          const closeStatus = isTP ? 'tp' : (isSL ? 'sl' : 'breakeven'); // Default to breakeven if unclear
                           
                           await closeTrade(trade.id, closeStatus, exitPrice, actualPnl);
                           await updateDailyPnL(botConfig.user_id, actualPnl);
                           await addActivityLog(
                             botConfig.user_id,
                             'success',
-                            `Position closed on Bybit: ${trade.side} ${trade.symbol} @ $${exitPrice.toFixed(2)} (P&L: ${actualPnl >= 0 ? '+' : ''}$${actualPnl.toFixed(2)})`,
-                            { orderId: trade.order_id, exitPrice, pnl: actualPnl, closeStatus },
+                            `Position closed on Bybit: ${trade.side} ${trade.symbol} @ $${exitPrice.toFixed(2)} (P&L: ${actualPnl >= 0 ? '+' : ''}$${actualPnl.toFixed(2)}, Status: ${closeStatus.toUpperCase()})`,
+                            { orderId: trade.order_id, exitPrice, pnl: actualPnl, closeStatus, source: 'bybit' },
                             botConfig.id
                           );
+                          console.log(`[CRON] Trade ${trade.id} closed: ${closeStatus} @ $${exitPrice.toFixed(2)}, P&L: $${actualPnl.toFixed(2)}`);
                         } catch (err) {
-                          console.error(`[CRON] Error checking closed order for trade ${trade.id}:`, err);
+                          console.error(`[CRON] Error checking closed position for trade ${trade.id}:`, err);
                           // Mark as cancelled if we can't determine what happened
                           await updateTrade(trade.id, {
                             status: 'cancelled',
@@ -556,8 +609,8 @@ export async function POST(request: NextRequest) {
                           await addActivityLog(
                             botConfig.user_id,
                             'warning',
-                            `Position not found on Bybit (may have been closed manually): ${trade.side} ${trade.symbol}`,
-                            { orderId: trade.order_id },
+                            `Position not found on Bybit (may have been closed manually): ${trade.side} ${trade.symbol}. Error: ${err instanceof Error ? err.message : 'Unknown'}`,
+                            { orderId: trade.order_id, error: err instanceof Error ? err.message : String(err) },
                             botConfig.id
                           );
                         }
@@ -566,7 +619,7 @@ export async function POST(request: NextRequest) {
                         const actualSize = parseFloat(position.size || '0');
                         const actualEntryPrice = parseFloat(position.avgPrice || trade.entry_price);
                         const unrealizedPnl = parseFloat(position.unrealisedPnl || '0');
-                        const markPrice = parseFloat(position.markPrice || lastClose);
+                        const currentMarkPrice = parseFloat(position.markPrice || lastClose);
                         
                         // Check if TP/SL are set on Bybit
                         const bybitTP = position.takeProfit ? parseFloat(position.takeProfit) : null;
@@ -574,9 +627,27 @@ export async function POST(request: NextRequest) {
                         const tradeTP = Number(trade.tp_price);
                         const tradeSL = Number(trade.current_sl ?? trade.sl_price);
                         
+                        // Detect if SL was manually changed on Bybit (different from our database)
+                        // If Bybit SL exists and is different from our stored SL, sync it to database
+                        if (bybitSL !== null && Math.abs(bybitSL - tradeSL) > 0.01) {
+                          console.log(`[CRON] Detected SL change on Bybit for trade ${trade.id}: DB=${tradeSL.toFixed(2)}, Bybit=${bybitSL.toFixed(2)}`);
+                          await updateTrade(trade.id, {
+                            current_sl: bybitSL,
+                          } as any);
+                          await addActivityLog(
+                            botConfig.user_id,
+                            'info',
+                            `Stop loss synced from Bybit: ${trade.side} ${trade.symbol} SL → $${bybitSL.toFixed(2)} (manually changed on Bybit)`,
+                            { tradeId: trade.id, previousSl: tradeSL, newSl: bybitSL, source: 'bybit' },
+                            botConfig.id
+                          );
+                        }
+                        
                         // Set TP/SL if they're not set on Bybit or don't match our trade values
+                        // But only if Bybit SL wasn't manually changed (we just synced it above)
                         const shouldSetTP = !bybitTP || Math.abs(bybitTP - tradeTP) > 0.01;
-                        const shouldSetSL = !bybitSL || Math.abs(bybitSL - tradeSL) > 0.01;
+                        // Only set SL if it's not already set on Bybit (don't overwrite manual changes)
+                        const shouldSetSL = !bybitSL && tradeSL > 0;
                         
                         if (shouldSetTP || shouldSetSL) {
                           try {
@@ -648,7 +719,7 @@ export async function POST(request: NextRequest) {
                         // Pass entry time for grace period check
                         const entryTime = trade.entry_time ? new Date(trade.entry_time) : undefined;
                         const breakevenSl = applyBreakevenOnVWAPFlip(
-                          markPrice,
+                          currentMarkPrice,
                           currentVWAP,
                           trade.side as 'LONG' | 'SHORT',
                           entryPrice,
@@ -675,10 +746,10 @@ export async function POST(request: NextRequest) {
                               botConfig.user_id,
                               'warning',
                               `Breakeven applied: ${trade.side} ${trade.symbol} SL → $${breakevenSl.toFixed(2)} (price invalidated trade - moved against VWAP direction)`,
-                              { currentPrice: markPrice, vwap: currentVWAP, entry: entryPrice },
+                              { currentPrice: currentMarkPrice, vwap: currentVWAP, entry: entryPrice },
                               botConfig.id
                             );
-                            console.log(`[CRON] Breakeven applied for trade ${trade.id}: ${trade.side} ${trade.symbol}, price ${markPrice.toFixed(2)} vs VWAP ${currentVWAP.toFixed(2)}`);
+                            console.log(`[CRON] Breakeven applied for trade ${trade.id}: ${trade.side} ${trade.symbol}, price ${currentMarkPrice.toFixed(2)} vs VWAP ${currentVWAP.toFixed(2)}`);
                           } catch (slError) {
                             console.error(`[CRON] Failed to update SL to breakeven on Bybit:`, slError);
                           }
@@ -689,7 +760,7 @@ export async function POST(request: NextRequest) {
                             entryPrice,
                             initialSl,
                             currentSl,
-                            markPrice
+                            currentMarkPrice
                           );
                           
                           if (trailingSl !== null && Math.abs(trailingSl - currentSl) > 0.01) {
