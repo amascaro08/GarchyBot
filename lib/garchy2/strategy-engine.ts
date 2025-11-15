@@ -197,6 +197,7 @@ export class Garchy2StrategyEngine {
 
     // Decision hierarchy: Check ORB first (Rule 0)
     if (orbSignal.confirmed && orbSignal.side) {
+      console.log(`[GARCHY2] ORB signal detected - ${orbSignal.side} @ ${orbSignal.level?.toFixed(2)}, validating against 5 rules...`);
       const signal = await this.evaluateORBSignal(
         orbSignal,
         currentPrice,
@@ -204,17 +205,20 @@ export class Garchy2StrategyEngine {
         symbol
       );
       if (signal) {
+        console.log(`[GARCHY2] ✓ ORB signal PASSED all 5 rules - ${signal.side} @ ${signal.entry?.toFixed(2)}, Confidence: ${signal.confidence.toFixed(2)}`);
         this.lastSignal = signal;
         return signal;
       } else {
-        console.log(`[GARCHY2] ORB signal found but evaluation failed (likely orderflow/confidence)`);
+        console.log(`[GARCHY2] ✗ ORB signal FAILED one or more of the 5 validation rules`);
       }
     } else {
       const orbState = this.orb.getSignal();
       if (orbState.state === 'tracking') {
-        console.log(`[GARCHY2] ORB window still active (tracking)`);
+        console.log(`[GARCHY2] ORB window still active (tracking) - waiting for breakout`);
       } else if (orbState.state === 'closed' && !orbState.confirmed) {
         console.log(`[GARCHY2] ORB window closed, no breakout detected`);
+      } else {
+        console.log(`[GARCHY2] ORB state: ${orbState.state}, confirmed: ${orbState.confirmed}, side: ${orbState.side || 'none'}`);
       }
     }
 
@@ -266,39 +270,45 @@ export class Garchy2StrategyEngine {
   ): Promise<{ valid: boolean; reason: string }> {
     // Rule 1: Level Validation - Price must be at GARCH boundary, ORB level, or imbalance
     const isAtLevel = this.isPriceAtLevel(currentPrice, level, levelType);
+    const distancePct = ((Math.abs(currentPrice - level) / level) * 100).toFixed(3);
     if (!isAtLevel) {
-      return { valid: false, reason: 'Level validation failed - price not at valid level' };
+      return { valid: false, reason: `Rule 1 FAILED - Price ${distancePct}% away from level (tolerance: ${levelType === 'ORB' ? '0.1%' : '0.2%'})` };
     }
+    console.log(`[GARCHY2]   ✓ Rule 1 PASSED - Price at level (distance: ${distancePct}%)`);
 
     // Rule 2: Bias Alignment - Trade direction matches session bias
     const biasAligned = this.isBiasAligned(side);
     if (!biasAligned) {
-      return { valid: false, reason: 'Bias alignment failed - trade direction does not match session bias' };
+      return { valid: false, reason: `Rule 2 FAILED - Trade direction (${side}) does not match session bias (${this.sessionBias})` };
     }
+    console.log(`[GARCHY2]   ✓ Rule 2 PASSED - Bias aligned (${side} matches ${this.sessionBias} bias)`);
 
     // Rule 3: Profile Context - HVN/LVN context makes sense
     const profileContext = this.marketProfile.getProfileContext(level);
     const profileValid = this.isProfileContextValid(profileContext, side, currentPrice, level);
     if (!profileValid.valid) {
-      return { valid: false, reason: `Profile context failed - ${profileValid.reason}` };
+      return { valid: false, reason: `Rule 3 FAILED - ${profileValid.reason} (Node type: ${profileContext.nodeType})` };
     }
+    console.log(`[GARCHY2]   ✓ Rule 3 PASSED - Profile context valid (${profileContext.nodeType})`);
 
     // Rule 4: Orderflow Confirmation - Tape agrees with trade
     const orderflow = await this.orderflow.analyzeOrderflow(symbol, level, currentPrice, side);
     if (!this.orderflow.confirmsTrade(orderflow, side)) {
       return { 
         valid: false, 
-        reason: `Orderflow confirmation failed - bias: ${orderflow.bias}, confidence: ${orderflow.confidence.toFixed(2)}` 
+        reason: `Rule 4 FAILED - Orderflow bias (${orderflow.bias}) doesn't confirm ${side}, confidence: ${orderflow.confidence.toFixed(2)}` 
       };
     }
+    console.log(`[GARCHY2]   ✓ Rule 4 PASSED - Orderflow confirms (bias: ${orderflow.bias}, confidence: ${orderflow.confidence.toFixed(2)})`);
 
     // Rule 5: Clean Trigger - Price gives clean trigger
     const triggerValid = this.hasCleanTrigger(candles, level, side, currentPrice, levelType);
     if (!triggerValid.valid) {
-      return { valid: false, reason: `Clean trigger failed - ${triggerValid.reason}` };
+      return { valid: false, reason: `Rule 5 FAILED - ${triggerValid.reason}` };
     }
+    console.log(`[GARCHY2]   ✓ Rule 5 PASSED - ${triggerValid.reason}`);
 
-    return { valid: true, reason: 'All 5 rules validated' };
+    return { valid: true, reason: 'All 5 rules validated ✓' };
   }
 
   /**
@@ -460,6 +470,7 @@ export class Garchy2StrategyEngine {
     }
 
     // Validate against all 5 rules
+    console.log(`[GARCHY2] Validating ORB trade - Level: ${orbSignal.level.toFixed(2)}, Side: ${orbSignal.side}, Current Price: ${currentPrice.toFixed(2)}`);
     const validation = await this.validateTrade(
       orbSignal.level,
       orbSignal.side,
@@ -470,9 +481,10 @@ export class Garchy2StrategyEngine {
     );
 
     if (!validation.valid) {
-      console.log(`[GARCHY2] ORB signal rejected - ${validation.reason}`);
+      console.log(`[GARCHY2] ✗ ORB signal REJECTED - Rule failed: ${validation.reason}`);
       return null;
     }
+    console.log(`[GARCHY2] ✓ ORB signal PASSED all 5 validation rules`);
 
     // Get MP/VP context (already validated in validateTrade)
     const profileContext = this.marketProfile.getProfileContext(orbSignal.level);
