@@ -1,7 +1,7 @@
 type Side = 'LONG' | 'SHORT';
 
-type DepthEntry = { price: number; size: number }; // size in base units
-type DepthSnapshot = { ts: number; bids: DepthEntry[]; asks: DepthEntry[] };
+export type DepthEntry = { price: number; size: number }; // size in base units
+export type DepthSnapshot = { ts: number; bids: DepthEntry[]; asks: DepthEntry[] };
 
 const sockets: Record<string, WebSocket> = {};
 const buffers: Record<string, DepthSnapshot[]> = {}; // per symbol ring buffer
