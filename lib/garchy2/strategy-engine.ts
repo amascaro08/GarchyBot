@@ -455,12 +455,65 @@ export class Garchy2StrategyEngine {
     if (levelType === 'IMBALANCE') {
       // Check if price is retesting imbalance with directional momentum
       const priceAtImbalance = Math.abs(currentPrice - level) / level < 0.002;
-      const hasMomentum = side === 'LONG' 
-        ? lastCandle.close > prevCandle.close && prevCandle.close > prevPrevCandle.close
-        : lastCandle.close < prevCandle.close && prevCandle.close < prevPrevCandle.close;
+      const priceDistancePct = (Math.abs(currentPrice - level) / level) * 100;
+      
+      // Relaxed momentum: 2 of 3 candles moving in signal direction (allows neutral candles)
+      // For LONG: count how many candles closed higher than previous
+      // For SHORT: count how many candles closed lower than previous
+      let momentumCount = 0;
+      let momentumDetails: string[] = [];
+      
+      if (side === 'LONG') {
+        const m1 = lastCandle.close > prevCandle.close;
+        const m2 = prevCandle.close > prevPrevCandle.close;
+        if (m1) {
+          momentumCount++;
+          momentumDetails.push(`last > prev (${lastCandle.close.toFixed(2)} > ${prevCandle.close.toFixed(2)})`);
+        } else if (Math.abs(lastCandle.close - prevCandle.close) / prevCandle.close < 0.0001) {
+          momentumDetails.push(`last ≈ prev (neutral)`);
+        } else {
+          momentumDetails.push(`last < prev (${lastCandle.close.toFixed(2)} < ${prevCandle.close.toFixed(2)})`);
+        }
+        if (m2) {
+          momentumCount++;
+          momentumDetails.push(`prev > prevPrev (${prevCandle.close.toFixed(2)} > ${prevPrevCandle.close.toFixed(2)})`);
+        } else if (Math.abs(prevCandle.close - prevPrevCandle.close) / prevPrevCandle.close < 0.0001) {
+          momentumDetails.push(`prev ≈ prevPrev (neutral)`);
+        } else {
+          momentumDetails.push(`prev < prevPrev (${prevCandle.close.toFixed(2)} < ${prevPrevCandle.close.toFixed(2)})`);
+        }
+      } else {
+        const m1 = lastCandle.close < prevCandle.close;
+        const m2 = prevCandle.close < prevPrevCandle.close;
+        if (m1) {
+          momentumCount++;
+          momentumDetails.push(`last < prev (${lastCandle.close.toFixed(2)} < ${prevCandle.close.toFixed(2)})`);
+        } else if (Math.abs(lastCandle.close - prevCandle.close) / prevCandle.close < 0.0001) {
+          momentumDetails.push(`last ≈ prev (neutral)`);
+        } else {
+          momentumDetails.push(`last > prev (${lastCandle.close.toFixed(2)} > ${prevCandle.close.toFixed(2)})`);
+        }
+        if (m2) {
+          momentumCount++;
+          momentumDetails.push(`prev < prevPrev (${prevCandle.close.toFixed(2)} < ${prevPrevCandle.close.toFixed(2)})`);
+        } else if (Math.abs(prevCandle.close - prevPrevCandle.close) / prevPrevCandle.close < 0.0001) {
+          momentumDetails.push(`prev ≈ prevPrev (neutral)`);
+        } else {
+          momentumDetails.push(`prev > prevPrev (${prevCandle.close.toFixed(2)} > ${prevPrevCandle.close.toFixed(2)})`);
+        }
+      }
+      
+      // Require at least 2 of 3 candles showing momentum (allows 1 neutral or 1 counter-trend candle)
+      const hasMomentum = momentumCount >= 2;
+      
+      console.log(`[GARCHY2] Rule 5 momentum check (${side}): priceAtImbalance=${priceAtImbalance} (distance: ${priceDistancePct.toFixed(3)}%), momentumCount=${momentumCount}/2, details: ${momentumDetails.join(', ')}`);
       
       if (priceAtImbalance && hasMomentum) {
-        return { valid: true, reason: 'Imbalance retest with momentum confirmed' };
+        return { valid: true, reason: `Imbalance retest with momentum confirmed (${momentumCount}/2 candles in signal direction)` };
+      } else if (!priceAtImbalance) {
+        return { valid: false, reason: `Price too far from imbalance (${priceDistancePct.toFixed(3)}% > 0.2%)` };
+      } else {
+        return { valid: false, reason: `Momentum check failed - only ${momentumCount}/2 candles in signal direction (need at least 2 of 3)` };
       }
     }
 
