@@ -1238,19 +1238,50 @@ export default function Home() {
 
   // Get current price
   const handleStartBot = async () => {
-    // If daily limits are hit, automatically override to start a new session
-    const overrideLimits = !canTrade;
-    setOverrideDailyLimits(overrideLimits);
     setTrades([]);
     tradesRef.current = [];
     setSessionPnL(0);
     setError(null);
     
-    // Log if we're overriding limits
-    if (overrideLimits) {
-      console.log('[BOT START] Daily limits hit - overriding to start new session');
-      addLog('info', `Daily limits reached. Starting new session with P&L reset...`);
+    // Fetch latest bot config to get current P&L from database
+    let shouldOverrideLimits = !canTrade;
+    try {
+      const statusRes = await fetch('/api/bot/status');
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        if (statusData.botConfig) {
+          const dbDailyPnL = Number(statusData.botConfig.daily_pnl || 0);
+          const dbDailyTargetValue = statusData.botConfig.daily_target_type === 'percent'
+            ? (statusData.botConfig.capital * statusData.botConfig.daily_target_amount) / 100
+            : statusData.botConfig.daily_target_amount;
+          const dbDailyStopValue = statusData.botConfig.daily_stop_type === 'percent'
+            ? (statusData.botConfig.capital * statusData.botConfig.daily_stop_amount) / 100
+            : statusData.botConfig.daily_stop_amount;
+          
+          const dbIsTargetHit = dbDailyPnL >= dbDailyTargetValue && dbDailyTargetValue > 0;
+          const dbIsStopHit = dbDailyPnL <= -dbDailyStopValue && dbDailyStopValue > 0;
+          
+          if (dbIsTargetHit || dbIsStopHit) {
+            shouldOverrideLimits = true;
+            console.log('[BOT START] Database shows daily limits hit - will override:', {
+              dailyPnL: dbDailyPnL,
+              targetValue: dbDailyTargetValue,
+              stopValue: dbDailyStopValue,
+              isTargetHit: dbIsTargetHit,
+              isStopHit: dbIsStopHit,
+            });
+            addLog('info', `Daily limits reached (P&L: $${dbDailyPnL.toFixed(2)}). Starting new session with P&L reset...`);
+          }
+          
+          // Sync frontend state with database
+          setDailyPnL(dbDailyPnL);
+        }
+      }
+    } catch (err) {
+      console.warn('[BOT START] Failed to fetch latest status, using frontend state:', err);
     }
+    
+    setOverrideDailyLimits(shouldOverrideLimits);
 
     // Check if phases are completed before starting (Phase 1 and Phase 2 must be completed)
     try {
@@ -1291,7 +1322,7 @@ export default function Home() {
       const res = await fetch('/api/bot/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ overrideDailyLimits: overrideLimits }),
+        body: JSON.stringify({ overrideDailyLimits: shouldOverrideLimits }),
       });
       
       const data = await res.json();
@@ -1307,7 +1338,7 @@ export default function Home() {
       
       setBotRunning(true);
       setError(null);
-      if (overrideLimits) {
+      if (shouldOverrideLimits) {
         setDailyPnL(0);
         setDailyStartDate(new Date().toISOString().split('T')[0]);
         addLog('info', 'Daily limits overridden - starting new session');
