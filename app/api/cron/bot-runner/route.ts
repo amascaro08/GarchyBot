@@ -15,6 +15,7 @@ import {
   getDailyLevels,
   checkPhase2Completed,
   updateTrade,
+  updateBotConfig,
 } from '@/lib/db';
 import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip, strictSignalWithDailyOpen } from '@/lib/strategy';
 import { placeOrder, cancelOrder, getKlines, getTicker } from '@/lib/bybit';
@@ -135,15 +136,26 @@ export async function POST(request: NextRequest) {
             ? (botConfig.capital * botConfig.daily_stop_amount) / 100
             : botConfig.daily_stop_amount;
 
-          const isDailyTargetHit = botConfig.daily_pnl >= dailyTargetValue && dailyTargetValue > 0;
-          const isDailyStopHit = botConfig.daily_pnl <= -dailyStopValue && dailyStopValue > 0;
+          // Log daily limit check details for debugging
+          const currentDailyPnL = Number(botConfig.daily_pnl) || 0;
+          console.log(`[CRON] Daily limit check for bot ${botConfig.id}:`);
+          console.log(`  Current daily P&L: ${currentDailyPnL.toFixed(2)}`);
+          console.log(`  Daily target: ${dailyTargetValue.toFixed(2)} (${botConfig.daily_target_type}, ${botConfig.daily_target_amount})`);
+          console.log(`  Daily stop: ${dailyStopValue.toFixed(2)} (${botConfig.daily_stop_type}, ${botConfig.daily_stop_amount})`);
+          console.log(`  Daily start date: ${botConfig.daily_start_date || 'NULL'}`);
+
+          // Only check limits if they are set (greater than 0)
+          // Also ensure daily_pnl is actually positive for target check
+          const isDailyTargetHit = dailyTargetValue > 0 && currentDailyPnL >= dailyTargetValue;
+          const isDailyStopHit = dailyStopValue > 0 && currentDailyPnL <= -dailyStopValue;
 
           if (isDailyTargetHit || isDailyStopHit) {
             const reason = isDailyTargetHit ? 'Daily target reached' : 'Daily stop loss hit';
-            await addActivityLog(botConfig.user_id, 'warning', `Bot auto-stopped: ${reason}`, null, botConfig.id);
-            // Stop the bot by updating is_running to false
+            console.log(`[CRON] Bot ${botConfig.id} stopped: ${reason} (P&L: ${currentDailyPnL.toFixed(2)}, Target: ${dailyTargetValue.toFixed(2)}, Stop: ${dailyStopValue.toFixed(2)})`);
+            await addActivityLog(botConfig.user_id, 'warning', `Bot auto-stopped: ${reason} (P&L: ${currentDailyPnL.toFixed(2)})`, { dailyPnL: currentDailyPnL, dailyTarget: dailyTargetValue, dailyStop: dailyStopValue }, botConfig.id);
+            // Actually stop the bot by setting is_running to false
+            await updateBotConfig(botConfig.user_id, { is_running: false } as any);
             await updateLastPolled(botConfig.id);
-            console.log(`[CRON] Bot ${botConfig.id} stopped: ${reason}`);
             return { userId: botConfig.user_id, status: 'stopped', reason };
           }
 

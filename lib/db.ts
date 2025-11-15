@@ -577,11 +577,20 @@ export async function updateDailyPnL(userId: string, pnlChange: number): Promise
 
 export async function resetDailyPnL(): Promise<void> {
   try {
-    await sql`
+    // Reset daily P&L for bots where:
+    // 1. daily_start_date is NULL (never set)
+    // 2. daily_start_date is before today
+    // This ensures all bots get reset properly
+    const result = await sql`
       UPDATE bot_configs
       SET daily_pnl = 0, daily_start_date = CURRENT_DATE
-      WHERE daily_start_date < CURRENT_DATE
+      WHERE daily_start_date IS NULL 
+         OR daily_start_date < CURRENT_DATE
+      RETURNING id
     `;
+    if (result.rows && result.rows.length > 0) {
+      console.log(`[CRON] Reset daily P&L for ${result.rows.length} bot(s) with stale or NULL daily_start_date`);
+    }
   } catch (error) {
     console.error('Error resetting daily P&L:', error);
     throw error;
