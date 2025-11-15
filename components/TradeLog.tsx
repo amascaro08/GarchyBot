@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { formatCurrency } from '@/lib/format';
 
 export interface Trade {
@@ -38,21 +39,45 @@ export default function TradeLog({ trades, sessionPnL, currentPrice, walletInfo 
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
+  // Calculate unrealized P&L for open trades - prioritize currentPrice for real-time updates
   const calculateUnrealizedPnL = (trade: Trade): number | null => {
     if (trade.status !== 'open') return null;
     
-    // Use stored P&L from Bybit if available (more accurate)
+    // For open trades, prioritize currentPrice for real-time updates
+    // Only fall back to stored pnl if currentPrice is not available
+    if (currentPrice !== null && currentPrice > 0) {
+      const positionSize = trade.positionSize || 0;
+      if (trade.side === 'LONG') {
+        return (currentPrice - trade.entry) * positionSize;
+      } else {
+        return (trade.entry - currentPrice) * positionSize;
+      }
+    }
+    
+    // Fallback to stored P&L from Bybit if currentPrice not available
+    if (trade.pnl !== undefined && trade.pnl !== null) {
+      return trade.pnl;
+    }
+    
+    return null;
+  };
+
+  // Calculate realized P&L for closed trades
+  const calculateRealizedPnL = (trade: Trade): number | null => {
+    if (trade.status === 'open' || trade.status === 'pending') return null;
+    
+    // Use stored P&L from Bybit if available (most accurate for closed trades)
     if (trade.pnl !== undefined && trade.pnl !== null) {
       return trade.pnl;
     }
     
     // Fallback to calculated P&L if stored value not available
-    if (currentPrice === null) return null;
+    if (trade.exitPrice === undefined || trade.exitPrice === null) return null;
     const positionSize = trade.positionSize || 0;
     if (trade.side === 'LONG') {
-      return (currentPrice - trade.entry) * positionSize;
+      return (trade.exitPrice - trade.entry) * positionSize;
     } else {
-      return (trade.entry - currentPrice) * positionSize;
+      return (trade.entry - trade.exitPrice) * positionSize;
     }
   };
 
@@ -68,13 +93,33 @@ export default function TradeLog({ trades, sessionPnL, currentPrice, walletInfo 
     return badges[status];
   };
 
-  const pendingTrades = trades.filter((t) => t.status === 'pending');
-  const openTrades = trades.filter((t) => t.status === 'open');
-  const closedTrades = trades.filter((t) => ['tp', 'sl', 'breakeven', 'cancelled'].includes(t.status));
-  const totalUnrealizedPnL = openTrades.reduce((sum, trade) => {
-    const pnl = calculateUnrealizedPnL(trade);
-    return sum + (pnl || 0);
-  }, 0);
+  // Memoize calculations to ensure they update when currentPrice changes
+  const pendingTrades = useMemo(() => trades.filter((t) => t.status === 'pending'), [trades]);
+  const openTrades = useMemo(() => trades.filter((t) => t.status === 'open'), [trades]);
+  const closedTrades = useMemo(() => trades.filter((t) => ['tp', 'sl', 'breakeven', 'cancelled'].includes(t.status)), [trades]);
+  
+  const totalUnrealizedPnL = useMemo(() => {
+    return openTrades.reduce((sum, trade) => {
+      // Calculate unrealized P&L directly here to ensure currentPrice dependency is captured
+      if (trade.status !== 'open') return sum;
+      
+      // Prioritize currentPrice for real-time updates
+      if (currentPrice !== null && currentPrice > 0) {
+        const positionSize = trade.positionSize || 0;
+        const pnl = trade.side === 'LONG' 
+          ? (currentPrice - trade.entry) * positionSize
+          : (trade.entry - currentPrice) * positionSize;
+        return sum + pnl;
+      }
+      
+      // Fallback to stored P&L from Bybit if currentPrice not available
+      if (trade.pnl !== undefined && trade.pnl !== null) {
+        return sum + trade.pnl;
+      }
+      
+      return sum;
+    }, 0);
+  }, [openTrades, currentPrice]);
 
   const eligibleClosedTrades = closedTrades.filter((t) => t.status !== 'breakeven' && t.status !== 'cancelled');
   const winRate = eligibleClosedTrades.length > 0
@@ -149,7 +194,13 @@ export default function TradeLog({ trades, sessionPnL, currentPrice, walletInfo 
         )}
         {trades.slice(0, 5).map((trade) => {
           const unrealizedPnL = calculateUnrealizedPnL(trade);
-          const formattedPnL = unrealizedPnL !== null ? `${unrealizedPnL >= 0 ? '+' : ''}${formatCurrency(unrealizedPnL)}` : '—';
+          const realizedPnL = calculateRealizedPnL(trade);
+          
+          // For open trades, show unrealized P&L; for closed trades, show realized P&L
+          const isOpen = trade.status === 'open';
+          const pnl = isOpen ? unrealizedPnL : realizedPnL;
+          const pnlLabel = isOpen ? 'Unrealized' : 'Realized';
+          const formattedPnL = pnl !== null ? `${pnl >= 0 ? '+' : ''}${formatCurrency(pnl)}` : '—';
 
           return (
             <div key={trade.id} className="glass-effect rounded-lg border border-slate-700/40 bg-slate-900/40 p-4">
@@ -161,6 +212,9 @@ export default function TradeLog({ trades, sessionPnL, currentPrice, walletInfo 
                 </div>
                 <div className="text-sm text-gray-300">
                   {trade.side === 'LONG' ? 'Long' : 'Short'} @ <span className="font-semibold text-white">{formatCurrency(trade.entry)}</span>
+                  {trade.exitPrice && (
+                    <span className="ml-2">→ <span className="font-semibold text-white">{formatCurrency(trade.exitPrice)}</span></span>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-gray-300">
@@ -177,8 +231,8 @@ export default function TradeLog({ trades, sessionPnL, currentPrice, walletInfo 
                   <div className="font-semibold text-white">{trade.positionSize ? formatCurrency(trade.positionSize) : '—'}</div>
                 </div>
                 <div>
-                  <div className="uppercase tracking-wider text-gray-500">Unrealized</div>
-                  <div className={`font-semibold ${unrealizedPnL !== null ? (unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400') : 'text-gray-400'}`}>{formattedPnL}</div>
+                  <div className="uppercase tracking-wider text-gray-500">{pnlLabel}</div>
+                  <div className={`font-semibold ${pnl !== null ? (pnl >= 0 ? 'text-green-400' : 'text-red-400') : 'text-gray-400'}`}>{formattedPnL}</div>
                 </div>
               </div>
               {trade.reason && (
