@@ -134,6 +134,11 @@ export async function POST(request: NextRequest) {
           candles: validated.candles,
         });
         
+        // Use real-time price if available, otherwise use last candle close
+        const currentPrice = realtimePrice || validated.candles[validated.candles.length - 1]?.close || dOpen;
+        
+        console.log(`[SIGNAL] Garchy 2.0 evaluation - Using price: ${currentPrice.toFixed(2)} (${realtimePrice ? 'real-time' : 'last candle'})`);
+        
         // Evaluate
         const signal = await adapter.evaluate({
           candles: validated.candles,
@@ -142,7 +147,7 @@ export async function POST(request: NextRequest) {
           upLevels,
           dnLevels,
           symbol: validated.symbol,
-          currentPrice: realtimePrice,
+          currentPrice,
           timestamp: Date.now(),
         });
         

@@ -81,8 +81,9 @@ export class OrderflowAnalyzer {
     const snapshot = getOrderBookSnapshot(symbol);
 
     if (!snapshot) {
-      // No order book data - return neutral signal
-      return this.getNeutralSignal();
+      // No order book data - return fallback signal based on price action
+      console.log(`[ORDERFLOW] No orderbook snapshot for ${symbol}, using price action fallback`);
+      return this.getFallbackSignal(side, currentPrice, level);
     }
 
     // Analyze order book structure
@@ -95,10 +96,19 @@ export class OrderflowAnalyzer {
 
     // Analyze volume flow
     const volumeFlags = this.analyzeVolumeFlow(side);
+    
+    // If confidence is very low (< 0.1), enhance with volume flow
+    let finalConfidence = confidence;
+    if (confidence < 0.1) {
+      if ((side === 'LONG' && volumeFlags.buyVolumeSurge) || 
+          (side === 'SHORT' && volumeFlags.sellVolumeSurge)) {
+        finalConfidence = Math.max(confidence, 0.3); // Boost confidence if volume confirms
+      }
+    }
 
     return {
       bias,
-      confidence,
+      confidence: finalConfidence,
       flags: {
         absorbingBids: flags.absorbingBids,
         absorbingAsks: flags.absorbingAsks,
@@ -233,7 +243,12 @@ export class OrderflowAnalyzer {
    * Check if orderflow confirms a trade direction
    */
   confirmsTrade(orderflow: OrderflowSignal, tradeSide: 'LONG' | 'SHORT'): boolean {
-    if (orderflow.confidence < this.config.minConfidence) {
+    // If confidence is very low (< 0.2), use a lower threshold for fallback signals
+    // This allows signals when orderbook isn't available but we have price/volume confirmation
+    const minConf = orderflow.confidence < 0.2 ? 0.2 : this.config.minConfidence;
+    
+    if (orderflow.confidence < minConf) {
+      console.log(`[ORDERFLOW] Trade not confirmed - Confidence: ${orderflow.confidence.toFixed(2)}, Required: ${minConf}, Bias: ${orderflow.bias}, Trade side: ${tradeSide}`);
       return false;
     }
 
@@ -245,6 +260,13 @@ export class OrderflowAnalyzer {
       return true;
     }
 
+    // If bias is neutral but confidence is high enough, allow it (fallback mode)
+    if (orderflow.bias === 'neutral' && orderflow.confidence >= 0.3) {
+      console.log(`[ORDERFLOW] Allowing trade with neutral bias due to sufficient confidence (${orderflow.confidence.toFixed(2)})`);
+      return true;
+    }
+
+    console.log(`[ORDERFLOW] Trade not confirmed - Bias mismatch: ${orderflow.bias} vs ${tradeSide}`);
     return false;
   }
 
@@ -260,6 +282,57 @@ export class OrderflowAnalyzer {
         absorbingAsks: false,
         buyVolumeSurge: false,
         sellVolumeSurge: false,
+      },
+    };
+  }
+
+  /**
+   * Get fallback signal when orderbook isn't available
+   * Uses price action and volume analysis instead
+   */
+  private getFallbackSignal(
+    side: 'LONG' | 'SHORT',
+    currentPrice: number,
+    level: number
+  ): OrderflowSignal {
+    // Check volume flow for basic bias
+    const volumeFlags = this.analyzeVolumeFlow(side);
+    
+    // Simple price-action based bias
+    // If price is above level and we want long, or below level and we want short, slight bias
+    const priceDistancePct = ((currentPrice - level) / level) * 100;
+    
+    let bias: OrderflowBias = 'neutral';
+    let confidence = 0.3; // Low confidence when orderbook unavailable
+    
+    if (side === 'LONG') {
+      // For long, want price at or near level (support)
+      if (currentPrice >= level && currentPrice <= level * 1.001) {
+        bias = 'long';
+        confidence = 0.4; // Slightly higher if price is at level
+      } else if (volumeFlags.buyVolumeSurge) {
+        bias = 'long';
+        confidence = 0.35;
+      }
+    } else {
+      // For short, want price at or near level (resistance)
+      if (currentPrice <= level && currentPrice >= level * 0.999) {
+        bias = 'short';
+        confidence = 0.4; // Slightly higher if price is at level
+      } else if (volumeFlags.sellVolumeSurge) {
+        bias = 'short';
+        confidence = 0.35;
+      }
+    }
+    
+    return {
+      bias,
+      confidence,
+      flags: {
+        absorbingBids: false,
+        absorbingAsks: false,
+        buyVolumeSurge: volumeFlags.buyVolumeSurge,
+        sellVolumeSurge: volumeFlags.sellVolumeSurge,
       },
     };
   }
