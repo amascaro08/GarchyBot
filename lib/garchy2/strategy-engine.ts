@@ -175,6 +175,22 @@ export class Garchy2StrategyEngine {
       this.sessionBias = orbSignal.sessionBias;
     }
 
+    // Update session bias from VWAP if available
+    if (candles.length > 0) {
+      const lastCandle = candles[candles.length - 1];
+      // Simple VWAP approximation: use volume-weighted close
+      // If price > recent average, bias is long
+      if (candles.length >= 20) {
+        const recent20 = candles.slice(-20);
+        const avgPrice = recent20.reduce((sum, c) => sum + c.close, 0) / recent20.length;
+        if (lastCandle.close > avgPrice && this.sessionBias === 'neutral') {
+          this.sessionBias = 'long';
+        } else if (lastCandle.close < avgPrice && this.sessionBias === 'neutral') {
+          this.sessionBias = 'short';
+        }
+      }
+    }
+
     // Update imbalances (detect new ones)
     const zoneQuadrantFn = (price: number) => this.garchZones.getCurrentZone(price).quadrant;
     this.imbalanceDetector.detectImbalances(candles, zoneQuadrantFn);
@@ -184,6 +200,7 @@ export class Garchy2StrategyEngine {
       const signal = await this.evaluateORBSignal(
         orbSignal,
         currentPrice,
+        candles,
         symbol
       );
       if (signal) {
@@ -237,35 +254,216 @@ export class Garchy2StrategyEngine {
   }
 
   /**
+   * Validate trade against 5 strict rules
+   */
+  private async validateTrade(
+    level: number,
+    side: 'LONG' | 'SHORT',
+    currentPrice: number,
+    candles: Candle[],
+    symbol: string,
+    levelType: 'ORB' | 'GARCH' | 'IMBALANCE'
+  ): Promise<{ valid: boolean; reason: string }> {
+    // Rule 1: Level Validation - Price must be at GARCH boundary, ORB level, or imbalance
+    const isAtLevel = this.isPriceAtLevel(currentPrice, level, levelType);
+    if (!isAtLevel) {
+      return { valid: false, reason: 'Level validation failed - price not at valid level' };
+    }
+
+    // Rule 2: Bias Alignment - Trade direction matches session bias
+    const biasAligned = this.isBiasAligned(side);
+    if (!biasAligned) {
+      return { valid: false, reason: 'Bias alignment failed - trade direction does not match session bias' };
+    }
+
+    // Rule 3: Profile Context - HVN/LVN context makes sense
+    const profileContext = this.marketProfile.getProfileContext(level);
+    const profileValid = this.isProfileContextValid(profileContext, side, currentPrice, level);
+    if (!profileValid.valid) {
+      return { valid: false, reason: `Profile context failed - ${profileValid.reason}` };
+    }
+
+    // Rule 4: Orderflow Confirmation - Tape agrees with trade
+    const orderflow = await this.orderflow.analyzeOrderflow(symbol, level, currentPrice, side);
+    if (!this.orderflow.confirmsTrade(orderflow, side)) {
+      return { 
+        valid: false, 
+        reason: `Orderflow confirmation failed - bias: ${orderflow.bias}, confidence: ${orderflow.confidence.toFixed(2)}` 
+      };
+    }
+
+    // Rule 5: Clean Trigger - Price gives clean trigger
+    const triggerValid = this.hasCleanTrigger(candles, level, side, currentPrice, levelType);
+    if (!triggerValid.valid) {
+      return { valid: false, reason: `Clean trigger failed - ${triggerValid.reason}` };
+    }
+
+    return { valid: true, reason: 'All 5 rules validated' };
+  }
+
+  /**
+   * Rule 1: Check if price is at a valid level
+   */
+  private isPriceAtLevel(currentPrice: number, level: number, levelType: 'ORB' | 'GARCH' | 'IMBALANCE'): boolean {
+    const tolerance = levelType === 'ORB' ? 0.001 : 0.002; // 0.1% for ORB, 0.2% for others
+    const distance = Math.abs(currentPrice - level) / level;
+    return distance <= tolerance;
+  }
+
+  /**
+   * Rule 2: Check if trade direction matches session bias
+   */
+  private isBiasAligned(side: 'LONG' | 'SHORT'): boolean {
+    if (this.sessionBias === 'neutral') {
+      return false; // No bias = no trade
+    }
+    return (side === 'LONG' && this.sessionBias === 'long') || 
+           (side === 'SHORT' && this.sessionBias === 'short');
+  }
+
+  /**
+   * Rule 3: Check if profile context makes sense
+   */
+  private isProfileContextValid(
+    profileContext: { nodeType: 'HVN' | 'LVN' | 'neutral'; proximity: number },
+    side: 'LONG' | 'SHORT',
+    currentPrice: number,
+    level: number
+  ): { valid: boolean; reason?: string } {
+    if (profileContext.nodeType === 'HVN') {
+      // HVN = fade/reversal setups
+      if (side === 'LONG' && currentPrice < level) {
+        // Long below HVN = support bounce (reversal)
+        return { valid: true };
+      } else if (side === 'SHORT' && currentPrice > level) {
+        // Short above HVN = resistance rejection (reversal)
+        return { valid: true };
+      }
+      return { valid: false, reason: 'HVN context mismatch - expecting reversal setup' };
+    } else if (profileContext.nodeType === 'LVN') {
+      // LVN = breakout/continuation setups
+      if (side === 'LONG' && currentPrice > level) {
+        // Long above LVN = breakout continuation
+        return { valid: true };
+      } else if (side === 'SHORT' && currentPrice < level) {
+        // Short below LVN = breakdown continuation
+        return { valid: true };
+      }
+      return { valid: false, reason: 'LVN context mismatch - expecting breakout setup' };
+    }
+    // Neutral - lower confidence but allow if other rules pass
+    return { valid: true };
+  }
+
+  /**
+   * Rule 5: Check for clean price trigger
+   */
+  private hasCleanTrigger(
+    candles: Candle[],
+    level: number,
+    side: 'LONG' | 'SHORT',
+    currentPrice: number,
+    levelType: 'ORB' | 'GARCH' | 'IMBALANCE'
+  ): { valid: boolean; reason?: string } {
+    if (candles.length < 3) {
+      return { valid: false, reason: 'Not enough candles for trigger validation' };
+    }
+
+    const last3 = candles.slice(-3);
+    const lastCandle = last3[last3.length - 1];
+    const prevCandle = last3[last3.length - 2];
+    const prevPrevCandle = last3[last3.length - 3];
+
+    // Check for break + hold (for breakouts)
+    if (levelType === 'ORB' || (levelType === 'GARCH' && side === 'LONG' && currentPrice > level)) {
+      // Breakout above level - check if price broke and held
+      const brokeAbove = lastCandle.close > level && prevCandle.close <= level;
+      const holdingAbove = lastCandle.close > level && lastCandle.low > level * 0.999;
+      if (brokeAbove && holdingAbove) {
+        return { valid: true, reason: 'Break + hold confirmed' };
+      }
+    } else if (levelType === 'ORB' || (levelType === 'GARCH' && side === 'SHORT' && currentPrice < level)) {
+      // Breakdown below level - check if price broke and held
+      const brokeBelow = lastCandle.close < level && prevCandle.close >= level;
+      const holdingBelow = lastCandle.close < level && lastCandle.high < level * 1.001;
+      if (brokeBelow && holdingBelow) {
+        return { valid: true, reason: 'Break + hold confirmed' };
+      }
+    }
+
+    // Check for rejection wick with follow-through (for reversals)
+    if (levelType === 'GARCH' || levelType === 'IMBALANCE') {
+      if (side === 'LONG' && currentPrice < level) {
+        // Long entry below level - check for rejection wick up and follow-through
+        const hasRejectionWick = lastCandle.low < level * 0.999 && lastCandle.close > lastCandle.low * 1.001;
+        const hasFollowThrough = lastCandle.close > prevCandle.close;
+        if (hasRejectionWick && hasFollowThrough) {
+          return { valid: true, reason: 'Rejection wick + follow-through confirmed' };
+        }
+      } else if (side === 'SHORT' && currentPrice > level) {
+        // Short entry above level - check for rejection wick down and follow-through
+        const hasRejectionWick = lastCandle.high > level * 1.001 && lastCandle.close < lastCandle.high * 0.999;
+        const hasFollowThrough = lastCandle.close < prevCandle.close;
+        if (hasRejectionWick && hasFollowThrough) {
+          return { valid: true, reason: 'Rejection wick + follow-through confirmed' };
+        }
+      }
+    }
+
+    // Check for imbalance retest with clear intent
+    if (levelType === 'IMBALANCE') {
+      // Check if price is retesting imbalance with directional momentum
+      const priceAtImbalance = Math.abs(currentPrice - level) / level < 0.002;
+      const hasMomentum = side === 'LONG' 
+        ? lastCandle.close > prevCandle.close && prevCandle.close > prevPrevCandle.close
+        : lastCandle.close < prevCandle.close && prevCandle.close < prevPrevCandle.close;
+      
+      if (priceAtImbalance && hasMomentum) {
+        return { valid: true, reason: 'Imbalance retest with momentum confirmed' };
+      }
+    }
+
+    return { valid: false, reason: 'No clean trigger pattern detected' };
+  }
+
+  /**
    * Evaluate ORB signal (Rule 0)
    */
   private async evaluateORBSignal(
     orbSignal: ORBSignal,
     currentPrice: number,
+    candles: Candle[],
     symbol: string
   ): Promise<TradeSignal | null> {
     if (!orbSignal.side || !orbSignal.level) {
       return null;
     }
 
-    // Get MP/VP context
+    // Validate against all 5 rules
+    const validation = await this.validateTrade(
+      orbSignal.level,
+      orbSignal.side,
+      currentPrice,
+      candles,
+      symbol,
+      'ORB'
+    );
+
+    if (!validation.valid) {
+      console.log(`[GARCHY2] ORB signal rejected - ${validation.reason}`);
+      return null;
+    }
+
+    // Get MP/VP context (already validated in validateTrade)
     const profileContext = this.marketProfile.getProfileContext(orbSignal.level);
 
-    // Get orderflow confirmation
+    // Get orderflow confirmation (already validated in validateTrade)
     const orderflow = await this.orderflow.analyzeOrderflow(
       symbol,
       orbSignal.level,
       currentPrice,
       orbSignal.side
     );
-
-    // Check orderflow confirmation
-    console.log(`[GARCHY2] ORB evaluation - Side: ${orbSignal.side}, Level: ${orbSignal.level.toFixed(2)}, Current Price: ${currentPrice.toFixed(2)}, Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}`);
-    
-    if (!this.orderflow.confirmsTrade(orderflow, orbSignal.side)) {
-      console.log(`[GARCHY2] ORB signal rejected - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}, Min required: ${this.config.minSignalConfidence}`);
-      return null; // Orderflow doesn't confirm
-    }
 
     // Calculate TP/SL from GARCH zones
     const zoneLevels = this.garchZones.getLevels();
@@ -380,18 +578,28 @@ export class Garchy2StrategyEngine {
           continue;
         }
 
-        // Get orderflow confirmation
+        // Validate against all 5 rules
+        const validation = await this.validateTrade(
+          boundary,
+          side,
+          currentPrice,
+          candles,
+          symbol,
+          'GARCH'
+        );
+
+        if (!validation.valid) {
+          console.log(`[GARCHY2] GARCH ${setupType} signal rejected at ${boundary.toFixed(2)} - ${validation.reason}`);
+          continue;
+        }
+
+        // Get orderflow confirmation (already validated but need for confidence calc)
         const orderflow = await this.orderflow.analyzeOrderflow(
           symbol,
           boundary,
           currentPrice,
           side
         );
-
-        if (!this.orderflow.confirmsTrade(orderflow, side)) {
-          console.log(`[GARCHY2] GARCH ${setupType} signal rejected at ${boundary.toFixed(2)} - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}`);
-          continue;
-        }
 
         const { tp, sl } = this.calculateTPSL(boundary, side, zoneLevels);
 
@@ -478,6 +686,21 @@ export class Garchy2StrategyEngine {
       return null;
     }
 
+    // Validate against all 5 rules
+    const validation = await this.validateTrade(
+      imbalance.midpoint,
+      side,
+      currentPrice,
+      candles,
+      symbol,
+      'IMBALANCE'
+    );
+
+    if (!validation.valid) {
+      console.log(`[GARCHY2] Imbalance ${setupType} signal rejected at ${imbalance.midpoint.toFixed(2)} - ${validation.reason}`);
+      return null;
+    }
+
     const profileContext = this.marketProfile.getProfileContext(imbalance.midpoint);
     const orderflow = await this.orderflow.analyzeOrderflow(
       symbol,
@@ -485,11 +708,6 @@ export class Garchy2StrategyEngine {
       currentPrice,
       side
     );
-
-    if (!this.orderflow.confirmsTrade(orderflow, side)) {
-      console.log(`[GARCHY2] Imbalance ${setupType} signal rejected at ${imbalance.midpoint.toFixed(2)} - Orderflow bias: ${orderflow.bias}, Confidence: ${orderflow.confidence.toFixed(2)}`);
-      return null;
-    }
 
     // Calculate TP/SL from GARCH zones or imbalance boundaries
     const zoneLevels = this.garchZones.getLevels();

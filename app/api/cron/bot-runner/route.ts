@@ -986,81 +986,81 @@ export async function POST(request: NextRequest) {
                   } else {
                     // Cooldown passed, proceed with trade creation
                     
-                // Mandatory: Order book confirmation
-                // Rules: The bot must scan the Level 2 Order Book at that exact level and see:
-                // - LONG: significant increase in buy-side limit orders (buy wall) OR rapid execution of sell orders
-                // - SHORT: significant increase in sell-side limit orders (sell wall) OR rapid execution of buy orders
-                let approved = false;
-                try {
-                  approved = await confirmLevelTouch({
-                    symbol: botConfig.symbol,
-                    level: signal.touchedLevel,
-                    side: signal.signal,
-                    windowMs: 8000, // 8 second window to observe order book activity
-                    minNotional: 50000, // Minimum $50k notional for wall detection
-                    proximityBps: 5, // 0.05% proximity to level
-                  });
-                } catch (err) {
-                  console.error('Order book confirmation error:', err);
-                  approved = false;
-                }
-
-          if (approved) {
-            // Calculate actual capital to use based on risk_type and risk_amount
-            let capitalToUse: number;
-            if (botConfig.risk_type === 'percent') {
-              // risk_amount is a percentage (e.g., 20 means 20%)
-              capitalToUse = botConfig.capital * (botConfig.risk_amount / 100);
-            } else {
-              // risk_type is 'fixed', risk_amount is the fixed amount to use
-              capitalToUse = botConfig.risk_amount;
-            }
-            
-            // Ensure we don't exceed available capital
-            capitalToUse = Math.min(capitalToUse, botConfig.capital);
-            
-            // Calculate position size based on USDT trade value
-            // Order value in USDT = capital_to_use * leverage
-            // Position size in base asset = (capital_to_use * leverage) / entry_price
-            const tradeValueUSDT = capitalToUse * botConfig.leverage;
-            const entryPrice = signal.touchedLevel;
-            const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
-            const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
-                  
-            if (positionSize <= 0) {
-              console.log('[CRON] Skipping trade - calculated position size <= 0');
-            } else {
-              console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
-
-                  const tradeRecord = await createTrade({
-                      user_id: botConfig.user_id,
-                      bot_config_id: botConfig.id,
-                      symbol: botConfig.symbol,
-                      side: signal.signal,
-                      status: 'pending',
-                      entry_price: signal.touchedLevel,
-                      tp_price: signal.tp,
-                      sl_price: signal.sl,
-                      current_sl: signal.sl,
-                      exit_price: null,
-                      position_size: positionSize,
-                      leverage: botConfig.leverage,
-                      pnl: 0,
-                      reason: signal.reason,
-                      order_id: null, // Will be set after order is placed
-                      entry_time: new Date(),
-                      exit_time: null,
-                    });
-
-                  if (botConfig.api_key && botConfig.api_secret && positionSize > 0) {
-                    const orderQty = Math.max(0, Number(positionSize));
+                    // Mandatory: Order book confirmation
+                    // Rules: The bot must scan the Level 2 Order Book at that exact level and see:
+                    // - LONG: significant increase in buy-side limit orders (buy wall) OR rapid execution of sell orders
+                    // - SHORT: significant increase in sell-side limit orders (sell wall) OR rapid execution of buy orders
+                    let approved = false;
                     try {
-                      const { placeOrder, setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+                      approved = await confirmLevelTouch({
+                        symbol: botConfig.symbol,
+                        level: signal.touchedLevel,
+                        side: signal.signal,
+                        windowMs: 8000, // 8 second window to observe order book activity
+                        minNotional: 50000, // Minimum $50k notional for wall detection
+                        proximityBps: 5, // 0.05% proximity to level
+                      });
+                    } catch (err) {
+                      console.error('Order book confirmation error:', err);
+                      approved = false;
+                    }
+
+                    if (approved) {
+                      // Calculate actual capital to use based on risk_type and risk_amount
+                      let capitalToUse: number;
+                      if (botConfig.risk_type === 'percent') {
+                        // risk_amount is a percentage (e.g., 20 means 20%)
+                        capitalToUse = botConfig.capital * (botConfig.risk_amount / 100);
+                      } else {
+                        // risk_type is 'fixed', risk_amount is the fixed amount to use
+                        capitalToUse = botConfig.risk_amount;
+                      }
                       
-                      // Place MARKET order for immediate execution (no price needed)
-                      console.log(`[CRON] Placing MARKET order: ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(8)}`);
+                      // Ensure we don't exceed available capital
+                      capitalToUse = Math.min(capitalToUse, botConfig.capital);
                       
-                      const orderResult = await placeOrder({
+                      // Calculate position size based on USDT trade value
+                      // Order value in USDT = capital_to_use * leverage
+                      // Position size in base asset = (capital_to_use * leverage) / entry_price
+                      const tradeValueUSDT = capitalToUse * botConfig.leverage;
+                      const entryPrice = signal.touchedLevel;
+                      const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
+                      const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
+                            
+                      if (positionSize <= 0) {
+                        console.log('[CRON] Skipping trade - calculated position size <= 0');
+                      } else {
+                        console.log(`[CRON] New trade signal - ${signal.signal} @ ${signal.touchedLevel.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
+
+                        const tradeRecord = await createTrade({
+                          user_id: botConfig.user_id,
+                          bot_config_id: botConfig.id,
+                          symbol: botConfig.symbol,
+                          side: signal.signal,
+                          status: 'pending',
+                          entry_price: signal.touchedLevel,
+                          tp_price: signal.tp,
+                          sl_price: signal.sl,
+                          current_sl: signal.sl,
+                          exit_price: null,
+                          position_size: positionSize,
+                          leverage: botConfig.leverage,
+                          pnl: 0,
+                          reason: signal.reason,
+                          order_id: null, // Will be set after order is placed
+                          entry_time: new Date(),
+                          exit_time: null,
+                        });
+
+                        if (botConfig.api_key && botConfig.api_secret && positionSize > 0) {
+                          const orderQty = Math.max(0, Number(positionSize));
+                          try {
+                            const { placeOrder, setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+                            
+                            // Place MARKET order for immediate execution (no price needed)
+                            console.log(`[CRON] Placing MARKET order: ${signal.signal} ${botConfig.symbol} qty ${orderQty.toFixed(8)}`);
+                            
+                            const orderResult = await placeOrder({
                         symbol: botConfig.symbol,
                         side: signal.signal === 'LONG' ? 'Buy' : 'Sell',
                         qty: orderQty,
@@ -1263,28 +1263,28 @@ export async function POST(request: NextRequest) {
                     } catch (error) {
                       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
                       console.error(`[CRON] Market order failed:`, errorMsg);
-                      await addActivityLog(
-                        botConfig.user_id,
-                        'error',
-                        `Market order failed: ${errorMsg}`,
-                        { symbol: botConfig.symbol, side: signal.signal, qty: orderQty, error: errorMsg },
-                        botConfig.id
-                      );
+                        await addActivityLog(
+                          botConfig.user_id,
+                          'error',
+                          `Market order failed: ${errorMsg}`,
+                          { symbol: botConfig.symbol, side: signal.signal, qty: orderQty, error: errorMsg },
+                          botConfig.id
+                        );
+                      }
                     }
-                  }
 
-                    // Activity log for market order is already added above when order is filled
-                    // This log is only for demo/testnet mode or when API keys are not configured
-                    if (!botConfig.api_key || !botConfig.api_secret) {
-                      await addActivityLog(
-                        botConfig.user_id,
-                        'success',
-                        `Market order (demo): ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
-                        { signal, positionSize },
-                        botConfig.id
-                      );
-                    }
-                  }
+                      // Activity log for market order is already added above when order is filled
+                      // This log is only for demo/testnet mode or when API keys are not configured
+                      if (!botConfig.api_key || !botConfig.api_secret) {
+                        await addActivityLog(
+                          botConfig.user_id,
+                          'success',
+                          `Market order (demo): ${signal.signal} @ $${signal.touchedLevel.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
+                          { signal, positionSize },
+                          botConfig.id
+                        );
+                      }
+                    } // End if (approved)
                   } // End else block (cooldown check)
                 }
               }
