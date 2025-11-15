@@ -1284,6 +1284,7 @@ export async function POST(request: NextRequest) {
                           botConfig.id
                         );
                       }
+                      } // End else block (positionSize > 0)
                     } // End if (approved)
                   } // End else block (cooldown check)
                 } // End if (!isDuplicate)
