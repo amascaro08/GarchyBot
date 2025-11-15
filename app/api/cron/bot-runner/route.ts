@@ -1423,34 +1423,30 @@ export async function POST(request: NextRequest) {
                     } catch (error) {
                       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
                       console.error(`[CRON] Market order failed:`, errorMsg);
-                        await addActivityLog(
-                          botConfig.user_id,
-                          'error',
-                          `Market order failed: ${errorMsg}`,
-                          { symbol: botConfig.symbol, side: signal.side, qty: orderQty, error: errorMsg },
-                          botConfig.id
-                        );
-                      }
+                      await addActivityLog(
+                        botConfig.user_id,
+                        'error',
+                        `Market order failed: ${errorMsg}`,
+                        { symbol: botConfig.symbol, side: signal.side, qty: orderQty, error: errorMsg },
+                        botConfig.id
+                      );
                     }
-
-                      // Activity log for market order is already added above when order is filled
-                      // This log is only for demo/testnet mode or when API keys are not configured
-                      if (!botConfig.api_key || !botConfig.api_secret) {
-                        await addActivityLog(
-                          botConfig.user_id,
-                          'success',
-                          `Market order (demo): ${signal.side} @ $${entryPrice.toFixed(2)}, TP: $${tpPrice.toFixed(2)}, SL: $${slPrice.toFixed(2)}`,
-                          { signal, positionSize },
-                          botConfig.id
-                        );
-                      }
-                      } // End else block (positionSize > 0)
-                    } // End if (approved)
-                  } // End else block (cooldown check)
-                } // End if (lastTrade && lastTrade.entry_time)
+                  } else {
+                    // Activity log for market order when API keys are not configured (demo/testnet mode)
+                    await addActivityLog(
+                      botConfig.user_id,
+                      'success',
+                      `Market order (demo): ${signal.side} @ $${entryPrice.toFixed(2)}, TP: $${tpPrice.toFixed(2)}, SL: $${slPrice.toFixed(2)}`,
+                      { signal, positionSize },
+                      botConfig.id
+                    );
+                  }
+                } // End else block (positionSize > 0)
+                  } // End if (approved)
+                } // End if (cooldownPassed)
               } // End if (!isDuplicate)
-              } // End if (openTradesCount < botConfig.max_trades)
-            } // End if (signal.side && signal.entry)
+            } // End if (openTradesCount < botConfig.max_trades)
+          } // End if (signal.side && signal.entry)
 
           // Update last polled timestamp
           await updateLastPolled(botConfig.id);
