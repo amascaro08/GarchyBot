@@ -105,6 +105,7 @@ export class SignalAdapter {
   }): Promise<SignalAdapterResult> {
     // Use Garchy 2.0 if enabled and initialized
     if (this.config.enableGarchy2 && this.engine && this.initialized) {
+      try {
       const currentPrice = params.currentPrice || params.candles[params.candles.length - 1]?.close || params.dOpen;
       const timestamp = params.timestamp || Date.now();
 
@@ -150,14 +151,19 @@ export class SignalAdapter {
         };
       }
 
-      // No signal from Garchy 2.0
-      return {
-        side: null,
-        entry: null,
-        tp: null,
-        sl: null,
-        reason: 'No signal from Garchy 2.0 strategy',
-      };
+        // No signal from Garchy 2.0
+        return {
+          side: null,
+          entry: null,
+          tp: null,
+          sl: null,
+          reason: 'No signal from Garchy 2.0 strategy',
+        };
+      } catch (error) {
+        // If Garchy 2.0 fails, fall back to v1
+        console.error('[SIGNAL-ADAPTER] Error in Garchy 2.0 evaluation, falling back to v1:', error);
+        return this.fallbackToV1(params);
+      }
     }
 
     // Fallback to v1 logic (for backward compatibility)
@@ -238,10 +244,20 @@ export class SignalAdapter {
   /**
    * Check if session has reset (new day)
    */
+  private lastSessionStart: number | null = null;
+  
   private hasSessionReset(sessionStart: number): boolean {
-    // Simple check: if session start is different from last known, reset
-    // This could be enhanced to track last session start
-    return true; // Reset each evaluation for now (can be optimized)
+    // Check if session start is different from last known
+    if (this.lastSessionStart === null) {
+      this.lastSessionStart = sessionStart;
+      return true; // First initialization
+    }
+    
+    const hasReset = this.lastSessionStart !== sessionStart;
+    if (hasReset) {
+      this.lastSessionStart = sessionStart;
+    }
+    return hasReset;
   }
 
   /**

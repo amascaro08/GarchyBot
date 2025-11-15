@@ -1238,12 +1238,19 @@ export default function Home() {
 
   // Get current price
   const handleStartBot = async () => {
+    // If daily limits are hit, automatically override to start a new session
     const overrideLimits = !canTrade;
     setOverrideDailyLimits(overrideLimits);
     setTrades([]);
     tradesRef.current = [];
     setSessionPnL(0);
     setError(null);
+    
+    // Log if we're overriding limits
+    if (overrideLimits) {
+      console.log('[BOT START] Daily limits hit - overriding to start new session');
+      addLog('info', `Daily limits reached. Starting new session with P&L reset...`);
+    }
 
     // Check if phases are completed before starting (Phase 1 and Phase 2 must be completed)
     try {
@@ -1286,10 +1293,16 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ overrideDailyLimits: overrideLimits }),
       });
+      
       const data = await res.json();
       
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to start bot');
+        const errorMsg = data.error || `Failed to start bot (${res.status})`;
+        console.error('[BOT START] Error:', errorMsg);
+        setError(errorMsg);
+        addLog('error', errorMsg);
+        setOverrideDailyLimits(false);
+        return; // Don't continue if there's an error
       }
       
       setBotRunning(true);
@@ -1297,11 +1310,13 @@ export default function Home() {
       if (overrideLimits) {
         setDailyPnL(0);
         setDailyStartDate(new Date().toISOString().split('T')[0]);
+        addLog('info', 'Daily limits overridden - starting new session');
       }
       setOverrideDailyLimits(false);
       addLog('success', `Bot started for ${symbol} - running in background`);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to start bot';
+      console.error('[BOT START] Exception:', err);
       setError(errorMsg);
       addLog('error', errorMsg);
       setOverrideDailyLimits(false);

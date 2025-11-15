@@ -165,8 +165,13 @@ export async function POST(request: NextRequest) {
           garchy2Meta: signal.garchy2Meta,
         });
       } catch (garchy2Error) {
-        console.error('[SIGNAL] Error in Garchy 2.0 engine, falling back to v1:', garchy2Error);
-        // Fall through to v1 logic
+        const errorMessage = garchy2Error instanceof Error ? garchy2Error.message : String(garchy2Error);
+        const errorStack = garchy2Error instanceof Error ? garchy2Error.stack : undefined;
+        console.error('[SIGNAL] Error in Garchy 2.0 engine, falling back to v1:', errorMessage);
+        if (errorStack) {
+          console.error('[SIGNAL] Garchy 2.0 error stack:', errorStack);
+        }
+        // Fall through to v1 logic - don't let Garchy 2.0 errors break the bot
       }
     }
     
