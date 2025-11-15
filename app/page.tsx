@@ -515,12 +515,17 @@ export default function Home() {
         // Check for breakeven: if price goes against VWAP direction, move stop to entry
         // This takes priority over trailing stop
         if (levels?.vwap && levels.vwap > 0) {
+          // Parse entry time for grace period check
+          const entryTime = trade.time ? new Date(trade.time) : undefined;
           const breakevenSl = applyBreakevenOnVWAPFlip(
             currentPrice,
             levels.vwap,
             trade.side,
             trade.entry,
-            trade.sl
+            trade.sl,
+            0.001, // confirmationBufferPct
+            entryTime, // entryTime for grace period
+            60000 // 60 seconds grace period
           );
 
           if (breakevenSl !== null && breakevenSl !== trade.sl) {
@@ -729,12 +734,17 @@ export default function Home() {
           // Check for breakeven: if price goes against VWAP direction, move stop to entry
           // This takes priority over trailing stop
           if (levels?.vwap && levels.vwap > 0) {
+            // Parse entry time for grace period check
+            const entryTime = trade.time ? new Date(trade.time) : undefined;
             const breakevenSl = applyBreakevenOnVWAPFlip(
               priceForChecks,
               levels.vwap,
               trade.side,
               trade.entry,
-              trade.sl
+              trade.sl,
+              0.001, // confirmationBufferPct
+              entryTime, // entryTime for grace period
+              60000 // 60 seconds grace period
             );
 
             if (breakevenSl !== null && breakevenSl !== trade.sl) {

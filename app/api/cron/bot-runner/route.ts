@@ -645,12 +645,17 @@ export async function POST(request: NextRequest) {
                         const currentVWAP = levels.vwap;
                         
                         // Apply breakeven if price invalidates the trade (goes against VWAP direction)
+                        // Pass entry time for grace period check
+                        const entryTime = trade.entry_time ? new Date(trade.entry_time) : undefined;
                         const breakevenSl = applyBreakevenOnVWAPFlip(
                           markPrice,
                           currentVWAP,
                           trade.side as 'LONG' | 'SHORT',
                           entryPrice,
-                          currentSl
+                          currentSl,
+                          0.001, // confirmationBufferPct
+                          entryTime, // entryTime for grace period
+                          60000 // 60 seconds grace period
                         );
                         
                         if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {
@@ -733,12 +738,17 @@ export async function POST(request: NextRequest) {
               const currentVWAP = levels.vwap;
 
               // Check for breakeven: if price goes against VWAP direction, move stop to entry
+              // Pass entry time for grace period check
+              const entryTime = trade.entry_time ? new Date(trade.entry_time) : undefined;
               const breakevenSl = applyBreakevenOnVWAPFlip(
                 lastClose,
                 currentVWAP,
                 trade.side as 'LONG' | 'SHORT',
                 entryPrice,
-                currentSl
+                currentSl,
+                0.001, // confirmationBufferPct
+                entryTime, // entryTime for grace period
+                60000 // 60 seconds grace period
               );
 
               if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {

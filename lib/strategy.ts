@@ -699,6 +699,7 @@ export function computeTrailingBreakeven(
  * Requires a CONFIRMED direction change (not just a touch) to avoid whipsaws:
  * - Uses a small buffer (0.1% of VWAP) to confirm the direction change
  * - Price must be clearly on the other side of VWAP, not just touching it
+ * - Includes safeguards to prevent immediate triggers after entry
  * 
  * Logic:
  * - LONG trades: entered when price > VWAP (bullish bias). If price < VWAP - buffer, trade is invalidated → move to breakeven
@@ -710,6 +711,8 @@ export function computeTrailingBreakeven(
  * @param entry Entry price
  * @param currentSl Current stop loss
  * @param confirmationBufferPct Percentage buffer for confirmation (default 0.1% = 0.001)
+ * @param entryTime Optional entry time to add grace period (milliseconds since epoch)
+ * @param gracePeriodMs Grace period after entry before applying breakeven (default 60 seconds)
  * @returns New stop loss (entry price if breakeven should be applied, null if not)
  */
 export function applyBreakevenOnVWAPFlip(
@@ -718,7 +721,9 @@ export function applyBreakevenOnVWAPFlip(
   side: 'LONG' | 'SHORT',
   entry: number,
   currentSl: number,
-  confirmationBufferPct: number = 0.001 // 0.1% buffer to confirm direction change
+  confirmationBufferPct: number = 0.001, // 0.1% buffer to confirm direction change
+  entryTime?: number | Date, // Optional entry time for grace period
+  gracePeriodMs: number = 60000 // 60 seconds grace period
 ): number | null {
   // Only apply if current SL is not already at or beyond entry (breakeven)
   const isAlreadyAtBreakeven = side === 'LONG' 
@@ -727,6 +732,43 @@ export function applyBreakevenOnVWAPFlip(
   
   if (isAlreadyAtBreakeven) {
     return null; // Already at breakeven or better
+  }
+
+  // Grace period: Don't apply breakeven immediately after entry
+  // This prevents trades from being closed seconds after opening
+  if (entryTime) {
+    const entryTimestamp = entryTime instanceof Date ? entryTime.getTime() : entryTime;
+    const timeSinceEntry = Date.now() - entryTimestamp;
+    if (timeSinceEntry < gracePeriodMs) {
+      return null; // Still in grace period, don't apply breakeven yet
+    }
+  }
+
+  // Safety check: Verify entry was on the correct side of VWAP
+  // If entry itself is on wrong side, don't apply breakeven (trade shouldn't have been opened)
+  // This prevents false triggers when entry is at or very close to VWAP
+  const entryBuffer = currentVWAP * 0.0005; // 0.05% tolerance for entry validation
+  if (side === 'LONG') {
+    // For LONG, entry should be above VWAP (or very close)
+    // If entry is clearly below VWAP, something is wrong - don't apply breakeven
+    if (entry < currentVWAP - entryBuffer) {
+      return null; // Entry was on wrong side, skip breakeven
+    }
+  } else {
+    // For SHORT, entry should be below VWAP (or very close)
+    // If entry is clearly above VWAP, something is wrong - don't apply breakeven
+    if (entry > currentVWAP + entryBuffer) {
+      return null; // Entry was on wrong side, skip breakeven
+    }
+  }
+
+  // Safety check: Don't move stop to entry if price is already at or beyond entry
+  // This prevents immediate stop loss hits
+  if (side === 'LONG' && currentPrice <= entry) {
+    return null; // Price already at or below entry, don't move stop (would hit immediately)
+  }
+  if (side === 'SHORT' && currentPrice >= entry) {
+    return null; // Price already at or above entry, don't move stop (would hit immediately)
   }
 
   // Calculate confirmation buffer (small percentage of VWAP to avoid whipsaws)
