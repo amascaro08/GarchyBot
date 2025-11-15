@@ -4,6 +4,7 @@ import { saveVolatilityData, getVolatilityData, saveDailyLevels, updatePhaseStat
 import { getKlines } from '@/lib/bybit';
 import { getYahooFinanceKlines } from '@/lib/yahoo-finance';
 import { dailyOpenUTC, gridLevels } from '@/lib/strategy';
+import type { Candle } from '@/lib/types';
 
 /**
  * Daily statistical setup endpoint - PHASE 1 & PHASE 2
@@ -165,15 +166,22 @@ export async function POST(request: NextRequest) {
           console.log(`[DAILY-SETUP] Phase 2: Calculating levels for ${symbol}`);
 
           // Fetch intraday candles for daily open calculation (5m interval, 288 candles = 24 hours)
-          const intradayKlinesRes = await fetch(
-            `${baseUrl}/api/klines?symbol=${symbol}&interval=5&limit=288&testnet=false`
-          );
-
-          if (!intradayKlinesRes.ok) {
-            throw new Error(`Failed to fetch intraday data for ${symbol}`);
+          // Call getKlines directly instead of HTTP request to avoid Vercel issues
+          let intradayCandles: Candle[];
+          try {
+            // Try mainnet first for accurate data
+            try {
+              intradayCandles = await getKlines(symbol, '5', 288, false);
+            } catch (mainnetError) {
+              // Fallback to testnet if mainnet fails
+              console.warn(`[DAILY-SETUP] Mainnet failed for ${symbol}, trying testnet:`, mainnetError);
+              intradayCandles = await getKlines(symbol, '5', 288, true);
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            throw new Error(`Failed to fetch intraday data for ${symbol}: ${errorMsg}`);
           }
 
-          const intradayCandles = await intradayKlinesRes.json();
           if (!intradayCandles || intradayCandles.length === 0) {
             throw new Error(`No intraday data received for ${symbol}`);
           }
