@@ -77,30 +77,62 @@ export class OrderflowAnalyzer {
     currentPrice: number,
     side: 'LONG' | 'SHORT'
   ): Promise<OrderflowSignal> {
-    // Get current order book snapshot
+    // Detect if we're in a serverless environment (Vercel cron, etc.)
+    // WebSocket works in browser and long-running servers, but not in serverless functions
+    const isServerless = !!process.env.VERCEL;
+    
+    // Get current order book snapshot (from WebSocket if available)
     let snapshot = getOrderBookSnapshot(symbol);
 
-    // If no snapshot, start the orderbook websocket and wait a bit for data
-    if (!snapshot) {
-      console.log(`[ORDERFLOW] No orderbook snapshot for ${symbol}, starting websocket...`);
-      startOrderBook(symbol);
-      
-      // Wait a short time for the websocket to connect and receive data
-      // Give it up to 500ms to get initial data
-      for (let i = 0; i < 10; i++) {
-        await new Promise(resolve => setTimeout(resolve, 50));
-        snapshot = getOrderBookSnapshot(symbol);
+    // If no snapshot, try to get one
+    if (!snapshot || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+      // In serverless, WebSocket won't work, so try REST API first
+      // In browser/server, try WebSocket first (better for real-time)
+      if (isServerless) {
+        console.log(`[ORDERFLOW] Serverless environment detected, fetching orderbook via REST API for ${symbol}...`);
+        const { fetchOrderBookSnapshot } = await import('../orderbook');
+        snapshot = await fetchOrderBookSnapshot(symbol, 50);
+        
         if (snapshot && snapshot.bids.length > 0 && snapshot.asks.length > 0) {
-          console.log(`[ORDERFLOW] ✓ Orderbook data received for ${symbol} after ${(i + 1) * 50}ms`);
-          break;
+          console.log(`[ORDERFLOW] ✓ Orderbook data fetched via REST API for ${symbol} (${snapshot.bids.length} bids, ${snapshot.asks.length} asks)`);
+        }
+      } else {
+        // Not serverless - try WebSocket first (better for real-time updates)
+        console.log(`[ORDERFLOW] No orderbook snapshot in buffer for ${symbol}, starting WebSocket...`);
+        startOrderBook(symbol);
+        
+        // Wait for WebSocket to connect and receive data
+        // Give it up to 500ms to get initial data
+        for (let i = 0; i < 10; i++) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          snapshot = getOrderBookSnapshot(symbol);
+          if (snapshot && snapshot.bids.length > 0 && snapshot.asks.length > 0) {
+            console.log(`[ORDERFLOW] ✓ Orderbook data received via WebSocket for ${symbol} after ${(i + 1) * 50}ms`);
+            break;
+          }
+        }
+        
+        // If WebSocket failed, fallback to REST API
+        if (!snapshot || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+          console.log(`[ORDERFLOW] WebSocket failed, falling back to REST API for ${symbol}...`);
+          const { fetchOrderBookSnapshot } = await import('../orderbook');
+          snapshot = await fetchOrderBookSnapshot(symbol, 50);
+          
+          if (snapshot && snapshot.bids.length > 0 && snapshot.asks.length > 0) {
+            console.log(`[ORDERFLOW] ✓ Orderbook data fetched via REST API fallback for ${symbol} (${snapshot.bids.length} bids, ${snapshot.asks.length} asks)`);
+          }
         }
       }
       
-      // If still no snapshot after waiting, use fallback
+      // If still no snapshot after all attempts, use fallback
       if (!snapshot || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
-        console.log(`[ORDERFLOW] No orderbook snapshot for ${symbol} after starting websocket, using price action fallback`);
-        return this.getFallbackSignal(side, currentPrice, level);
+        console.log(`[ORDERFLOW] No orderbook snapshot available for ${symbol} (all methods failed), using price action fallback`);
+        const fallbackSignal = this.getFallbackSignal(side, currentPrice, level);
+        console.log(`[ORDERFLOW] Fallback signal: bias=${fallbackSignal.bias}, confidence=${fallbackSignal.confidence.toFixed(2)}`);
+        return fallbackSignal;
       }
+    } else {
+      console.log(`[ORDERFLOW] Using cached WebSocket orderbook snapshot for ${symbol} (${snapshot.bids.length} bids, ${snapshot.asks.length} asks)`);
     }
 
     // Analyze order book structure
@@ -111,19 +143,83 @@ export class OrderflowAnalyzer {
       side
     );
 
-    // Analyze volume flow
-    const volumeFlags = this.analyzeVolumeFlow(side);
-    
-    // If confidence is very low (< 0.1), enhance with volume flow
-    let finalConfidence = confidence;
-    if (confidence < 0.1) {
-      if ((side === 'LONG' && volumeFlags.buyVolumeSurge) || 
-          (side === 'SHORT' && volumeFlags.sellVolumeSurge)) {
-        finalConfidence = Math.max(confidence, 0.3); // Boost confidence if volume confirms
+    // Calculate notional values for logging
+    const proximity = (level * this.config.wallProximityBps) / 10000;
+    let bidNotional = 0;
+    let askNotional = 0;
+    for (const bid of snapshot.bids) {
+      if (Math.abs(bid.price - level) <= proximity && bid.price <= level) {
+        bidNotional += bid.price * bid.size;
+      }
+    }
+    for (const ask of snapshot.asks) {
+      if (Math.abs(ask.price - level) <= proximity && ask.price >= level) {
+        askNotional += ask.price * ask.size;
       }
     }
 
-    return {
+    console.log(`[ORDERFLOW] Orderbook analysis: bias=${bias}, confidence=${confidence.toFixed(2)}, bidNotional=$${bidNotional.toFixed(0)}, askNotional=$${askNotional.toFixed(0)}, minRequired=$${this.config.minWallNotional}`);
+
+    // If orderbook confidence is very low (< 0.2), use fallback logic (price action + volume)
+    // This handles cases where orderbook data exists but doesn't show clear walls
+    if (confidence < 0.2) {
+      console.log(`[ORDERFLOW] Orderbook confidence too low (${confidence.toFixed(2)}), using enhanced fallback`);
+      const fallbackSignal = this.getFallbackSignal(side, currentPrice, level);
+      
+      // Combine orderbook bias (if any) with fallback
+      let combinedBias = fallbackSignal.bias;
+      let combinedConfidence = fallbackSignal.confidence;
+      
+      // If orderbook shows some bias (even if low confidence), use it
+      if (bias !== 'neutral' && confidence > 0) {
+        combinedBias = bias;
+        // Boost confidence slightly if orderbook and fallback agree
+        if (bias === fallbackSignal.bias) {
+          combinedConfidence = Math.min(0.5, fallbackSignal.confidence + confidence * 0.2);
+        }
+      }
+      
+      // Analyze volume flow
+      const volumeFlags = this.analyzeVolumeFlow(side);
+      console.log(`[ORDERFLOW] Volume flow: buySurge=${volumeFlags.buyVolumeSurge}, sellSurge=${volumeFlags.sellVolumeSurge}`);
+      
+      // Enhance with volume flow
+      if ((side === 'LONG' && volumeFlags.buyVolumeSurge) || 
+          (side === 'SHORT' && volumeFlags.sellVolumeSurge)) {
+        if (combinedBias === (side === 'LONG' ? 'long' : 'short')) {
+          combinedConfidence = Math.max(combinedConfidence, 0.4);
+          console.log(`[ORDERFLOW] Volume surge confirms bias, boosting confidence to ${combinedConfidence.toFixed(2)}`);
+        }
+      }
+      
+      const result = {
+        bias: combinedBias,
+        confidence: combinedConfidence,
+        flags: {
+          absorbingBids: flags.absorbingBids,
+          absorbingAsks: flags.absorbingAsks,
+          buyVolumeSurge: volumeFlags.buyVolumeSurge,
+          sellVolumeSurge: volumeFlags.sellVolumeSurge,
+        },
+      };
+      
+      console.log(`[ORDERFLOW] Final signal (enhanced fallback): bias=${result.bias}, confidence=${result.confidence.toFixed(2)}`);
+      return result;
+    }
+
+    // Analyze volume flow for high-confidence orderbook signals
+    const volumeFlags = this.analyzeVolumeFlow(side);
+    console.log(`[ORDERFLOW] Volume flow: buySurge=${volumeFlags.buyVolumeSurge}, sellSurge=${volumeFlags.sellVolumeSurge}`);
+    
+    // Enhance high-confidence signals with volume
+    let finalConfidence = confidence;
+    if ((side === 'LONG' && volumeFlags.buyVolumeSurge) || 
+        (side === 'SHORT' && volumeFlags.sellVolumeSurge)) {
+      finalConfidence = Math.min(1, confidence * 1.1); // Slight boost
+      console.log(`[ORDERFLOW] Volume surge detected, boosting confidence from ${confidence.toFixed(2)} to ${finalConfidence.toFixed(2)}`);
+    }
+
+    const result = {
       bias,
       confidence: finalConfidence,
       flags: {
@@ -133,6 +229,9 @@ export class OrderflowAnalyzer {
         sellVolumeSurge: volumeFlags.sellVolumeSurge,
       },
     };
+    
+    console.log(`[ORDERFLOW] Final signal: bias=${result.bias}, confidence=${result.confidence.toFixed(2)}`);
+    return result;
   }
 
   /**

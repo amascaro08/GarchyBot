@@ -266,3 +266,79 @@ export function getOrderBookSnapshot(symbol: string): DepthSnapshot | null {
   if (!buf || buf.length === 0) return null;
   return buf[buf.length - 1];
 }
+
+/**
+ * Fetch orderbook snapshot via REST API (serverless-friendly)
+ * Falls back to this when WebSocket isn't available
+ */
+export async function fetchOrderBookSnapshot(symbol: string, limit: number = 50): Promise<DepthSnapshot | null> {
+  try {
+    const isProduction = process.env.NODE_ENV === 'production';
+    const baseUrl = isProduction
+      ? 'https://api.bybit.com'
+      : 'https://api-testnet.bybit.com';
+    
+    const normalizedSymbol = symbol.toUpperCase();
+    const url = `${baseUrl}/v5/market/orderbook?category=linear&symbol=${normalizedSymbol}&limit=${limit}`;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+    
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.retCode !== 0) {
+      throw new Error(data.retMsg || 'Bybit API error');
+    }
+    
+    const orderbook = data.result;
+    if (!orderbook || !orderbook.b || !orderbook.a) {
+      throw new Error('Invalid orderbook response format');
+    }
+    
+    const bids = orderbook.b
+      .map((x: any[]) => ({ price: parseFloat(x[0]), size: parseFloat(x[1]) }))
+      .filter((e: DepthEntry) => !isNaN(e.price) && !isNaN(e.size) && e.price > 0 && e.size > 0);
+    
+    const asks = orderbook.a
+      .map((x: any[]) => ({ price: parseFloat(x[0]), size: parseFloat(x[1]) }))
+      .filter((e: DepthEntry) => !isNaN(e.price) && !isNaN(e.size) && e.price > 0 && e.size > 0);
+    
+    if (bids.length === 0 || asks.length === 0) {
+      throw new Error('Empty orderbook data');
+    }
+    
+    const snapshot: DepthSnapshot = {
+      ts: Date.now(),
+      bids,
+      asks,
+    };
+    
+    // Cache the snapshot in buffer for consistency
+    if (!buffers[symbol]) {
+      buffers[symbol] = [];
+    }
+    buffers[symbol].push(snapshot);
+    if (buffers[symbol].length > 10) {
+      buffers[symbol].shift(); // Keep last 10 snapshots
+    }
+    
+    return snapshot;
+  } catch (error) {
+    console.error(`[ORDERBOOK] Failed to fetch orderbook via REST for ${symbol}:`, error);
+    return null;
+  }
+}
