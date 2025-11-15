@@ -172,12 +172,15 @@ export class Garchy2StrategyEngine {
 
     // Update ORB
     const orbSignal = this.orb.update(currentPrice, timestamp, candles);
-    if (orbSignal.sessionBias !== 'neutral') {
-      // ORB has priority - if it sets a bias, use it
+    
+    // Only use ORB bias if it's a CONFIRMED breakout
+    // Unconfirmed ORB breakouts should not override VWAP-based bias
+    if (orbSignal.confirmed && orbSignal.sessionBias !== 'neutral') {
+      // ORB has priority - if it's a confirmed breakout, use it
       this.sessionBias = orbSignal.sessionBias;
-      console.log(`[GARCHY2] ORB set session bias: ${this.sessionBias}`);
+      console.log(`[GARCHY2] ORB confirmed breakout - session bias: ${this.sessionBias}`);
     } else {
-      // ORB didn't set a bias (no breakout detected) - use VWAP fallback
+      // ORB didn't confirm a breakout (no breakout or unconfirmed) - use VWAP fallback
       // VWAP logic: price < VWAP → short bias (bearish), price > VWAP → long bias (bullish)
       if (vwap && vwap > 0) {
         if (currentPrice < vwap) {
