@@ -10,7 +10,7 @@ import Sidebar from '@/components/Sidebar';
 import OrderBook from '@/components/OrderBook';
 import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
-import { computeTrailingBreakeven } from '@/lib/strategy';
+import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
 import { useWebSocket } from '@/lib/useWebSocket';
@@ -512,7 +512,24 @@ export default function Home() {
           }
         }
 
-        // Update trailing stop loss using current price
+        // Check for breakeven: if price goes against VWAP direction, move stop to entry
+        // This takes priority over trailing stop
+        if (levels?.vwap && levels.vwap > 0) {
+          const breakevenSl = applyBreakevenOnVWAPFlip(
+            currentPrice,
+            levels.vwap,
+            trade.side,
+            trade.entry,
+            trade.sl
+          );
+
+          if (breakevenSl !== null && breakevenSl !== trade.sl) {
+            await updateTradeStopOnServer(trade, breakevenSl);
+            continue; // Skip trailing stop if breakeven was applied
+          }
+        }
+
+        // Update trailing stop loss using current price (only if breakeven not applied)
         const initialSl = trade.initialSl ?? trade.sl;
         const trailingSl = computeTrailingBreakeven(
           trade.side,
@@ -529,7 +546,7 @@ export default function Home() {
     };
 
     checkTPSL();
-  }, [wsTicker?.lastPrice, wsTicker?.timestamp, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer]);
+  }, [wsTicker?.lastPrice, wsTicker?.timestamp, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer, levels?.vwap]);
 
   // Main polling function - uses current symbol/interval from closure
   const pollData = async () => {
@@ -709,6 +726,24 @@ export default function Home() {
         );
 
         for (const trade of openTradesSnapshot) {
+          // Check for breakeven: if price goes against VWAP direction, move stop to entry
+          // This takes priority over trailing stop
+          if (levels?.vwap && levels.vwap > 0) {
+            const breakevenSl = applyBreakevenOnVWAPFlip(
+              priceForChecks,
+              levels.vwap,
+              trade.side,
+              trade.entry,
+              trade.sl
+            );
+
+            if (breakevenSl !== null && breakevenSl !== trade.sl) {
+              await updateTradeStopOnServer(trade, breakevenSl);
+              continue; // Skip trailing stop if breakeven was applied
+            }
+          }
+
+          // Update trailing stop loss (only if breakeven not applied)
           const initialSl = trade.initialSl ?? trade.sl;
           const trailingSl = computeTrailingBreakeven(
             trade.side,
@@ -718,7 +753,7 @@ export default function Home() {
             priceForChecks
           );
 
-          if (trailingSl !== null) {
+          if (trailingSl !== null && trailingSl !== trade.sl) {
             await updateTradeStopOnServer(trade, trailingSl);
             continue;
           }

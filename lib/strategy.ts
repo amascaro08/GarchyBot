@@ -677,8 +677,67 @@ export function computeTrailingBreakeven(
 }
 
 /**
+ * Breakeven stop logic: if price goes against the VWAP direction that was initially happening, move stop to entry
+ * This invalidates the trade by moving stop loss to breakeven (entry price)
+ * 
+ * Requires a CONFIRMED direction change (not just a touch) to avoid whipsaws:
+ * - Uses a small buffer (0.1% of VWAP) to confirm the direction change
+ * - Price must be clearly on the other side of VWAP, not just touching it
+ * 
+ * Logic:
+ * - LONG trades: entered when price > VWAP (bullish bias). If price < VWAP - buffer, trade is invalidated → move to breakeven
+ * - SHORT trades: entered when price < VWAP (bearish bias). If price > VWAP + buffer, trade is invalidated → move to breakeven
+ * 
+ * @param currentPrice Current market price
+ * @param currentVWAP Current VWAP value
+ * @param side Trade side ('LONG' or 'SHORT')
+ * @param entry Entry price
+ * @param currentSl Current stop loss
+ * @param confirmationBufferPct Percentage buffer for confirmation (default 0.1% = 0.001)
+ * @returns New stop loss (entry price if breakeven should be applied, null if not)
+ */
+export function applyBreakevenOnVWAPFlip(
+  currentPrice: number,
+  currentVWAP: number,
+  side: 'LONG' | 'SHORT',
+  entry: number,
+  currentSl: number,
+  confirmationBufferPct: number = 0.001 // 0.1% buffer to confirm direction change
+): number | null {
+  // Only apply if current SL is not already at or beyond entry (breakeven)
+  const isAlreadyAtBreakeven = side === 'LONG' 
+    ? currentSl >= entry 
+    : currentSl <= entry;
+  
+  if (isAlreadyAtBreakeven) {
+    return null; // Already at breakeven or better
+  }
+
+  // Calculate confirmation buffer (small percentage of VWAP to avoid whipsaws)
+  const buffer = currentVWAP * confirmationBufferPct;
+
+  if (side === 'LONG') {
+    // LONG trades: entered when price > VWAP (bullish bias)
+    // Require confirmed direction change: price must be clearly below VWAP (VWAP - buffer)
+    // This ensures it's not just a touch, but a confirmed move against the trade
+    if (currentPrice < currentVWAP - buffer) {
+      return entry; // Move stop to entry (breakeven)
+    }
+  } else {
+    // SHORT trades: entered when price < VWAP (bearish bias)
+    // Require confirmed direction change: price must be clearly above VWAP (VWAP + buffer)
+    // This ensures it's not just a touch, but a confirmed move against the trade
+    if (currentPrice > currentVWAP + buffer) {
+      return entry; // Move stop to entry (breakeven)
+    }
+  }
+  
+  return null; // No breakeven needed
+}
+
+/**
  * Breakeven stop logic: if VWAP flips against open trade, move stop to entry
- * @deprecated Use applyBreakeven instead - this function checks VWAP position relative to entry, not price
+ * @deprecated Use applyBreakevenOnVWAPFlip instead - this function checks VWAP position relative to entry, not price
  */
 export function breakevenStopOnVWAPFlip(
   currentVWAP: number,

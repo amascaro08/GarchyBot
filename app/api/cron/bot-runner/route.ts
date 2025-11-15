@@ -16,7 +16,7 @@ import {
   checkPhase2Completed,
   updateTrade,
 } from '@/lib/db';
-import { computeTrailingBreakeven } from '@/lib/strategy';
+import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
 import { placeOrder, cancelOrder } from '@/lib/bybit';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import type { Candle } from '@/lib/types';
@@ -638,27 +638,29 @@ export async function POST(request: NextRequest) {
                           console.log(`[CRON] Updated trade ${trade.id} P&L from Bybit: ${unrealizedPnl.toFixed(2)}`);
                         }
                         
-                        // Update trailing stop based on VWAP (still use this logic)
+                        // Check for breakeven: if price goes against VWAP direction, move stop to entry
                         const entryPrice = Number(trade.entry_price);
                         const initialSl = Number(trade.sl_price);
                         const currentSl = Number(trade.current_sl ?? trade.sl_price);
+                        const currentVWAP = levels.vwap;
                         
-                        const trailingSl = computeTrailingBreakeven(
+                        // Apply breakeven if price invalidates the trade (goes against VWAP direction)
+                        const breakevenSl = applyBreakevenOnVWAPFlip(
+                          markPrice,
+                          currentVWAP,
                           trade.side as 'LONG' | 'SHORT',
                           entryPrice,
-                          initialSl,
-                          currentSl,
-                          markPrice
+                          currentSl
                         );
                         
-                        if (trailingSl !== null && Math.abs(trailingSl - currentSl) > 0.01) {
-                          await updateTrade(trade.id, { current_sl: trailingSl } as any);
+                        if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {
+                          await updateTrade(trade.id, { current_sl: breakevenSl } as any);
                           // Also update on Bybit
                           try {
                             const { setTakeProfitStopLoss } = await import('@/lib/bybit');
                             await setTakeProfitStopLoss({
                               symbol: trade.symbol,
-                              stopLoss: trailingSl,
+                              stopLoss: breakevenSl,
                               testnet: false,
                               apiKey: botConfig.api_key,
                               apiSecret: botConfig.api_secret,
@@ -666,13 +668,48 @@ export async function POST(request: NextRequest) {
                             });
                             await addActivityLog(
                               botConfig.user_id,
-                              'info',
-                              `Stop moved: ${trade.side} ${trade.symbol} SL → $${trailingSl.toFixed(2)}`,
-                              null,
+                              'warning',
+                              `Breakeven applied: ${trade.side} ${trade.symbol} SL → $${breakevenSl.toFixed(2)} (price invalidated trade - moved against VWAP direction)`,
+                              { currentPrice: markPrice, vwap: currentVWAP, entry: entryPrice },
                               botConfig.id
                             );
+                            console.log(`[CRON] Breakeven applied for trade ${trade.id}: ${trade.side} ${trade.symbol}, price ${markPrice.toFixed(2)} vs VWAP ${currentVWAP.toFixed(2)}`);
                           } catch (slError) {
-                            console.error(`[CRON] Failed to update SL on Bybit:`, slError);
+                            console.error(`[CRON] Failed to update SL to breakeven on Bybit:`, slError);
+                          }
+                        } else {
+                          // Update trailing stop based on VWAP (only if breakeven not applied)
+                          const trailingSl = computeTrailingBreakeven(
+                            trade.side as 'LONG' | 'SHORT',
+                            entryPrice,
+                            initialSl,
+                            currentSl,
+                            markPrice
+                          );
+                          
+                          if (trailingSl !== null && Math.abs(trailingSl - currentSl) > 0.01) {
+                            await updateTrade(trade.id, { current_sl: trailingSl } as any);
+                            // Also update on Bybit
+                            try {
+                              const { setTakeProfitStopLoss } = await import('@/lib/bybit');
+                              await setTakeProfitStopLoss({
+                                symbol: trade.symbol,
+                                stopLoss: trailingSl,
+                                testnet: false,
+                                apiKey: botConfig.api_key,
+                                apiSecret: botConfig.api_secret,
+                                positionIdx: 0,
+                              });
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'info',
+                                `Stop moved: ${trade.side} ${trade.symbol} SL → $${trailingSl.toFixed(2)}`,
+                                null,
+                                botConfig.id
+                              );
+                            } catch (slError) {
+                              console.error(`[CRON] Failed to update SL on Bybit:`, slError);
+                            }
                           }
                         }
                       }
@@ -693,7 +730,31 @@ export async function POST(request: NextRequest) {
               const initialSl = Number(trade.sl_price);
               const currentSl = Number(trade.current_sl ?? trade.sl_price);
               const positionSize = Number(trade.position_size);
+              const currentVWAP = levels.vwap;
 
+              // Check for breakeven: if price goes against VWAP direction, move stop to entry
+              const breakevenSl = applyBreakevenOnVWAPFlip(
+                lastClose,
+                currentVWAP,
+                trade.side as 'LONG' | 'SHORT',
+                entryPrice,
+                currentSl
+              );
+
+              if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {
+                await updateTrade(trade.id, { current_sl: breakevenSl } as any);
+                await addActivityLog(
+                  botConfig.user_id,
+                  'warning',
+                  `Breakeven applied: ${trade.side} ${trade.symbol} SL → $${breakevenSl.toFixed(2)} (price invalidated trade - moved against VWAP direction)`,
+                  { currentPrice: lastClose, vwap: currentVWAP, entry: entryPrice },
+                  botConfig.id
+                );
+                console.log(`[CRON] Breakeven applied for trade ${trade.id}: ${trade.side} ${trade.symbol}, price ${lastClose.toFixed(2)} vs VWAP ${currentVWAP.toFixed(2)}`);
+                continue;
+              }
+
+              // Update trailing stop based on VWAP (only if breakeven not applied)
               const trailingSl = computeTrailingBreakeven(
                 trade.side as 'LONG' | 'SHORT',
                 entryPrice,
@@ -702,7 +763,7 @@ export async function POST(request: NextRequest) {
                 lastClose
               );
 
-              if (trailingSl !== null) {
+              if (trailingSl !== null && Math.abs(trailingSl - currentSl) > 0.01) {
                 await updateTrade(trade.id, { current_sl: trailingSl } as any);
                 await addActivityLog(
                   botConfig.user_id,
