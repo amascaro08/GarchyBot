@@ -894,6 +894,16 @@ export async function updatePhaseStatus(
   error?: string
 ): Promise<DailyPhase> {
   try {
+    // Use UTC date to ensure consistency (same as daily_levels and checkPhase2Completed)
+    const nowUTC = new Date();
+    const utcDate = new Date(Date.UTC(
+      nowUTC.getUTCFullYear(),
+      nowUTC.getUTCMonth(),
+      nowUTC.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    const dateStr = utcDate.toISOString().split('T')[0]; // YYYY-MM-DD in UTC
+    
     const phaseColumn = phase === 1 ? 'phase1_completed' : 'phase2_completed';
     const timestampColumn = phase === 1 ? 'phase1_timestamp' : 'phase2_timestamp';
 
@@ -903,19 +913,30 @@ export async function updatePhaseStatus(
     }
 
     if (error) {
-      setClauses.push('last_error = $2', 'error_timestamp = NOW()');
+      setClauses.push('last_error = $3', 'error_timestamp = NOW()');
     }
 
-    const query = `
-      INSERT INTO daily_phases (symbol, date, ${phaseColumn}, ${timestampColumn}${error ? ', last_error, error_timestamp' : ''})
-      VALUES ($1, CURRENT_DATE, ${completed ? 'true' : 'false'}, ${completed ? 'NOW()' : 'NULL'}${error ? ', $2, NOW()' : ''})
-      ON CONFLICT (symbol, date)
-      DO UPDATE SET
-        ${setClauses.join(', ')}
-      RETURNING *
-    `;
+    // Build query with correct parameter positions
+    // Parameters: $1 = symbol, $2 = dateStr, $3 = error (if exists)
+    const query = error
+      ? `
+        INSERT INTO daily_phases (symbol, date, ${phaseColumn}, ${timestampColumn}, last_error, error_timestamp)
+        VALUES ($1, $2::date, ${completed ? 'true' : 'false'}, ${completed ? 'NOW()' : 'NULL'}, $3, NOW())
+        ON CONFLICT (symbol, date)
+        DO UPDATE SET
+          ${setClauses.join(', ')}
+        RETURNING *
+      `
+      : `
+        INSERT INTO daily_phases (symbol, date, ${phaseColumn}, ${timestampColumn})
+        VALUES ($1, $2::date, ${completed ? 'true' : 'false'}, ${completed ? 'NOW()' : 'NULL'})
+        ON CONFLICT (symbol, date)
+        DO UPDATE SET
+          ${setClauses.join(', ')}
+        RETURNING *
+      `;
 
-    const result = await sql.query(query, error ? [symbol, error] : [symbol]);
+    const result = await sql.query(query, error ? [symbol, dateStr, error] : [symbol, dateStr]);
     return result.rows[0];
   } catch (err) {
     console.error('Error updating phase status:', err);
@@ -950,6 +971,17 @@ export async function checkPhase1Completed(symbol: string, date?: string): Promi
 }
 
 export async function checkPhase2Completed(symbol: string, date?: string): Promise<boolean> {
+  // If no date provided, use today's UTC date (same as updatePhaseStatus uses)
+  if (!date) {
+    const nowUTC = new Date();
+    const utcDate = new Date(Date.UTC(
+      nowUTC.getUTCFullYear(),
+      nowUTC.getUTCMonth(),
+      nowUTC.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    date = utcDate.toISOString().split('T')[0]; // YYYY-MM-DD in UTC
+  }
   const phase = await getPhaseStatus(symbol, date);
   return phase?.phase2_completed || false;
 }
