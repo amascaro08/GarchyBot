@@ -364,7 +364,7 @@ export class Garchy2StrategyEngine {
           continue;
         }
 
-        const { tp, sl } = this.calculateTPSL(side, boundary, zoneLevels);
+        const { tp, sl } = this.calculateTPSL(boundary, side, zoneLevels);
 
         const confidence = this.calculateConfidence({
           orderflow,
