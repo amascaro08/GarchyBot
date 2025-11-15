@@ -1286,10 +1286,9 @@ export async function POST(request: NextRequest) {
                       }
                     } // End if (approved)
                   } // End else block (cooldown check)
-                }
-              }
-            }
-          }
+                } // End if (!isDuplicate)
+              } // End if (openTradesCount < botConfig.max_trades)
+            } // End if (signal.signal && signal.touchedLevel)
 
           // Update last polled timestamp
           await updateLastPolled(botConfig.id);
