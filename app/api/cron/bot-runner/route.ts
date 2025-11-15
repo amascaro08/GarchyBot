@@ -1060,7 +1060,21 @@ export async function POST(request: NextRequest) {
             const entryPrice = signal.entry;
             const openTradesCount = openTrades.length;
 
-            if (openTradesCount < botConfig.max_trades) {
+            console.log(`[CRON] Signal detected - checking trade execution conditions:`);
+            console.log(`  Entry price: ${entryPrice.toFixed(2)}`);
+            console.log(`  Open trades: ${openTradesCount}/${botConfig.max_trades}`);
+            console.log(`  Signal side: ${signal.side}`);
+
+            if (openTradesCount >= botConfig.max_trades) {
+              console.log(`[CRON] Trade blocked - Max trades reached (${openTradesCount}/${botConfig.max_trades})`);
+              await addActivityLog(
+                botConfig.user_id,
+                'info',
+                `Trade signal ignored - max trades reached (${openTradesCount}/${botConfig.max_trades})`,
+                { signal: signal.side, level: entryPrice },
+                botConfig.id
+              );
+            } else {
               // Check for duplicate trade
               const isDuplicate = openTrades.some(
                 (t) =>
@@ -1069,7 +1083,16 @@ export async function POST(request: NextRequest) {
                   Math.abs(Number(t.entry_price) - entryPrice) < 0.01
               );
 
-              if (!isDuplicate) {
+              if (isDuplicate) {
+                console.log(`[CRON] Trade blocked - Duplicate trade exists at ${entryPrice.toFixed(2)}`);
+                await addActivityLog(
+                  botConfig.user_id,
+                  'info',
+                  `Trade signal ignored - duplicate trade exists at ${entryPrice.toFixed(2)}`,
+                  { signal: signal.side, level: entryPrice },
+                  botConfig.id
+                );
+              } else {
                 // Check trade cooldown: don't enter new trades within 5 minutes of last trade
                 const lastTrade = openTrades
                   .filter(t => t.symbol === botConfig.symbol)
@@ -1079,13 +1102,15 @@ export async function POST(request: NextRequest) {
                     return bTime - aTime;
                   })[0];
                 
+                let cooldownPassed = true;
                 if (lastTrade && lastTrade.entry_time) {
                   const lastTradeTime = new Date(lastTrade.entry_time).getTime();
                   const timeSinceLastTrade = Date.now() - lastTradeTime;
                   const cooldownMs = 300000; // 5 minutes cooldown
                   
                   if (timeSinceLastTrade < cooldownMs) {
-                    console.log(`[CRON] Trade cooldown active - last trade was ${Math.round(timeSinceLastTrade / 1000)}s ago, need ${cooldownMs / 1000}s`);
+                    cooldownPassed = false;
+                    console.log(`[CRON] Trade blocked - Cooldown active (last trade was ${Math.round(timeSinceLastTrade / 1000)}s ago, need ${cooldownMs / 1000}s)`);
                     await addActivityLog(
                       botConfig.user_id,
                       'info',
@@ -1093,31 +1118,47 @@ export async function POST(request: NextRequest) {
                       { signal: signal.side, level: entryPrice, timeSinceLastTrade },
                       botConfig.id
                     );
-                    // Skip this signal, wait for cooldown
-                    // Continue to next iteration - skip rest of trade creation
                   } else {
-                    // Cooldown passed, proceed with trade creation
-                    
-                    // Mandatory: Order book confirmation
-                    // Rules: The bot must scan the Level 2 Order Book at that exact level and see:
-                    // - LONG: significant increase in buy-side limit orders (buy wall) OR rapid execution of sell orders
-                    // - SHORT: significant increase in sell-side limit orders (sell wall) OR rapid execution of buy orders
-                    let approved = false;
-                    try {
-                      approved = await confirmLevelTouch({
-                        symbol: botConfig.symbol,
-                        level: entryPrice,
-                        side: signal.side,
-                        windowMs: 8000, // 8 second window to observe order book activity
-                        minNotional: 50000, // Minimum $50k notional for wall detection
-                        proximityBps: 5, // 0.05% proximity to level
-                      });
-                    } catch (err) {
-                      console.error('Order book confirmation error:', err);
-                      approved = false;
-                    }
+                    console.log(`[CRON] Cooldown passed (${Math.round(timeSinceLastTrade / 1000)}s since last trade)`);
+                  }
+                } else {
+                  console.log(`[CRON] No previous trades, cooldown check skipped`);
+                }
+                
+                if (cooldownPassed) {
+                  // Cooldown passed (or no previous trades), proceed with trade creation
+                  
+                  // Mandatory: Order book confirmation
+                  // Rules: The bot must scan the Level 2 Order Book at that exact level and see:
+                  // - LONG: significant increase in buy-side limit orders (buy wall) OR rapid execution of sell orders
+                  // - SHORT: significant increase in sell-side limit orders (sell wall) OR rapid execution of buy orders
+                  console.log(`[CRON] Checking order book confirmation for ${signal.side} @ ${entryPrice.toFixed(2)}...`);
+                  let approved = false;
+                  try {
+                    approved = await confirmLevelTouch({
+                      symbol: botConfig.symbol,
+                      level: entryPrice,
+                      side: signal.side,
+                      windowMs: 8000, // 8 second window to observe order book activity
+                      minNotional: 50000, // Minimum $50k notional for wall detection
+                      proximityBps: 5, // 0.05% proximity to level
+                    });
+                    console.log(`[CRON] Order book confirmation result: ${approved ? 'APPROVED' : 'REJECTED'}`);
+                  } catch (err) {
+                    console.error('[CRON] Order book confirmation error:', err);
+                    approved = false;
+                  }
 
-                    if (approved) {
+                  if (!approved) {
+                    console.log(`[CRON] Trade blocked - Order book confirmation failed (no $50k+ wall detected near ${entryPrice.toFixed(2)})`);
+                    await addActivityLog(
+                      botConfig.user_id,
+                      'info',
+                      `Trade signal ignored - order book confirmation failed (no significant wall detected at ${entryPrice.toFixed(2)})`,
+                      { signal: signal.side, level: entryPrice },
+                      botConfig.id
+                    );
+                  } else {
                       // Calculate actual capital to use based on risk_type and risk_amount
                       let capitalToUse: number;
                       if (botConfig.risk_type === 'percent') {

@@ -135,6 +135,17 @@ export class OrderflowAnalyzer {
       console.log(`[ORDERFLOW] Using cached WebSocket orderbook snapshot for ${symbol} (${snapshot.bids.length} bids, ${snapshot.asks.length} asks)`);
     }
 
+    // Log orderbook snapshot details
+    console.log(`[ORDERFLOW] Orderbook snapshot details:`);
+    console.log(`  Total bids: ${snapshot.bids.length}, Total asks: ${snapshot.asks.length}`);
+    if (snapshot.bids.length > 0) {
+      console.log(`  Best bid: $${snapshot.bids[0].price.toFixed(2)} (size: ${snapshot.bids[0].size.toFixed(4)})`);
+    }
+    if (snapshot.asks.length > 0) {
+      console.log(`  Best ask: $${snapshot.asks[0].price.toFixed(2)} (size: ${snapshot.asks[0].size.toFixed(4)})`);
+    }
+    console.log(`  Target level: $${level.toFixed(2)}, Current price: $${currentPrice.toFixed(2)}`);
+
     // Analyze order book structure
     const { bias, confidence, flags } = this.analyzeOrderBook(
       snapshot,
@@ -145,20 +156,45 @@ export class OrderflowAnalyzer {
 
     // Calculate notional values for logging
     const proximity = (level * this.config.wallProximityBps) / 10000;
+    console.log(`[ORDERFLOW] Proximity check: ±$${proximity.toFixed(2)} (${this.config.wallProximityBps} bps) from level $${level.toFixed(2)}`);
+    console.log(`[ORDERFLOW]   Level range: $${(level - proximity).toFixed(2)} to $${(level + proximity).toFixed(2)}`);
+    
     let bidNotional = 0;
     let askNotional = 0;
+    let bidsNearLevel = 0;
+    let asksNearLevel = 0;
+    
+    // Log a few sample prices to verify data
+    if (snapshot.bids.length > 0) {
+      console.log(`[ORDERFLOW] Sample bid prices: ${snapshot.bids.slice(0, 5).map(b => `$${b.price.toFixed(2)}`).join(', ')}`);
+    }
+    if (snapshot.asks.length > 0) {
+      console.log(`[ORDERFLOW] Sample ask prices: ${snapshot.asks.slice(0, 5).map(a => `$${a.price.toFixed(2)}`).join(', ')}`);
+    }
+    
     for (const bid of snapshot.bids) {
-      if (Math.abs(bid.price - level) <= proximity && bid.price <= level) {
+      const distance = Math.abs(bid.price - level);
+      const withinProximity = distance <= proximity;
+      const belowOrAtLevel = bid.price <= level;
+      if (withinProximity && belowOrAtLevel) {
         bidNotional += bid.price * bid.size;
+        bidsNearLevel++;
       }
     }
     for (const ask of snapshot.asks) {
-      if (Math.abs(ask.price - level) <= proximity && ask.price >= level) {
+      const distance = Math.abs(ask.price - level);
+      const withinProximity = distance <= proximity;
+      const aboveOrAtLevel = ask.price >= level;
+      if (withinProximity && aboveOrAtLevel) {
         askNotional += ask.price * ask.size;
+        asksNearLevel++;
       }
     }
 
-    console.log(`[ORDERFLOW] Orderbook analysis: bias=${bias}, confidence=${confidence.toFixed(2)}, bidNotional=$${bidNotional.toFixed(0)}, askNotional=$${askNotional.toFixed(0)}, minRequired=$${this.config.minWallNotional}`);
+    console.log(`[ORDERFLOW] Orderbook analysis: bias=${bias}, confidence=${confidence.toFixed(2)}`);
+    console.log(`[ORDERFLOW]   Bids near level: ${bidsNearLevel}, Notional: $${bidNotional.toFixed(0)}`);
+    console.log(`[ORDERFLOW]   Asks near level: ${asksNearLevel}, Notional: $${askNotional.toFixed(0)}`);
+    console.log(`[ORDERFLOW]   Min required: $${this.config.minWallNotional}`);
 
     // If orderbook confidence is very low (< 0.2), use fallback logic (price action + volume)
     // This handles cases where orderbook data exists but doesn't show clear walls

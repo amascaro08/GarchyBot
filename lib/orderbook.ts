@@ -281,6 +281,8 @@ export async function fetchOrderBookSnapshot(symbol: string, limit: number = 50)
     const normalizedSymbol = symbol.toUpperCase();
     const url = `${baseUrl}/v5/market/orderbook?category=linear&symbol=${normalizedSymbol}&limit=${limit}`;
     
+    console.log(`[ORDERBOOK] Fetching orderbook via REST API for ${normalizedSymbol} from ${baseUrl}...`);
+    
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
     
@@ -321,6 +323,20 @@ export async function fetchOrderBookSnapshot(symbol: string, limit: number = 50)
       throw new Error('Empty orderbook data');
     }
     
+    // Calculate total notional for logging
+    const bidNotional = bids.reduce((sum, b) => sum + b.price * b.size, 0);
+    const askNotional = asks.reduce((sum, a) => sum + a.price * a.size, 0);
+    
+    console.log(`[ORDERBOOK] ✓ REST API orderbook fetched for ${normalizedSymbol}:`);
+    console.log(`  Bids: ${bids.length} levels, Total notional: $${bidNotional.toFixed(0)}`);
+    console.log(`  Asks: ${asks.length} levels, Total notional: $${askNotional.toFixed(0)}`);
+    if (bids.length > 0) {
+      console.log(`  Best bid: $${bids[0].price.toFixed(2)} (size: ${bids[0].size.toFixed(4)})`);
+    }
+    if (asks.length > 0) {
+      console.log(`  Best ask: $${asks[0].price.toFixed(2)} (size: ${asks[0].size.toFixed(4)})`);
+    }
+    
     const snapshot: DepthSnapshot = {
       ts: Date.now(),
       bids,
@@ -338,7 +354,8 @@ export async function fetchOrderBookSnapshot(symbol: string, limit: number = 50)
     
     return snapshot;
   } catch (error) {
-    console.error(`[ORDERBOOK] Failed to fetch orderbook via REST for ${symbol}:`, error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[ORDERBOOK] Failed to fetch orderbook via REST for ${symbol}:`, errorMsg);
     return null;
   }
 }
