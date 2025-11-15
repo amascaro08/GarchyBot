@@ -153,12 +153,19 @@ export async function POST(request: NextRequest) {
           }
 
           // Fetch current market data
-          const klinesRes = await fetch(
-            `${baseUrl}/api/klines?symbol=${botConfig.symbol}&interval=${botConfig.candle_interval}&limit=200&testnet=false`
-          );
+          let klinesRes;
+          try {
+            klinesRes = await fetch(
+              `${baseUrl}/api/klines?symbol=${botConfig.symbol}&interval=${botConfig.candle_interval}&limit=200&testnet=false`
+            );
 
-          if (!klinesRes.ok) {
-            throw new Error('Failed to fetch klines');
+            if (!klinesRes.ok) {
+              const errorText = await klinesRes.text();
+              throw new Error(`Failed to fetch klines for bot ${botConfig.id} (${botConfig.symbol}): ${klinesRes.status} ${errorText}`);
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            throw new Error(`Failed to fetch klines for bot ${botConfig.id} (${botConfig.symbol}): ${errorMsg}`);
           }
 
           const candles: Candle[] = await klinesRes.json();

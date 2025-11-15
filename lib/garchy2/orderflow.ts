@@ -5,7 +5,7 @@
  * Acts as a gatekeeper for trade entries from ORB, GARCH boundaries, and imbalance levels.
  */
 
-import { getOrderBookSnapshot, type DepthSnapshot } from '../orderbook';
+import { getOrderBookSnapshot, startOrderBook, type DepthSnapshot } from '../orderbook';
 import type { Candle } from '../types';
 
 export type OrderflowBias = 'long' | 'short' | 'neutral';
@@ -78,12 +78,29 @@ export class OrderflowAnalyzer {
     side: 'LONG' | 'SHORT'
   ): Promise<OrderflowSignal> {
     // Get current order book snapshot
-    const snapshot = getOrderBookSnapshot(symbol);
+    let snapshot = getOrderBookSnapshot(symbol);
 
+    // If no snapshot, start the orderbook websocket and wait a bit for data
     if (!snapshot) {
-      // No order book data - return fallback signal based on price action
-      console.log(`[ORDERFLOW] No orderbook snapshot for ${symbol}, using price action fallback`);
-      return this.getFallbackSignal(side, currentPrice, level);
+      console.log(`[ORDERFLOW] No orderbook snapshot for ${symbol}, starting websocket...`);
+      startOrderBook(symbol);
+      
+      // Wait a short time for the websocket to connect and receive data
+      // Give it up to 500ms to get initial data
+      for (let i = 0; i < 10; i++) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        snapshot = getOrderBookSnapshot(symbol);
+        if (snapshot && snapshot.bids.length > 0 && snapshot.asks.length > 0) {
+          console.log(`[ORDERFLOW] ✓ Orderbook data received for ${symbol} after ${(i + 1) * 50}ms`);
+          break;
+        }
+      }
+      
+      // If still no snapshot after waiting, use fallback
+      if (!snapshot || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+        console.log(`[ORDERFLOW] No orderbook snapshot for ${symbol} after starting websocket, using price action fallback`);
+        return this.getFallbackSignal(side, currentPrice, level);
+      }
     }
 
     // Analyze order book structure

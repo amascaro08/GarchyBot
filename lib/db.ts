@@ -783,10 +783,29 @@ export async function getDailyLevels(symbol: string, date?: string): Promise<Dai
 
     const rawLevels = result.rows[0];
     
+    // Convert date to ISO string format (YYYY-MM-DD) for consistent comparison
+    // PostgreSQL DATE type can come as Date object or string, normalize it
+    let normalizedDate: string;
+    if (rawLevels.date instanceof Date) {
+      normalizedDate = rawLevels.date.toISOString().split('T')[0];
+    } else if (typeof rawLevels.date === 'string') {
+      // If it's already a string, try to parse and normalize it
+      const dateObj = new Date(rawLevels.date);
+      if (!isNaN(dateObj.getTime())) {
+        normalizedDate = dateObj.toISOString().split('T')[0];
+      } else {
+        // If parsing fails, assume it's already in YYYY-MM-DD format
+        normalizedDate = rawLevels.date.split('T')[0];
+      }
+    } else {
+      normalizedDate = String(rawLevels.date).split('T')[0];
+    }
+    
     // Convert NUMERIC types from PostgreSQL (they come as strings) to numbers
     // Also parse JSONB arrays and ensure they're number arrays
     const levels: DailyLevels = {
       ...rawLevels,
+      date: normalizedDate, // Normalize date format
       // Convert NUMERIC fields to numbers (PostgreSQL returns them as strings)
       daily_open_price: typeof rawLevels.daily_open_price === 'string' 
         ? parseFloat(rawLevels.daily_open_price) 

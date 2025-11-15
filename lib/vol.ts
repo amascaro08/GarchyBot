@@ -607,20 +607,43 @@ function fitGarchModelWithParams(
     };
   } else { // egarch
     const { omega = -0.1, alpha = 0.1, gamma = 0.1, beta = 0.9 } = params;
-    let lnSigma2 = Math.log(initializeVariance(returnsPct));
+    const initialVar = initializeVariance(returnsPct);
+    if (initialVar <= 0 || !isFinite(initialVar)) {
+      console.error('[GARCH-DEBUG] EGARCH: Invalid initial variance:', initialVar);
+      throw new Error('Invalid initial variance for EGARCH');
+    }
+    let lnSigma2 = Math.log(Math.max(initialVar, 1e-8));
+    
     for (let i = 1; i < returnsPct.length; i++) {
       const rPrev = returnsPct[i - 1];
-      const sigmaPrev = Math.exp(lnSigma2 / 2);
-      const epsilonPrev = rPrev / sigmaPrev;
+      // Clamp lnSigma2 before exp to prevent Infinity
+      const lnSigma2_clamped = Math.max(-50, Math.min(50, lnSigma2));
+      const sigmaPrev = Math.exp(lnSigma2_clamped / 2);
+      // Prevent division by zero
+      const epsilonPrev = sigmaPrev > 1e-6 ? rPrev / sigmaPrev : 0;
       const absEpsilonPrev = Math.abs(epsilonPrev);
-      lnSigma2 = omega + alpha * epsilonPrev + gamma * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + beta * lnSigma2;
+      lnSigma2 = omega + alpha * epsilonPrev + gamma * (absEpsilonPrev - Math.sqrt(2 / Math.PI)) + beta * lnSigma2_clamped;
+      // Clamp lnSigma2 to prevent Infinity when computing sigma2
+      lnSigma2 = Math.max(-50, Math.min(50, lnSigma2));
       sigma2 = Math.exp(lnSigma2);
-      conditionalVol.push(Math.sqrt(sigma2));
+      if (!isFinite(sigma2) || sigma2 <= 0) {
+        console.error('[GARCH-DEBUG] EGARCH: Invalid sigma2 at iteration', i, 'lnSigma2:', lnSigma2, 'sigma2:', sigma2);
+        sigma2 = Math.max(sigma2, 1e-8);
+      }
+      conditionalVol.push(Math.sqrt(Math.max(sigma2, 1e-8)));
     }
+    
+    // Ensure finalVariance is finite
+    if (!isFinite(sigma2) || sigma2 <= 0) {
+      const finalVar = Math.exp(Math.max(-50, Math.min(50, lnSigma2)));
+      console.error('[GARCH-DEBUG] EGARCH: Invalid finalVariance:', sigma2, 'using clamped value:', finalVar);
+      sigma2 = Math.max(finalVar, 1e-8);
+    }
+    
     return {
       type: 'egarch',
       params: { omega, alpha, gamma, beta },
-      finalVariance: sigma2,
+      finalVariance: Math.max(sigma2, 1e-8),
       lastReturn: returnsPct[returnsPct.length - 1],
       conditionalVolatility: conditionalVol,
     };
