@@ -44,13 +44,14 @@ export async function POST(request: NextRequest) {
       ? (botConfig.capital * botConfig.daily_stop_amount) / 100
       : botConfig.daily_stop_amount;
 
-    const isDailyTargetHit = botConfig.daily_pnl >= dailyTargetValue && dailyTargetValue > 0;
-    const isDailyStopHit = botConfig.daily_pnl <= -dailyStopValue && dailyStopValue > 0;
+    const dailyPnL = Number(botConfig.daily_pnl) || 0;
+    const isDailyTargetHit = dailyPnL >= dailyTargetValue && dailyTargetValue > 0;
+    const isDailyStopHit = dailyPnL <= -dailyStopValue && dailyStopValue > 0;
 
     // If user explicitly clicks "Start Bot", always allow it - reset limits and start new session
     if (isDailyTargetHit || isDailyStopHit) {
       const limitType = isDailyTargetHit ? 'target' : 'stop loss';
-      const previousPnL = botConfig.daily_pnl;
+      const previousPnL = Number(botConfig.daily_pnl) || 0;
       
       // Always reset when user explicitly starts the bot
       botConfig = await resetDailyPnLForUser(user.id);
