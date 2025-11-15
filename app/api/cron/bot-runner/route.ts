@@ -1020,6 +1020,14 @@ export async function POST(request: NextRequest) {
                       } else {
                         console.log(`[CRON] New trade signal - ${signal.side} @ ${entryPrice.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
 
+                        // Validate TP/SL are set (should always be set when signal.side is present)
+                        if (!signal.tp || !signal.sl) {
+                          throw new Error(`Signal missing TP/SL: TP=${signal.tp}, SL=${signal.sl}`);
+                        }
+                        
+                        const tpPrice = signal.tp;
+                        const slPrice = signal.sl;
+                        
                         const tradeRecord = await createTrade({
                           user_id: botConfig.user_id,
                           bot_config_id: botConfig.id,
@@ -1027,9 +1035,9 @@ export async function POST(request: NextRequest) {
                           side: signal.side,
                           status: 'pending',
                           entry_price: entryPrice,
-                          tp_price: signal.tp,
-                          sl_price: signal.sl,
-                          current_sl: signal.sl,
+                          tp_price: tpPrice,
+                          sl_price: slPrice,
+                          current_sl: slPrice,
                           exit_price: null,
                           position_size: positionSize,
                           leverage: botConfig.leverage,
@@ -1076,13 +1084,13 @@ export async function POST(request: NextRequest) {
                           console.log(`[CRON] Market order FILLED: ${signal.side} ${botConfig.symbol} @ $${avgPrice.toFixed(2)}, qty: ${executedQty.toFixed(8)}, Order ID: ${orderId}`);
                           
                           // Round TP/SL prices to match Bybit's tick size
-                          let roundedTP = signal.tp;
-                          let roundedSL = signal.sl;
+                          let roundedTP = tpPrice;
+                          let roundedSL = slPrice;
                           try {
                             const instrumentInfo = await getInstrumentInfo(botConfig.symbol, botConfig.api_mode !== 'live');
                             if (instrumentInfo && instrumentInfo.tickSize) {
-                              roundedTP = roundPrice(signal.tp, instrumentInfo.tickSize);
-                              roundedSL = roundPrice(signal.sl, instrumentInfo.tickSize);
+                              roundedTP = roundPrice(tpPrice, instrumentInfo.tickSize);
+                              roundedSL = roundPrice(slPrice, instrumentInfo.tickSize);
                             }
                           } catch (priceRoundError) {
                             console.warn(`[CRON] Failed to round TP/SL prices:`, priceRoundError);
@@ -1171,13 +1179,13 @@ export async function POST(request: NextRequest) {
                                 const filledQty = parseFloat(order.executedQty || order.qty || orderQty);
                                 
                                 // Round TP/SL
-                                let roundedTP = signal.tp;
-                                let roundedSL = signal.sl;
+                                let roundedTP = tpPrice;
+                                let roundedSL = slPrice;
                                 try {
                                   const instrumentInfo = await getInstrumentInfo(botConfig.symbol, botConfig.api_mode !== 'live');
                                   if (instrumentInfo && instrumentInfo.tickSize) {
-                                    roundedTP = roundPrice(signal.tp, instrumentInfo.tickSize);
-                                    roundedSL = roundPrice(signal.sl, instrumentInfo.tickSize);
+                                    roundedTP = roundPrice(tpPrice, instrumentInfo.tickSize);
+                                    roundedSL = roundPrice(slPrice, instrumentInfo.tickSize);
                                   }
                                 } catch (priceRoundError) {
                                   console.warn(`[CRON] Failed to round TP/SL prices:`, priceRoundError);
@@ -1267,7 +1275,7 @@ export async function POST(request: NextRequest) {
                         await addActivityLog(
                           botConfig.user_id,
                           'success',
-                          `Market order (demo): ${signal.side} @ $${entryPrice.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
+                          `Market order (demo): ${signal.side} @ $${entryPrice.toFixed(2)}, TP: $${tpPrice.toFixed(2)}, SL: $${slPrice.toFixed(2)}`,
                           { signal, positionSize },
                           botConfig.id
                         );
