@@ -150,13 +150,16 @@ export async function POST(request: NextRequest) {
           // Fetch current market data directly (bypass HTTP calls to avoid Vercel auth issues)
           let candles: Candle[];
           try {
+            // Type assertion for candle_interval (from database VARCHAR to union type)
+            const interval = botConfig.candle_interval as '1' | '3' | '5' | '15' | '60' | '120' | '240' | 'D' | 'W' | 'M' | '1d';
+            
             // Try mainnet first for accurate data
             try {
-              candles = await getKlines(botConfig.symbol, botConfig.candle_interval, 200, false);
+              candles = await getKlines(botConfig.symbol, interval, 200, false);
             } catch (mainnetError) {
               // Fallback to testnet if mainnet fails
               console.warn(`[CRON] Mainnet failed for ${botConfig.symbol}, trying testnet:`, mainnetError);
-              candles = await getKlines(botConfig.symbol, botConfig.candle_interval, 200, true);
+              candles = await getKlines(botConfig.symbol, interval, 200, true);
             }
             
             if (!candles || candles.length === 0) {
