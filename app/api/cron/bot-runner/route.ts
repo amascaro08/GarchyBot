@@ -933,6 +933,8 @@ export async function POST(request: NextRequest) {
 
           // Check for new trade signal
           if (signal.side && signal.entry) {
+            // Extract entry price once - signal.entry is guaranteed non-null here
+            const entryPrice = signal.entry;
             const openTradesCount = openTrades.length;
 
             if (openTradesCount < botConfig.max_trades) {
@@ -941,7 +943,7 @@ export async function POST(request: NextRequest) {
                 (t) =>
                   t.symbol === botConfig.symbol &&
                   t.side === signal.side &&
-                  Math.abs(Number(t.entry_price) - signal.entry) < 0.01
+                  Math.abs(Number(t.entry_price) - entryPrice) < 0.01
               );
 
               if (!isDuplicate) {
@@ -965,7 +967,7 @@ export async function POST(request: NextRequest) {
                       botConfig.user_id,
                       'info',
                       `Trade signal ignored - cooldown active (last trade ${Math.round(timeSinceLastTrade / 1000)}s ago)`,
-                      { signal: signal.side, level: signal.entry, timeSinceLastTrade },
+                      { signal: signal.side, level: entryPrice, timeSinceLastTrade },
                       botConfig.id
                     );
                     // Skip this signal, wait for cooldown
@@ -981,7 +983,7 @@ export async function POST(request: NextRequest) {
                     try {
                       approved = await confirmLevelTouch({
                         symbol: botConfig.symbol,
-                        level: signal.entry,
+                        level: entryPrice,
                         side: signal.side,
                         windowMs: 8000, // 8 second window to observe order book activity
                         minNotional: 50000, // Minimum $50k notional for wall detection
@@ -1010,14 +1012,13 @@ export async function POST(request: NextRequest) {
                       // Order value in USDT = capital_to_use * leverage
                       // Position size in base asset = (capital_to_use * leverage) / entry_price
                       const tradeValueUSDT = capitalToUse * botConfig.leverage;
-                      const entryPrice = signal.entry;
                       const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
                       const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
                             
                       if (positionSize <= 0) {
                         console.log('[CRON] Skipping trade - calculated position size <= 0');
                       } else {
-                        console.log(`[CRON] New trade signal - ${signal.side} @ ${signal.entry.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
+                        console.log(`[CRON] New trade signal - ${signal.side} @ ${entryPrice.toFixed(2)}, Trade value: $${tradeValueUSDT.toFixed(2)} USDT (risk_type: ${botConfig.risk_type}, capital: $${botConfig.capital}, risk_amount: ${botConfig.risk_amount}${botConfig.risk_type === 'percent' ? '%' : '$'}, capital_to_use: $${capitalToUse.toFixed(2)} * leverage: ${botConfig.leverage}x), Position size: ${positionSize.toFixed(8)}`);
 
                         const tradeRecord = await createTrade({
                           user_id: botConfig.user_id,
@@ -1025,7 +1026,7 @@ export async function POST(request: NextRequest) {
                           symbol: botConfig.symbol,
                           side: signal.side,
                           status: 'pending',
-                          entry_price: signal.entry,
+                          entry_price: entryPrice,
                           tp_price: signal.tp,
                           sl_price: signal.sl,
                           current_sl: signal.sl,
@@ -1064,7 +1065,7 @@ export async function POST(request: NextRequest) {
                         const orderId = orderResult.result.orderId;
                         const orderStatus = orderResult.result.orderStatus;
                         const orderStatusLower = orderStatus?.toLowerCase() || '';
-                        const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || orderResult.result.avgPrice || signal.entry);
+                        const avgPrice = parseFloat(orderResult.result.avgPrice || orderResult.result.price || orderResult.result.avgPrice || entryPrice);
                         const executedQty = parseFloat(orderResult.result.executedQty || orderResult.result.executedQty || orderResult.result.qty || orderQty);
                         
                         // Market orders should be filled immediately
@@ -1166,7 +1167,7 @@ export async function POST(request: NextRequest) {
                             if (order) {
                               const checkStatus = order.orderStatus?.toLowerCase() || '';
                               if (checkStatus === 'filled' || checkStatus === 'partiallyfilled' || checkStatus.includes('fill')) {
-                                const filledPrice = parseFloat(order.avgPrice || order.price || signal.entry);
+                                const filledPrice = parseFloat(order.avgPrice || order.price || entryPrice);
                                 const filledQty = parseFloat(order.executedQty || order.qty || orderQty);
                                 
                                 // Round TP/SL
@@ -1266,7 +1267,7 @@ export async function POST(request: NextRequest) {
                         await addActivityLog(
                           botConfig.user_id,
                           'success',
-                          `Market order (demo): ${signal.side} @ $${signal.entry.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
+                          `Market order (demo): ${signal.side} @ $${entryPrice.toFixed(2)}, TP: $${signal.tp.toFixed(2)}, SL: $${signal.sl.toFixed(2)}`,
                           { signal, positionSize },
                           botConfig.id
                         );
