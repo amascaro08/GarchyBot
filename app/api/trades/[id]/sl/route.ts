@@ -71,6 +71,49 @@ export async function PATCH(
       return NextResponse.json({ success: false, error: 'Trade already closed' }, { status: 400 });
     }
 
+    // Update stop loss on Bybit if API keys are available
+    if (botConfig.api_key && botConfig.api_secret && trade.status === 'open') {
+      try {
+        const { setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
+        
+        // Round stop loss to match Bybit's tick size
+        let roundedSL = payload.currentSl;
+        try {
+          const instrumentInfo = await getInstrumentInfo(trade.symbol, botConfig.api_mode !== 'live');
+          if (instrumentInfo && instrumentInfo.tickSize) {
+            roundedSL = roundPrice(payload.currentSl, instrumentInfo.tickSize);
+            if (Math.abs(roundedSL - payload.currentSl) > 0.0001) {
+              console.log(`[SL Update] Rounded SL from ${payload.currentSl.toFixed(8)} to ${roundedSL.toFixed(8)} to match tick size ${instrumentInfo.tickSize}`);
+            }
+          }
+        } catch (priceRoundError) {
+          console.warn(`[SL Update] Failed to round SL price, using original:`, priceRoundError);
+        }
+        
+        await setTakeProfitStopLoss({
+          symbol: trade.symbol,
+          stopLoss: roundedSL,
+          testnet: botConfig.api_mode !== 'live',
+          apiKey: botConfig.api_key,
+          apiSecret: botConfig.api_secret,
+          positionIdx: 0,
+        });
+        
+        console.log(`[SL Update] Stop loss updated on Bybit: ${trade.side} ${trade.symbol} SL → $${roundedSL.toFixed(2)}`);
+      } catch (bybitError) {
+        const errorMsg = bybitError instanceof Error ? bybitError.message : 'Unknown error';
+        console.error(`[SL Update] Failed to update stop loss on Bybit:`, errorMsg);
+        // Continue to update database even if Bybit update fails
+        await addActivityLog(
+          userId,
+          'warning',
+          `Stop loss updated in database but failed on Bybit: ${errorMsg}`,
+          { tradeId: trade.id, newSl: payload.currentSl, error: errorMsg },
+          botConfig.id
+        );
+      }
+    }
+
     const updatedTrade = await updateTrade(trade.id, {
       current_sl: payload.currentSl,
     } as any);

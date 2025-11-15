@@ -648,15 +648,31 @@ export function computeTrailingBreakeven(
   initialSl: number,
   currentSl: number,
   lastClose: number,
-  offsetBps: number = TRAIL_STOP_OFFSET_BPS
+  offsetBps: number = TRAIL_STOP_OFFSET_BPS,
+  minProfitPct: number = 0.25 // Minimum 25% profit required before trailing stop activates
 ): number | null {
   const risk = Math.abs(entry - initialSl);
   if (risk <= 0 || !isFinite(risk)) {
     return null;
   }
 
+  // Calculate profit in absolute terms
   const profit = side === 'LONG' ? lastClose - entry : entry - lastClose;
-  if (!isFinite(profit) || profit < risk) {
+  if (!isFinite(profit)) {
+    return null;
+  }
+
+  // Calculate profit as percentage of entry price
+  const profitPct = profit / entry;
+
+  // Require minimum 25% profit before trailing stop activates
+  // This ensures we lock in some profits before moving the stop
+  if (profitPct < minProfitPct) {
+    return null; // Not enough profit yet, don't activate trailing stop
+  }
+
+  // Original condition: profit must be at least equal to risk (1:1 ratio)
+  if (profit < risk) {
     return null;
   }
 
