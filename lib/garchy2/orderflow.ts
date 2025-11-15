@@ -100,7 +100,8 @@ export class OrderflowAnalyzer {
       bias,
       confidence,
       flags: {
-        ...flags,
+        absorbingBids: flags.absorbingBids,
+        absorbingAsks: flags.absorbingAsks,
         buyVolumeSurge: volumeFlags.buyVolumeSurge,
         sellVolumeSurge: volumeFlags.sellVolumeSurge,
       },
@@ -115,7 +116,7 @@ export class OrderflowAnalyzer {
     level: number,
     currentPrice: number,
     side: 'LONG' | 'SHORT'
-  ): { bias: OrderflowBias; confidence: number; flags: Partial<OrderflowSignal['flags']> } {
+  ): { bias: OrderflowBias; confidence: number; flags: OrderflowSignal['flags'] } {
     const { bids, asks } = snapshot;
     const proximity = (level * this.config.wallProximityBps) / 10000;
 
@@ -142,9 +143,11 @@ export class OrderflowAnalyzer {
 
     let bias: OrderflowBias = 'neutral';
     let confidence = 0;
-    const flags: Partial<OrderflowSignal['flags']> = {
+    const flags: OrderflowSignal['flags'] = {
       absorbingBids: false,
       absorbingAsks: false,
+      buyVolumeSurge: false,
+      sellVolumeSurge: false,
     };
 
     // For LONG entries: want buying pressure (bid walls)
