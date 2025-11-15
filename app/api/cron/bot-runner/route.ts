@@ -128,30 +128,37 @@ export async function POST(request: NextRequest) {
           console.log(`[CRON] Bot settings - GARCH mode: ${botConfig.garch_mode}, custom k%: ${botConfig.custom_k_pct}, subdivisions: ${botConfig.subdivisions}, risk: ${botConfig.risk_amount} (${botConfig.risk_type}), capital: ${botConfig.capital}, daily open entries: ${botConfig.use_daily_open_entry ? 'ENABLED' : 'DISABLED'}`);
           
           // Check daily limits
+          // Ensure all values are numbers (database might return strings)
+          const capital = Number(botConfig.capital) || 0;
+          const dailyTargetAmount = Number(botConfig.daily_target_amount) || 0;
+          const dailyStopAmount = Number(botConfig.daily_stop_amount) || 0;
+          
           const dailyTargetValue = botConfig.daily_target_type === 'percent'
-            ? (botConfig.capital * botConfig.daily_target_amount) / 100
-            : botConfig.daily_target_amount;
+            ? (capital * dailyTargetAmount) / 100
+            : dailyTargetAmount;
 
           const dailyStopValue = botConfig.daily_stop_type === 'percent'
-            ? (botConfig.capital * botConfig.daily_stop_amount) / 100
-            : botConfig.daily_stop_amount;
+            ? (capital * dailyStopAmount) / 100
+            : dailyStopAmount;
 
           // Log daily limit check details for debugging
           const currentDailyPnL = Number(botConfig.daily_pnl) || 0;
           console.log(`[CRON] Daily limit check for bot ${botConfig.id}:`);
           console.log(`  Current daily P&L: ${currentDailyPnL.toFixed(2)}`);
-          console.log(`  Daily target: ${dailyTargetValue.toFixed(2)} (${botConfig.daily_target_type}, ${botConfig.daily_target_amount})`);
-          console.log(`  Daily stop: ${dailyStopValue.toFixed(2)} (${botConfig.daily_stop_type}, ${botConfig.daily_stop_amount})`);
+          console.log(`  Daily target: ${Number(dailyTargetValue).toFixed(2)} (${botConfig.daily_target_type}, ${dailyTargetAmount})`);
+          console.log(`  Daily stop: ${Number(dailyStopValue).toFixed(2)} (${botConfig.daily_stop_type}, ${dailyStopAmount})`);
           console.log(`  Daily start date: ${botConfig.daily_start_date || 'NULL'}`);
 
           // Only check limits if they are set (greater than 0)
           // Also ensure daily_pnl is actually positive for target check
-          const isDailyTargetHit = dailyTargetValue > 0 && currentDailyPnL >= dailyTargetValue;
-          const isDailyStopHit = dailyStopValue > 0 && currentDailyPnL <= -dailyStopValue;
+          const isDailyTargetHit = Number(dailyTargetValue) > 0 && currentDailyPnL >= Number(dailyTargetValue);
+          const isDailyStopHit = Number(dailyStopValue) > 0 && currentDailyPnL <= -Number(dailyStopValue);
 
           if (isDailyTargetHit || isDailyStopHit) {
             const reason = isDailyTargetHit ? 'Daily target reached' : 'Daily stop loss hit';
-            console.log(`[CRON] Bot ${botConfig.id} stopped: ${reason} (P&L: ${currentDailyPnL.toFixed(2)}, Target: ${dailyTargetValue.toFixed(2)}, Stop: ${dailyStopValue.toFixed(2)})`);
+            const targetValueNum = Number(dailyTargetValue);
+            const stopValueNum = Number(dailyStopValue);
+            console.log(`[CRON] Bot ${botConfig.id} stopped: ${reason} (P&L: ${currentDailyPnL.toFixed(2)}, Target: ${targetValueNum.toFixed(2)}, Stop: ${stopValueNum.toFixed(2)})`);
             await addActivityLog(botConfig.user_id, 'warning', `Bot auto-stopped: ${reason} (P&L: ${currentDailyPnL.toFixed(2)})`, { dailyPnL: currentDailyPnL, dailyTarget: dailyTargetValue, dailyStop: dailyStopValue }, botConfig.id);
             // Actually stop the bot by setting is_running to false
             await updateBotConfig(botConfig.user_id, { is_running: false } as any);
