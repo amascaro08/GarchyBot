@@ -1285,6 +1285,7 @@ export async function POST(request: NextRequest) {
                       );
                     }
                   }
+                  } // End else block (cooldown check)
                 }
               }
             }
