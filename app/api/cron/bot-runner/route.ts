@@ -1140,10 +1140,23 @@ export async function POST(request: NextRequest) {
                     ? (realtimePrice || candles[candles.length - 1]?.close || entryPrice)
                     : entryPrice;
                   
+                  // Use looser proximity / smaller wall for imbalance continuation (more like "flow confirmation"),
+                  // stricter settings for ORB / GARCH signals (true breakout/rejection at the level)
+                  const orderbookMinNotional = isImbalanceSignal ? 20000 : 50000;
+                  const orderbookProximityBps = isImbalanceSignal ? 25 : 12; // 0.25% vs 0.12%
+                  
                   if (isImbalanceSignal) {
-                    console.log(`[CRON] Imbalance signal detected - checking orderbook at current price (${orderbookCheckLevel.toFixed(2)}) instead of entry level (${entryPrice.toFixed(2)})`);
+                    console.log(
+                      `[CRON] Imbalance signal detected - checking orderbook at current price (${orderbookCheckLevel.toFixed(
+                        2
+                      )}) instead of entry level (${entryPrice.toFixed(2)}), minNotional=$${orderbookMinNotional}, proximity=${orderbookProximityBps}bps`
+                    );
                   } else {
-                    console.log(`[CRON] Checking order book confirmation for ${signal.side} @ ${entryPrice.toFixed(2)}...`);
+                    console.log(
+                      `[CRON] Checking order book confirmation for ${signal.side} @ ${entryPrice.toFixed(
+                        2
+                      )} (minNotional=$${orderbookMinNotional}, proximity=${orderbookProximityBps}bps)...`
+                    );
                   }
                   
                   let approved = false;
@@ -1153,10 +1166,14 @@ export async function POST(request: NextRequest) {
                       level: orderbookCheckLevel,
                       side: signal.side,
                       windowMs: 8000, // 8 second window to observe order book activity
-                      minNotional: 50000, // Minimum $50k notional for wall detection
-                      proximityBps: 5, // 0.05% proximity to level
+                      minNotional: orderbookMinNotional,
+                      proximityBps: orderbookProximityBps,
                     });
-                    console.log(`[CRON] Order book confirmation result: ${approved ? 'APPROVED' : 'REJECTED'} (checked at ${orderbookCheckLevel.toFixed(2)})`);
+                    console.log(
+                      `[CRON] Order book confirmation result: ${approved ? 'APPROVED' : 'REJECTED'} (checked at ${orderbookCheckLevel.toFixed(
+                        2
+                      )}, minNotional=$${orderbookMinNotional}, proximity=${orderbookProximityBps}bps)`
+                    );
                   } catch (err) {
                     console.error('[CRON] Order book confirmation error:', err);
                     approved = false;
