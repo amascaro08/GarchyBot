@@ -687,7 +687,8 @@ export async function POST(request: NextRequest) {
                         
                         // Set TP/SL if they're not set on Bybit or don't match our trade values
                         // But only if Bybit SL wasn't manually changed (we just synced it above)
-                        const shouldSetTP = !bybitTP || Math.abs(bybitTP - tradeTP) > 0.01;
+                        // Check if values are significantly different (> 0.01 or 1 cent) to avoid "not modified" errors
+                        const shouldSetTP = !bybitTP || (bybitTP && Math.abs(bybitTP - tradeTP) > 0.01);
                         // Only set SL if it's not already set on Bybit (don't overwrite manual changes)
                         const shouldSetSL = !bybitSL && tradeSL > 0;
                         
@@ -720,14 +721,21 @@ export async function POST(request: NextRequest) {
                               botConfig.id
                             );
                           } catch (tpSlError) {
-                            console.error(`[CRON] Failed to set TP/SL for open position ${trade.id}:`, tpSlError);
-                            await addActivityLog(
-                              botConfig.user_id,
-                              'warning',
-                              `Failed to set TP/SL on Bybit for ${trade.side} ${trade.symbol}: ${tpSlError instanceof Error ? tpSlError.message : 'Unknown error'}`,
-                              { orderId: trade.order_id, error: tpSlError instanceof Error ? tpSlError.message : String(tpSlError) },
-                              botConfig.id
-                            );
+                            // Handle error 34040 (not modified) gracefully - it's not really an error
+                            const errorMsg = tpSlError instanceof Error ? tpSlError.message : String(tpSlError);
+                            if (errorMsg.includes('34040') || errorMsg.includes('not modified')) {
+                              console.log(`[CRON] TP/SL already set to same values on Bybit for trade ${trade.id} - ignoring`);
+                              // Don't log this as an error since it's expected behavior
+                            } else {
+                              console.error(`[CRON] Failed to set TP/SL for open position ${trade.id}:`, tpSlError);
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'warning',
+                                `Failed to set TP/SL on Bybit for ${trade.side} ${trade.symbol}: ${errorMsg}`,
+                                { orderId: trade.order_id, error: errorMsg },
+                                botConfig.id
+                              );
+                            }
                           }
                         }
                         

@@ -633,6 +633,11 @@ export class Garchy2StrategyEngine {
       );
 
       if (touched) {
+        // Check if this is an extreme boundary (upper or lower bound)
+        // These act as major support/resistance and should trigger reversal trades
+        const isUpperBound = Math.abs(boundary - zoneLevels.upperRange) < (boundary * 0.0001);
+        const isLowerBound = Math.abs(boundary - zoneLevels.lowerRange) < (boundary * 0.0001);
+        
         // Determine setup type and direction based on session bias and zone context
         const profileContext = this.marketProfile.getProfileContext(boundary);
 
@@ -640,8 +645,21 @@ export class Garchy2StrategyEngine {
         let setupType: SetupType;
         let side: 'LONG' | 'SHORT' | null = null;
 
-        if (profileContext.nodeType === 'HVN') {
-          // HVN = more likely rejection
+        // Boundary reversal logic: At extreme boundaries, reverse the signal
+        // Upper bound = major resistance → enter SHORT
+        // Lower bound = major support → enter LONG
+        if (isUpperBound) {
+          // At upper bound - reverse to SHORT (expecting rejection/retracement)
+          setupType = 'GARCH_REJECTION';
+          side = 'SHORT';
+          console.log(`[GARCHY2] Upper bound detected at ${boundary.toFixed(2)} - Reversing to SHORT (boundary acts as resistance)`);
+        } else if (isLowerBound) {
+          // At lower bound - reverse to LONG (expecting rejection/retracement)
+          setupType = 'GARCH_REJECTION';
+          side = 'LONG';
+          console.log(`[GARCHY2] Lower bound detected at ${boundary.toFixed(2)} - Reversing to LONG (boundary acts as support)`);
+        } else if (profileContext.nodeType === 'HVN') {
+          // HVN = more likely rejection (for non-extreme boundaries)
           setupType = 'GARCH_REJECTION';
           // Determine direction based on session bias and price position
           if (this.sessionBias === 'long' && currentPrice >= boundary) {
@@ -654,7 +672,7 @@ export class Garchy2StrategyEngine {
             side = 'LONG'; // Price below HVN = support
           }
         } else if (profileContext.nodeType === 'LVN') {
-          // LVN = more likely breakout
+          // LVN = more likely breakout (for non-extreme boundaries)
           setupType = 'GARCH_BREAKOUT';
           // Breakout in direction of session bias
           if (this.sessionBias === 'long' && currentPrice > boundary) {

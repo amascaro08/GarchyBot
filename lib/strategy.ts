@@ -649,7 +649,7 @@ export function computeTrailingBreakeven(
   currentSl: number,
   lastClose: number,
   offsetBps: number = TRAIL_STOP_OFFSET_BPS,
-  minProfitPct: number = 0.25 // Minimum 25% profit required before trailing stop activates
+  minProfitPct: number = 0.02 // Minimum 2% profit required before trailing stop activates (gives trades room to breathe)
 ): number | null {
   const risk = Math.abs(entry - initialSl);
   if (risk <= 0 || !isFinite(risk)) {
@@ -662,34 +662,68 @@ export function computeTrailingBreakeven(
     return null;
   }
 
+  // Only activate trailing stop if trade is profitable
+  if (profit <= 0) {
+    return null; // Trade is not profitable yet
+  }
+
   // Calculate profit as percentage of entry price
   const profitPct = profit / entry;
 
-  // Require minimum 25% profit before trailing stop activates
-  // This ensures we lock in some profits before moving the stop
-  if (profitPct < minProfitPct) {
+  // Require minimum profit before trailing stop activates (2% by default)
+  // This gives trades room to breathe and avoids stopping out on minor pullbacks
+  // Alternative approach: wait until profit is at least 2x the risk (better risk/reward)
+  const riskPct = risk / entry;
+  const minProfitByRisk = riskPct * 2; // Wait for at least 2:1 risk/reward
+  
+  // Use the higher of the two thresholds: absolute 2% OR 2x risk
+  const effectiveMinProfit = Math.max(minProfitPct, minProfitByRisk);
+  
+  if (profitPct < effectiveMinProfit) {
     return null; // Not enough profit yet, don't activate trailing stop
   }
 
-  // Original condition: profit must be at least equal to risk (1:1 ratio)
-  if (profit < risk) {
-    return null;
+  // Calculate the trailing stop based on current price
+  // Trail stop should follow price as it moves favorably
+  const offset = lastClose * (offsetBps / 10000);
+  let trailingStop: number;
+  
+  if (side === 'LONG') {
+    // For LONG: trail stop below current price to lock in profits
+    // Calculate stop as: current price - offset (percentage of current price)
+    // But ensure it's at least slightly above entry (breakeven protection)
+    const minStop = entry + (entry * 0.001); // At least 0.1% above entry for safety
+    const priceBasedStop = lastClose - offset; // Stop trails below current price
+    trailingStop = Math.max(minStop, priceBasedStop);
+    
+    // Only move stop up (never down) - we want to lock in more profit as price rises
+    if (trailingStop <= currentSl) {
+      // If calculated stop is below or equal to current stop, don't move it down
+      return null;
+    }
+  } else {
+    // For SHORT: trail stop above current price to lock in profits
+    // Calculate stop as: current price + offset (percentage of current price)
+    // But ensure it's at least slightly below entry (breakeven protection)
+    const maxStop = entry - (entry * 0.001); // At least 0.1% below entry for safety
+    const priceBasedStop = lastClose + offset; // Stop trails above current price
+    trailingStop = Math.min(maxStop, priceBasedStop);
+    
+    // Only move stop down (never up) - we want to lock in more profit as price falls
+    if (trailingStop >= currentSl) {
+      // If calculated stop is above or equal to current stop, don't move it up
+      return null;
+    }
   }
 
-  const offset = entry * (offsetBps / 10000);
-  const breakeven =
-    side === 'LONG'
-      ? Math.max(entry, entry + offset)
-      : Math.min(entry, entry - offset);
-
-  if (
-    (side === 'LONG' && currentSl >= breakeven) ||
-    (side === 'SHORT' && currentSl <= breakeven)
-  ) {
-    return null;
+  // Only update if the new stop is significantly different (> 0.01 or 1 cent)
+  // This prevents excessive updates for tiny changes
+  const stopDiff = Math.abs(trailingStop - currentSl);
+  if (stopDiff < 0.01) {
+    return null; // Not enough change to warrant update
   }
 
-  return breakeven;
+  return trailingStop;
 }
 
 /**

@@ -835,6 +835,14 @@ export async function setTakeProfitStopLoss(params: {
     const data = await response.json();
 
     if (data.retCode !== 0) {
+      // Error 34040: "not modified" - TP/SL values are already set to the same values
+      // This is not really an error, just means nothing changed
+      if (data.retCode === 34040) {
+        console.log(`[Bybit API] TP/SL already set to same values (retCode: 34040) - ignoring`);
+        // Return a success-like response since this isn't really an error
+        return { retCode: 0, retMsg: 'not modified (already set)', result: null };
+      }
+      
       const errorMsg = data.retMsg || 'Unknown Bybit API error';
       console.error(`[Bybit API Error] retCode: ${data.retCode}, retMsg: ${errorMsg}`);
       throw new BybitError(data.retCode, `${errorMsg} (retCode: ${data.retCode})`);
