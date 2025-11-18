@@ -169,15 +169,20 @@ export default function Chart({
   }, [height]);
 
   useEffect(() => {
+    // Only reset fit flag on symbol/interval change, allowing new chart view to fit once
     hasInitialFitRef.current = false;
     candlesSignatureRef.current = ''; // Reset signature on symbol/interval change
     if (updateCheckIntervalRef.current) {
       clearInterval(updateCheckIntervalRef.current);
       updateCheckIntervalRef.current = null;
     }
+    // Only fit content when symbol/interval changes (user wants to see new data)
+    // Don't fit on regular updates - this preserves zoom/pan
     if (chartRef.current) {
       chartRef.current.timeScale().fitContent();
       chartRef.current.priceScale('right').applyOptions({ mode: PriceScaleMode.Normal });
+      // Mark as fitted so we don't auto-fit again
+      hasInitialFitRef.current = true;
     }
   }, [symbol, interval]);
 
@@ -271,9 +276,17 @@ export default function Chart({
       }
     }
 
+    // Only fit content on the VERY FIRST load (when chart is created)
+    // After that, preserve user zoom/pan settings
+    // This check ensures fitContent() is called only once per symbol/interval
     if (!hasInitialFitRef.current && chartRef.current && displayCandles.length > 0) {
-      chartRef.current.timeScale().fitContent();
-      hasInitialFitRef.current = true;
+      // Use setTimeout to ensure DOM is ready and avoid layout thrashing
+      setTimeout(() => {
+        if (chartRef.current && !hasInitialFitRef.current) {
+          chartRef.current.timeScale().fitContent();
+          hasInitialFitRef.current = true;
+        }
+      }, 100);
     }
 
     // Create a signature of price line data to prevent duplicate processing
