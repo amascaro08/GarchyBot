@@ -101,9 +101,10 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
             setUseOrderBookConfirm(config.use_orderbook_confirm !== false);
           }
           
-          // Load trades
+          // Load trades from database
+          let allTradesData: Trade[] = [];
           if (data.allTrades && data.allTrades.length > 0) {
-            const dbTrades = data.allTrades.map((t: any) => ({
+            allTradesData = data.allTrades.map((t: any) => ({
               id: t.id,
               time: t.entry_time,
               side: t.side,
@@ -118,9 +119,37 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
               positionSize: Number(t.position_size),
               exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
             }));
-            if (mounted) setTrades(dbTrades);
           }
           
+          // Add external Bybit positions as virtual trades for display
+          if (data.bybitPositions && data.bybitPositions.length > 0) {
+            const dbSymbols = new Set(allTradesData.filter(t => t.status === 'open').map(t => t.symbol));
+            
+            // Add external positions (not tracked in database)
+            data.bybitPositions.forEach((pos: any) => {
+              if (!dbSymbols.has(pos.symbol) && pos.size > 0) {
+                // Create a virtual trade object for external Bybit positions
+                allTradesData.push({
+                  id: `bybit-${pos.symbol}`,
+                  time: pos.createdTime || new Date().toISOString(),
+                  side: pos.side,
+                  entry: pos.avgPrice,
+                  tp: pos.takeProfit || pos.avgPrice * (pos.side === 'LONG' ? 1.05 : 0.95),
+                  sl: pos.stopLoss || pos.avgPrice * (pos.side === 'LONG' ? 0.95 : 1.05),
+                  initialSl: pos.stopLoss || pos.avgPrice * (pos.side === 'LONG' ? 0.95 : 1.05),
+                  reason: 'External Position (Bybit)',
+                  status: 'open' as const,
+                  symbol: pos.symbol,
+                  leverage: pos.leverage || 1,
+                  positionSize: pos.size,
+                  exitPrice: undefined,
+                  pnl: pos.unrealisedPnl,
+                });
+              }
+            });
+          }
+          
+          if (mounted && allTradesData.length > 0) setTrades(allTradesData);
           if (data.sessionPnL !== undefined && mounted) setSessionPnL(Number(data.sessionPnL));
         }
       } catch (err) {
@@ -296,6 +325,7 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
   };
 
   // Calculate stats
+  // Note: trades array now includes both database trades AND external Bybit positions
   const activeTrades = trades.filter(t => t.status === 'open' || t.status === 'pending');
   const openTrades = trades.filter(t => t.status === 'open');
   const closedTrades = trades.filter(t => t.status !== 'open' && t.status !== 'pending');
@@ -304,6 +334,12 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
   const winRate = closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : 0;
 
   const totalUnrealizedPnL = openTrades.reduce((sum, trade) => {
+    // For external Bybit positions, use the actual unrealized PnL from Bybit
+    if (trade.pnl !== undefined && trade.pnl !== null && trade.id.startsWith('bybit-')) {
+      return sum + trade.pnl;
+    }
+    
+    // For database trades, calculate PnL from current price
     if (currentPrice !== null && currentPrice > 0) {
       const positionSize = trade.positionSize || 0;
       const pnl = trade.side === 'LONG' 
@@ -457,11 +493,15 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
               </h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {activeTrades.map((trade) => {
-                  const unrealizedPnL = currentPrice && trade.status === 'open'
-                    ? (trade.side === 'LONG' 
-                        ? (currentPrice - trade.entry) * (trade.positionSize || 0)
-                        : (trade.entry - currentPrice) * (trade.positionSize || 0))
-                    : 0;
+                  // Use Bybit's actual unrealized PnL for external positions
+                  let unrealizedPnL = 0;
+                  if (trade.pnl !== undefined && trade.pnl !== null && trade.id.startsWith('bybit-')) {
+                    unrealizedPnL = trade.pnl;
+                  } else if (currentPrice && trade.status === 'open') {
+                    unrealizedPnL = trade.side === 'LONG' 
+                      ? (currentPrice - trade.entry) * (trade.positionSize || 0)
+                      : (trade.entry - currentPrice) * (trade.positionSize || 0);
+                  }
 
                   return (
                     <div key={trade.id} className="card p-4 bg-slate-800/50">

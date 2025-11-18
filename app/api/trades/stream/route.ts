@@ -34,7 +34,72 @@ export async function GET(request: NextRequest) {
         try {
           const allTrades = await getAllTrades(user.id);
           const currentTradeIds = new Set(allTrades.map(t => t.id));
-          const currentTradeCount = allTrades.length;
+          let currentTradeCount = allTrades.length;
+
+          // Serialize trades from database
+          let serializedTrades = allTrades.map(t => ({
+            id: t.id,
+            time: t.entry_time.toISOString(),
+            side: t.side,
+            entry: Number(t.entry_price),
+            tp: Number(t.tp_price),
+            sl: Number(t.current_sl ?? t.sl_price),
+            initialSl: Number(t.sl_price),
+            reason: t.reason || '',
+            status: t.status,
+            symbol: t.symbol,
+            leverage: Number(t.leverage),
+            positionSize: Number(t.position_size),
+            exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
+            pnl: t.pnl !== null && t.pnl !== undefined ? Number(t.pnl) : undefined,
+          }));
+
+          // Fetch ALL active positions from Bybit if API keys are configured
+          if (botConfig.api_key && botConfig.api_secret) {
+            try {
+              const { fetchAllPositions } = await import('@/lib/bybit');
+              const positionsData = await fetchAllPositions({
+                testnet: botConfig.api_mode !== 'live',
+                apiKey: botConfig.api_key,
+                apiSecret: botConfig.api_secret,
+                settleCoin: 'USDT',
+              });
+              
+              // Filter for actual open positions (size > 0)
+              if (positionsData?.result?.list) {
+                const bybitPositions = positionsData.result.list
+                  .filter((pos: any) => parseFloat(pos.size || '0') !== 0);
+                
+                // Add external positions not tracked in database
+                const dbSymbols = new Set(allTrades.filter(t => t.status === 'open').map(t => t.symbol));
+                const externalPositions = bybitPositions.filter((p: any) => !dbSymbols.has(p.symbol));
+                
+                // Add external positions as virtual trades
+                externalPositions.forEach((pos: any) => {
+                  serializedTrades.push({
+                    id: `bybit-${pos.symbol}`,
+                    time: pos.createdTime || new Date().toISOString(),
+                    side: pos.side === 'Buy' ? 'LONG' : 'SHORT',
+                    entry: parseFloat(pos.avgPrice || '0'),
+                    tp: parseFloat(pos.takeProfit || '0') || parseFloat(pos.avgPrice || '0') * (pos.side === 'Buy' ? 1.05 : 0.95),
+                    sl: parseFloat(pos.stopLoss || '0') || parseFloat(pos.avgPrice || '0') * (pos.side === 'Buy' ? 0.95 : 1.05),
+                    initialSl: parseFloat(pos.stopLoss || '0') || parseFloat(pos.avgPrice || '0') * (pos.side === 'Buy' ? 0.95 : 1.05),
+                    reason: 'External Position (Bybit)',
+                    status: 'open' as const,
+                    symbol: pos.symbol,
+                    leverage: parseFloat(pos.leverage || '1'),
+                    positionSize: parseFloat(pos.size || '0'),
+                    exitPrice: undefined,
+                    pnl: parseFloat(pos.unrealisedPnl || '0'),
+                  });
+                });
+                
+                currentTradeCount = serializedTrades.length;
+              }
+            } catch (error) {
+              // Continue without Bybit positions - will only show database trades
+            }
+          }
 
           // Check if trades changed (new trade, status change, or count change)
           const tradesChanged = 
@@ -46,24 +111,6 @@ export async function GET(request: NextRequest) {
             });
 
           if (tradesChanged || Date.now() - lastUpdateTime > 1000) {
-            // Serialize trades
-            const serializedTrades = allTrades.map(t => ({
-              id: t.id,
-              time: t.entry_time.toISOString(),
-              side: t.side,
-              entry: Number(t.entry_price),
-              tp: Number(t.tp_price),
-              sl: Number(t.current_sl ?? t.sl_price),
-              initialSl: Number(t.sl_price),
-              reason: t.reason || '',
-              status: t.status,
-              symbol: t.symbol,
-              leverage: Number(t.leverage),
-              positionSize: Number(t.position_size),
-              exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
-              pnl: t.pnl !== null && t.pnl !== undefined ? Number(t.pnl) : undefined,
-            }));
-
             // Send trade update
             const data = JSON.stringify({
               type: 'trades',
