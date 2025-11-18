@@ -81,15 +81,16 @@ export async function POST(request: NextRequest) {
           // ================================
           console.log(`[DAILY-SETUP] Phase 1: Calculating volatility for ${symbol} using Yahoo Finance`);
 
-          // Fetch 3 years of historical data from Yahoo Finance (matches Python script's yfinance)
+          // Fetch 15 years of historical data from Yahoo Finance for improved GARCH precision
+          // Recommendation: use 10-15 years of data for better volatility forecasting
           let candles;
           try {
-            candles = await getYahooFinanceKlines(symbol, 1095); // 3 years
+            candles = await getYahooFinanceKlines(symbol, 5475); // 15 years (365.25 * 15)
           } catch (yahooError) {
             console.error(`[DAILY-SETUP] Yahoo Finance failed for ${symbol}, falling back to Bybit:`, yahooError);
             // Fallback to Bybit if Yahoo Finance fails
             const klinesRes = await fetch(
-              `${baseUrl}/api/klines?symbol=${symbol}&interval=1d&limit=1095&testnet=false`
+              `${baseUrl}/api/klines?symbol=${symbol}&interval=1d&limit=5475&testnet=false`
             );
             if (!klinesRes.ok) {
               throw new Error(`Failed to fetch historical data for ${symbol} from both Yahoo Finance and Bybit`);
