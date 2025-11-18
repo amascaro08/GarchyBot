@@ -1027,20 +1027,59 @@ export async function POST(request: NextRequest) {
           if (signal.side && signal.entry) {
             // Extract entry price once - signal.entry is guaranteed non-null here
             const entryPrice = signal.entry;
-            const openTradesCount = openTrades.length;
+            
+            // Count TOTAL active positions: database trades + external Bybit positions
+            let openTradesCount = openTrades.length;
+            let externalPositionsCount = 0;
+            
+            // Fetch ALL active positions from Bybit if API keys are configured
+            if (botConfig.api_key && botConfig.api_secret) {
+              try {
+                const { fetchAllPositions } = await import('@/lib/bybit');
+                const positionsData = await fetchAllPositions({
+                  testnet: botConfig.api_mode !== 'live',
+                  apiKey: botConfig.api_key,
+                  apiSecret: botConfig.api_secret,
+                  settleCoin: 'USDT',
+                });
+                
+                // Count actual open positions (size > 0)
+                if (positionsData?.result?.list) {
+                  const bybitPositions = positionsData.result.list.filter((pos: any) => parseFloat(pos.size || '0') !== 0);
+                  
+                  // Count external positions not tracked in database
+                  const dbSymbols = new Set(openTrades.map(t => t.symbol));
+                  const externalPositions = bybitPositions.filter((p: any) => !dbSymbols.has(p.symbol));
+                  externalPositionsCount = externalPositions.length;
+                  
+                  // Total active positions = database trades + external Bybit positions
+                  openTradesCount = openTrades.length + externalPositionsCount;
+                  
+                  if (externalPositionsCount > 0) {
+                    console.log(`[CRON] Found ${externalPositionsCount} external position(s) on Bybit not tracked in database:`);
+                    externalPositions.forEach((pos: any) => {
+                      console.log(`  - ${pos.symbol}: ${pos.side} ${parseFloat(pos.size).toFixed(4)}, Avg: $${parseFloat(pos.avgPrice).toFixed(2)}, PnL: $${parseFloat(pos.unrealisedPnl || 0).toFixed(2)}`);
+                    });
+                  }
+                }
+              } catch (error) {
+                console.warn('[CRON] Failed to fetch Bybit positions for max trade check:', error);
+                // Continue with database count only if Bybit fetch fails
+              }
+            }
 
             console.log(`[CRON] Signal detected - checking trade execution conditions:`);
             console.log(`  Entry price: ${entryPrice.toFixed(2)}`);
-            console.log(`  Open trades: ${openTradesCount}/${botConfig.max_trades}`);
+            console.log(`  Open trades: ${openTradesCount}/${botConfig.max_trades} (DB: ${openTrades.length}, External: ${externalPositionsCount})`);
             console.log(`  Signal side: ${signal.side}`);
 
             if (openTradesCount >= botConfig.max_trades) {
-              console.log(`[CRON] Trade blocked - Max trades reached (${openTradesCount}/${botConfig.max_trades})`);
+              console.log(`[CRON] Trade blocked - Max trades reached (${openTradesCount}/${botConfig.max_trades}, includes ${externalPositionsCount} external positions)`);
               await addActivityLog(
                 botConfig.user_id,
                 'info',
-                `Trade signal ignored - max trades reached (${openTradesCount}/${botConfig.max_trades})`,
-                { signal: signal.side, level: entryPrice },
+                `Trade signal ignored - max trades reached (${openTradesCount}/${botConfig.max_trades}, ${externalPositionsCount} external)`,
+                { signal: signal.side, level: entryPrice, dbTrades: openTrades.length, externalPositions: externalPositionsCount },
                 botConfig.id
               );
             } else {

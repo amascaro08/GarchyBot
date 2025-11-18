@@ -1237,6 +1237,59 @@ export async function fetchPosition(params: {
 }
 
 /**
+ * Fetch ALL active positions from Bybit (not just a specific symbol)
+ * This is crucial for knowing the total number of active trades
+ */
+export async function fetchAllPositions(params: {
+  testnet?: boolean;
+  apiKey: string;
+  apiSecret: string;
+  settleCoin?: string;
+}): Promise<any> {
+  const {
+    testnet = true,
+    apiKey,
+    apiSecret,
+    settleCoin = 'USDT',
+  } = params;
+
+  const baseUrl = testnet ? BYBIT_TESTNET_BASE : BYBIT_MAINNET_BASE;
+  const endpoint = '/v5/position/list';
+  const recvWindow = '5000';
+  const timestamp = Date.now().toString();
+  // Fetch all linear positions, filtered by settlement coin (USDT for futures)
+  const query = `category=linear&settleCoin=${settleCoin}`;
+  const prehash = `${timestamp}${apiKey}${recvWindow}${query}`;
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(prehash)
+    .digest('hex');
+
+  const url = `${baseUrl}${endpoint}?${query}`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'X-BAPI-API-KEY': apiKey,
+      'X-BAPI-SIGN': signature,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-RECV-WINDOW': recvWindow,
+    },
+  });
+
+  if (!response.ok) {
+    throw new BybitError(response.status, `HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.retCode !== 0) {
+    throw new BybitError(data.retCode, data.retMsg || 'Failed to fetch all positions');
+  }
+
+  return data;
+}
+
+/**
  * Get execution history from Bybit (private endpoint)
  * Returns list of executions (fills) for a symbol
  */
