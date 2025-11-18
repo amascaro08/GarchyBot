@@ -2,51 +2,23 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+import Navigation from '@/components/Navigation';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
-import TradeLog, { Trade } from '@/components/TradeLog';
-import TradesTable from '@/components/TradesTable';
-import Sidebar from '@/components/Sidebar';
-import OrderBook from '@/components/OrderBook';
-import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
-import ConnectionIndicator from '@/components/ConnectionIndicator';
-import RealTimeIndicator from '@/components/RealTimeIndicator';
-import ModernHeader from '@/components/ModernHeader';
-import MetricCard from '@/components/MetricCard';
-import StatusBadge from '@/components/StatusBadge';
-import DashboardGrid from '@/components/DashboardGrid';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
+import { Trade } from '@/components/TradeLog';
 import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
-import { io, Socket } from 'socket.io-client';
 import { WebSocketProvider, useSharedWebSocket } from '@/lib/WebSocketContext';
 import { useThrottle } from '@/lib/hooks/useThrottle';
+import { formatCurrency } from '@/lib/format';
 
 const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = DEFAULT_SYMBOLS[0];
-const POLL_INTERVAL = 12000; // 12 seconds (reduced frequency for levels recalculation)
-const LEVELS_RECALC_INTERVAL = 60000; // 60 seconds - levels only need periodic recalculation
-const PENDING_FILL_DELAY_MS = 5000; // wait 5s before considering pending orders fillable
+const POLL_INTERVAL = 12000;
+const PENDING_FILL_DELAY_MS = 5000;
 const SUBDIVISIONS = 5;
 const NO_TRADE_BAND_PCT = 0.001;
-const DEFAULT_MAX_TRADES = 3;
-const DEFAULT_LEVERAGE = 1;
-const DEFAULT_CAPITAL = 10000;
-const DEFAULT_RISK_AMOUNT = 100;
-const DEFAULT_RISK_TYPE = 'fixed'; // 'fixed' or 'percent'
-const DEFAULT_DAILY_TARGET_TYPE = 'percent'; // 'fixed' or 'percent'
-const DEFAULT_DAILY_TARGET_AMOUNT = 5; // 5% or $500
-const DEFAULT_DAILY_STOP_TYPE = 'percent'; // 'fixed' or 'percent'
-const DEFAULT_DAILY_STOP_AMOUNT = 3; // 3% or $300
-const INTERVALS = [
-  { value: '1', label: '1m' },
-  { value: '3', label: '3m' },
-  { value: '5', label: '5m' },
-  { value: '15', label: '15m' },
-  { value: '60', label: '1h' },
-  { value: '120', label: '2h' },
-  { value: '240', label: '4h' },
-];
 const DEFAULT_INTERVAL = '5';
 
 interface HomeContentProps {
@@ -56,933 +28,76 @@ interface HomeContentProps {
 }
 
 function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange }: HomeContentProps) {
-  const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
-  const [symbolsLoading, setSymbolsLoading] = useState<boolean>(true);
+  // Core State
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
+  const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [levels, setLevels] = useState<LevelsResponse | null>(null);
   const [signal, setSignal] = useState<SignalResponse | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [sessionPnL, setSessionPnL] = useState<number>(0);
+  const [dailyPnL, setDailyPnL] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [botRunning, setBotRunning] = useState<boolean>(false);
-  const [loadingBotStatus, setLoadingBotStatus] = useState<boolean>(true);
-  const [maxTrades, setMaxTrades] = useState<number>(DEFAULT_MAX_TRADES);
-  const [leverage, setLeverage] = useState<number>(DEFAULT_LEVERAGE);
-  const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
-  const [capital, setCapital] = useState<number>(DEFAULT_CAPITAL);
-  const [riskAmount, setRiskAmount] = useState<number>(DEFAULT_RISK_AMOUNT);
-  const [riskType, setRiskType] = useState<'fixed' | 'percent'>(DEFAULT_RISK_TYPE);
-  const [useOrderBookConfirm, setUseOrderBookConfirm] = useState<boolean>(true);
-  const [kPct, setKPct] = useState<number>(3); // Will be filled by /levels
-  const [dailyPnL, setDailyPnL] = useState<number>(0);
-  const [dailyTargetType, setDailyTargetType] = useState<'fixed' | 'percent'>(DEFAULT_DAILY_TARGET_TYPE);
-  const [dailyTargetAmount, setDailyTargetAmount] = useState<number>(DEFAULT_DAILY_TARGET_AMOUNT);
-  const [dailyStopType, setDailyStopType] = useState<'fixed' | 'percent'>(DEFAULT_DAILY_STOP_TYPE);
-  const [dailyStopAmount, setDailyStopAmount] = useState<number>(DEFAULT_DAILY_STOP_AMOUNT);
-  const [dailyStartDate, setDailyStartDate] = useState<string>(() => {
-    // Get current UTC date string (YYYY-MM-DD)
-    return new Date().toISOString().split('T')[0];
-  });
-  const [activityLogs, setActivityLogs] = useState<LogEntry[]>([]);
-  const [garchMode, setGarchMode] = useState<'auto' | 'custom'>('auto');
-  const [customKPct, setCustomKPct] = useState<number>(0.03); // Default 3% (0.03 as decimal)
-  const [apiMode, setApiMode] = useState<'demo' | 'live'>('demo');
-  const [apiKey, setApiKey] = useState<string>('');
-  const [apiSecret, setApiSecret] = useState<string>('');
-  const [apiConnectionStatus, setApiConnectionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
-  const [walletInfo, setWalletInfo] = useState<Array<{ coin: string; equity: number; availableToWithdraw: number }> | null>(null);
-  const [overrideDailyLimits, setOverrideDailyLimits] = useState<boolean>(false);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+  
+  // Bot Config
+  const [maxTrades, setMaxTrades] = useState<number>(3);
+  const [leverage, setLeverage] = useState<number>(1);
+  const [capital, setCapital] = useState<number>(10000);
+  const [useOrderBookConfirm, setUseOrderBookConfirm] = useState<boolean>(true);
+  const [garchMode, setGarchMode] = useState<'auto' | 'custom'>('auto');
+  const [customKPct, setCustomKPct] = useState<number>(0.03);
+  
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const levelsRecalcIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const tradesRef = useRef<Trade[]>([]);
   
-  // Access shared WebSocket connection (eliminates duplicate connections)
-  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected, connectionStatus: wsConnectionStatus, lastUpdateTime } = useSharedWebSocket();
-  
-  // Use WebSocket connection status, fallback to 'connected' if we have data
+  // WebSocket
+  const { ticker: wsTicker, candles: wsCandles, isConnected: wsConnected, connectionStatus: wsConnectionStatus, lastUpdateTime } = useSharedWebSocket();
   const connectionStatus = wsConnectionStatus || (candles.length > 0 ? 'connected' : 'connecting');
-  
-  // Throttle price updates for UI (100ms = 10 updates/sec max)
-  // Still fast enough for real-time trading feel, but reduces re-renders by 90%
   const throttledTickerPrice = useThrottle(wsTicker?.lastPrice, 100);
   
-  // Update currentPrice from WebSocket ticker in real-time (for trade P&L calculations)
   useEffect(() => {
     if (throttledTickerPrice && throttledTickerPrice > 0) {
       setCurrentPrice(throttledTickerPrice);
     }
   }, [throttledTickerPrice]);
   
-  // Helper function to add log entries (memoized to avoid dependency warnings)
-  const addLog = useCallback((level: LogLevel, message: string) => {
-    const logEntry: LogEntry = {
-      id: `${Date.now()}-${Math.random()}`,
-      timestamp: new Date(),
-      level,
-      message,
-    };
-    setActivityLogs((prev) => [...prev, logEntry].slice(-100)); // Keep last 100 logs
-  }, []);
-
   useEffect(() => {
     tradesRef.current = trades;
   }, [trades]);
 
+  // Load bot status on mount
   useEffect(() => {
-    const loadSymbols = async () => {
+    const loadBotStatus = async () => {
       try {
-        setSymbolsLoading(true);
-        const res = await fetch('/api/symbols');
-        const data = await res.json();
-
-        if (res.ok && data.success && Array.isArray(data.symbols) && data.symbols.length > 0) {
-          setSymbols(data.symbols);
-          setSymbol((prev) => (data.symbols.includes(prev) ? prev : data.symbols[0]));
-          addLog('info', `Loaded ${data.symbols.length} Bybit symbols`);
-        } else {
-          const errorMsg = data.error || 'Unknown error';
-          addLog('warning', `Failed to load Bybit symbols: ${errorMsg}. Using defaults.`);
-          setSymbols(DEFAULT_SYMBOLS);
-          setSymbol((prev) => (DEFAULT_SYMBOLS.includes(prev) ? prev : DEFAULT_SYMBOL));
-        }
-      } catch (error) {
-        console.error('Failed to load symbols:', error);
-        addLog('warning', 'Failed to load Bybit symbols, using defaults.');
-        setSymbols(DEFAULT_SYMBOLS);
-        setSymbol((prev) => (DEFAULT_SYMBOLS.includes(prev) ? prev : DEFAULT_SYMBOL));
-      } finally {
-        setSymbolsLoading(false);
-      }
-    };
-
-    loadSymbols();
-  }, [addLog, setSymbol]);
-
-  // Calculate daily limits
-  const dailyTargetValue = useMemo(() => {
-    return dailyTargetType === 'percent' 
-      ? (capital * dailyTargetAmount) / 100 
-      : dailyTargetAmount;
-  }, [dailyTargetType, dailyTargetAmount, capital]);
-
-  const dailyStopValue = useMemo(() => {
-    return dailyStopType === 'percent' 
-      ? (capital * dailyStopAmount) / 100 
-      : dailyStopAmount;
-  }, [dailyStopType, dailyStopAmount, capital]);
-
-  // Check if daily limits are hit
-  // Rules: Daily limits should auto-stop the bot when reached
-  const isDailyTargetHit = useMemo(() => {
-    return dailyPnL >= dailyTargetValue && dailyTargetValue > 0;
-  }, [dailyPnL, dailyTargetValue]);
-
-  const isDailyStopHit = useMemo(() => {
-    return dailyPnL <= -dailyStopValue && dailyStopValue > 0;
-  }, [dailyPnL, dailyStopValue]);
-
-  const canTrade = useMemo(() => {
-    return !isDailyTargetHit && !isDailyStopHit;
-  }, [isDailyTargetHit, isDailyStopHit]);
-
-  // Auto-stop bot when daily limits are hit (as per rules)
-  useEffect(() => {
-    if (botRunning && !canTrade && !overrideDailyLimits) {
-      setBotRunning(false);
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-      const reason = isDailyTargetHit ? 'Daily target reached' : 'Daily stop loss hit';
-      addLog('warning', `Bot auto-stopped: ${reason}`);
-    }
-  }, [botRunning, canTrade, isDailyTargetHit, addLog, overrideDailyLimits]);
-
-  useEffect(() => {
-    if (canTrade && overrideDailyLimits) {
-      setOverrideDailyLimits(false);
-    }
-  }, [canTrade, overrideDailyLimits]);
-
-  // Check if we need to reset daily P&L (new UTC day)
-  useEffect(() => {
-    const checkDailyReset = () => {
-      const today = new Date().toISOString().split('T')[0];
-      if (today !== dailyStartDate) {
-        setDailyStartDate(today);
-        setDailyPnL(0);
-        setSessionPnL(0);
-        setTrades([]);
-        tradesRef.current = [];
-        setOverrideDailyLimits(false);
-      }
-    };
-    
-    // Check immediately and then every minute
-    checkDailyReset();
-    const interval = setInterval(checkDailyReset, 60000);
-    return () => clearInterval(interval);
-  }, [dailyStartDate]);
-
-  // Fetch klines - prefer mainnet for accurate prices
-  const fetchKlines = async () => {
-    try {
-      // Try mainnet first for accurate prices
-      let res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
-      
-      // If mainnet fails, fallback to testnet
-      if (!res.ok) {
-        res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
-      }
-      
-      let data;
-      try {
-        data = await res.json();
-      } catch (parseError) {
-        throw new Error(`Failed to parse response: HTTP ${res.status} ${res.statusText}`);
-      }
-      
-      if (!res.ok) {
-        throw new Error(data.error || `Failed to fetch klines: HTTP ${res.status}`);
-      }
-      
-      if (!data || !Array.isArray(data) || data.length === 0) {
-        throw new Error('No kline data received from API');
-      }
-      
-      setCandles(data);
-      
-      // Pass candles to WebSocket provider for initial chart display
-      if (onInitialCandlesLoaded && data.length > 0) {
-        onInitialCandlesLoaded(data);
-      }
-      
-      const latest = data[data.length - 1];
-      setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
-      return data;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to fetch klines';
-      setError(errorMsg);
-      console.error('fetchKlines error:', err);
-      throw err;
-    }
-  };
-
-  // Fetch levels - volatility (kPct) is calculated internally from daily candles
-  const fetchLevels = async () => {
-    try {
-      const res = await fetch('/api/levels', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          symbol, 
-          subdivisions: SUBDIVISIONS,
-          testnet: true, // Default to testnet
-          ...(garchMode === 'custom' && { customKPct }),
-        }),
-      });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to fetch levels');
-      }
-      const data = await res.json();
-      setLevels(data);
-      setKPct(data.kPct); // Store kPct from levels
-      addLog('info', `Levels updated: k% = ${(data.kPct * 100).toFixed(2)}%`);
-      return data;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to fetch levels';
-      setError(errorMsg);
-      addLog('error', `Failed to fetch levels: ${errorMsg}`);
-      console.error('fetchLevels error:', err);
-      throw err;
-    }
-  };
-
-  // Calculate signal
-  const calculateSignal = async (candlesData: Candle[], kPct: number) => {
-    try {
-      // Include real-time price if available from WebSocket
-      const requestBody: any = {
-        symbol,
-        kPct,
-        subdivisions: SUBDIVISIONS,
-        noTradeBandPct: NO_TRADE_BAND_PCT,
-        candles: candlesData,
-      };
-      
-      // Add real-time price if available
-      if (wsTicker?.lastPrice && wsTicker.lastPrice > 0) {
-        requestBody.realtimePrice = wsTicker.lastPrice;
-      }
-      
-      const res = await fetch('/api/signal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-      if (!res.ok) throw new Error('Failed to calculate signal');
-      const data = await res.json();
-      setSignal(data);
-      return data;
-    } catch (err) {
-      console.error('Signal calculation error:', err);
-      return null;
-    }
-  };
-
-  const addTradeToState = useCallback((trade: Trade) => {
-    setTrades((prev) => {
-      const next = [...prev, trade];
-      tradesRef.current = next;
-      return next;
-    });
-  }, []);
-
-  const replaceTradeInState = useCallback((updatedTrade: Trade) => {
-    setTrades((prev) => {
-      const next = prev.map((t) => (t.id === updatedTrade.id ? updatedTrade : t));
-      tradesRef.current = next;
-      return next;
-    });
-  }, []);
-
-  const updateTradeStopOnServer = useCallback(async (trade: Trade, newSl: number) => {
-    try {
-      const res = await fetch(`/api/trades/${trade.id}/sl`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentSl: newSl }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to update stop loss');
-      }
-
-      const updatedTrade = data.trade as Trade;
-      replaceTradeInState(updatedTrade);
-      const tradeSymbol = trade.symbol ?? symbol;
-      addLog('info', `Stop moved to $${newSl.toFixed(2)} for ${trade.side} ${tradeSymbol}`);
-      return updatedTrade;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to update stop loss';
-      addLog('error', message);
-      setError(message);
-      return null;
-    }
-  }, [replaceTradeInState, addLog, symbol]);
-
-  const fillTradeOnServer = useCallback(async (trade: Trade, fillPrice: number) => {
-    try {
-      const res = await fetch(`/api/trades/${trade.id}/fill`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fillPrice }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to mark trade as filled');
-      }
-
-      const updatedTrade = data.trade as Trade;
-      replaceTradeInState(updatedTrade);
-      addLog('success', `Limit order filled: ${updatedTrade.side} @ $${updatedTrade.entry.toFixed(2)}`);
-      return updatedTrade;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to mark trade as filled';
-      addLog('error', message);
-      setError(message);
-      return null;
-    }
-  }, [replaceTradeInState, addLog]);
-
-  const openTradeOnServer = useCallback(async (params: {
-    entry: number;
-    tp: number;
-    sl: number;
-    side: 'LONG' | 'SHORT';
-    positionSize: number;
-    leverage: number;
-    reason: string;
-  }) => {
-    try {
-      const res = await fetch('/api/trades', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol,
-          side: params.side,
-          entry: params.entry,
-          tp: params.tp,
-          sl: params.sl,
-          positionSize: params.positionSize,
-          leverage: params.leverage,
-          reason: params.reason,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to persist trade');
-      }
-
-      addTradeToState(data.trade);
-      addLog('success', `Limit order placed: ${params.side} @ $${params.entry.toFixed(2)}, TP $${params.tp.toFixed(2)}, SL $${params.sl.toFixed(2)}`);
-      return data.trade as Trade;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to persist trade';
-      addLog('error', message);
-      setError(message);
-      return null;
-    }
-  }, [symbol, addTradeToState, addLog]);
-
-  const closeTradeOnServer = useCallback(async (
-    trade: Trade,
-    status: 'tp' | 'sl' | 'breakeven' | 'cancelled',
-    exitPrice: number,
-    logLevel: LogLevel,
-    logMessage: string
-  ) => {
-    try {
-      const res = await fetch(`/api/trades/${trade.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          status,
-          exitPrice,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to update trade');
-      }
-
-      const updatedTrade = data.trade as Trade;
-      const pnlChange = Number(data.pnlChange || 0);
-
-      replaceTradeInState(updatedTrade);
-      if (!Number.isNaN(pnlChange) && Number.isFinite(pnlChange)) {
-        setSessionPnL((prev) => prev + pnlChange);
-        setDailyPnL((prev) => prev + pnlChange);
-      }
-
-      const pnlFormatted = pnlChange >= 0 ? `+$${pnlChange.toFixed(2)}` : `-$${Math.abs(pnlChange).toFixed(2)}`;
-      addLog(logLevel, `${logMessage} (P&L: ${pnlFormatted})`);
-      return { updatedTrade, pnlChange };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to update trade';
-      addLog('error', message);
-      setError(message);
-      return null;
-    }
-  }, [replaceTradeInState, addLog]);
-
-  // Real-time TP/SL checks using ticker data (faster than waiting for candle close)
-  // Throttle to 200ms (5 checks per second) - fast enough for trading, prevents overload
-  const throttledTickerForTPSL = useThrottle(wsTicker?.lastPrice, 200);
-  
-  useEffect(() => {
-    if (!botRunning || !throttledTickerForTPSL || throttledTickerForTPSL <= 0) {
-      return;
-    }
-
-    const checkTPSL = async () => {
-      const openTradesSnapshot = tradesRef.current.filter(
-        (trade) => trade.status === 'open' && trade.symbol === symbol
-      );
-
-      for (const trade of openTradesSnapshot) {
-        const currentPrice = throttledTickerForTPSL;
-        
-        // Check TP/SL with current price (more responsive than waiting for candle close)
-        if (trade.side === 'LONG') {
-          if (currentPrice >= trade.tp) {
-            await closeTradeOnServer(
-              trade,
-              'tp',
-              trade.tp,
-              'success',
-              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
-            );
-            continue;
-          }
-          if (currentPrice <= trade.sl) {
-            await closeTradeOnServer(
-              trade,
-              'sl',
-              trade.sl,
-              'error',
-              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
-            );
-            continue;
-          }
-        } else {
-          // SHORT
-          if (currentPrice <= trade.tp) {
-            await closeTradeOnServer(
-              trade,
-              'tp',
-              trade.tp,
-              'success',
-              `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
-            );
-            continue;
-          }
-          if (currentPrice >= trade.sl) {
-            await closeTradeOnServer(
-              trade,
-              'sl',
-              trade.sl,
-              'error',
-              `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
-            );
-            continue;
-          }
-        }
-
-        // Check for breakeven: if price goes against VWAP direction, move stop to entry
-        // This takes priority over trailing stop
-        if (levels?.vwap && levels.vwap > 0) {
-          // Parse entry time for grace period check
-          const entryTime = trade.time ? new Date(trade.time) : undefined;
-          const breakevenSl = applyBreakevenOnVWAPFlip(
-            currentPrice,
-            levels.vwap,
-            trade.side,
-            trade.entry,
-            trade.sl,
-            0.005, // confirmationBufferPct (0.5% - requires significant move)
-            entryTime, // entryTime for grace period
-            300000 // 5 minutes grace period
-          );
-
-          if (breakevenSl !== null && breakevenSl !== trade.sl) {
-            await updateTradeStopOnServer(trade, breakevenSl);
-            continue; // Skip trailing stop if breakeven was applied
-          }
-        }
-
-        // Update trailing stop loss using current price (only if breakeven not applied)
-        const initialSl = trade.initialSl ?? trade.sl;
-        const trailingSl = computeTrailingBreakeven(
-          trade.side,
-          trade.entry,
-          initialSl,
-          trade.sl,
-          currentPrice
-        );
-
-        if (trailingSl !== null && trailingSl !== trade.sl) {
-          await updateTradeStopOnServer(trade, trailingSl);
-        }
-      }
-    };
-
-    checkTPSL();
-  }, [throttledTickerForTPSL, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer, levels?.vwap]);
-
-  // Main polling function - uses current symbol/interval from closure
-  // OPTIMIZATION: Reduce frequency when WebSocket is active (real-time data available)
-  const pollData = async () => {
-    // Skip polling if WebSocket is connected and providing real-time data
-    // WebSocket provides: candles, ticker, orderbook - no need to poll!
-    if (wsConnected && wsCandles.length > 0) {
-      console.log('[POLL] Skipping - WebSocket active with real-time data');
-      setLoading(false);
-      return;
-    }
-    
-    // Capture current values to ensure we use latest
-    const currentSymbol = symbol;
-    
-    try {
-      setLoading(true);
-      setError(null);
-
-      // Fetch klines (only if WebSocket not providing data)
-      let candlesData;
-      try {
-        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
-        if (res.ok) {
-          candlesData = await res.json();
-        } else {
-          const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
-          candlesData = await testnetRes.json();
-        }
-      } catch (err) {
-        const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
-        candlesData = await testnetRes.json();
-      }
-      
-      if (!candlesData || !Array.isArray(candlesData) || candlesData.length === 0) {
-        setLoading(false);
-        return;
-      }
-
-      // Verify symbol hasn't changed during fetch
-      if (currentSymbol !== symbol) {
-        console.log('Symbol changed during fetch, aborting');
-        setLoading(false);
-        return;
-      }
-
-      // Get levels (includes kPct) - refresh to ensure we have latest VWAP
-      addLog('info', `Monitoring levels for ${symbol}...`);
-      const lv = await fetchLevels();
-      const lastCandle = candlesData[candlesData.length - 1];
-      const lastClose = lastCandle?.close ?? NaN;
-      if (Number.isFinite(lastClose)) {
-        setCurrentPrice(lastClose);
-      }
-      addLog('info', `VWAP: $${lv.vwap.toFixed(2)}, Price: $${lastClose.toFixed(2)}`);
-
-      // Calculate signal using THE SAME kPct from levels
-      const signalData = await calculateSignal(candlesData, lv.kPct);
-
-      // Check for new signal and add to trade log
-      // Only enter trades if bot is running AND we have valid signal AND daily limits not hit
-      if (botRunning && canTrade && signalData && signalData.signal && signalData.touchedLevel) {
-        addLog('info', `Signal detected: ${signalData.signal} @ $${signalData.touchedLevel.toFixed(2)} (${signalData.reason})`);
-        
-        // Optional order-book confirmation
-        let approved = true;
-        if (useOrderBookConfirm) {
-          addLog('info', 'Checking order book confirmation...');
-          try {
-            approved = await confirmLevelTouch({
-              symbol,
-              level: signalData.touchedLevel,
-              side: signalData.signal,
-              windowMs: 8000,
-              minNotional: 50_000, // tune
-              proximityBps: 5, // 5 bps proximity to level
-            });
-            if (approved) {
-              addLog('success', 'Order book confirmation: Liquidity wall detected');
-            } else {
-              addLog('warning', 'Order book confirmation: No significant liquidity wall');
-            }
-          } catch (err) {
-            console.error('Order-book confirmation error:', err);
-            addLog('error', 'Order book confirmation failed');
-            approved = false; // Fail-safe: reject if confirmation fails
-          }
-        }
-
-        if (approved) {
-          const activeTradesForSymbol = tradesRef.current.filter(
-            (t) => (t.status === 'open' || t.status === 'pending') && t.symbol === symbol
-          );
-
-          if (activeTradesForSymbol.length >= maxTrades) {
-            addLog('warning', `Max trades limit reached (${maxTrades}). Skipping signal.`);
-          } else {
-            const duplicateTrade = activeTradesForSymbol.find(
-              (t) =>
-                t.side === signalData.signal &&
-                Math.abs(t.entry - signalData.touchedLevel!) < 0.01
-            );
-
-            if (duplicateTrade) {
-              addLog('warning', `Duplicate trade detected at $${signalData.touchedLevel!.toFixed(2)}. Skipping.`);
-            } else {
-              // Calculate position size based on USDT trade value
-              // Order value in USDT = capital * leverage
-              // Position size in base asset = (capital * leverage) / entry_price
-              const tradeValueUSDT = capital * leverage;
-              const entryPrice = signalData.touchedLevel!;
-              const rawPositionSize = entryPrice > 0 ? tradeValueUSDT / entryPrice : 0;
-              const positionSize = Number.isFinite(rawPositionSize) ? rawPositionSize : 0;
-
-              if (positionSize <= 0) {
-                addLog('warning', 'Calculated position size is zero. Skipping trade.');
-              } else {
-                addLog('info', `Trade value: $${tradeValueUSDT.toFixed(2)} USDT (capital: $${capital.toFixed(2)} * leverage: ${leverage}x), Position size: ${positionSize.toFixed(8)}`);
-                await openTradeOnServer({
-                  entry: signalData.touchedLevel!,
-                  tp: signalData.tp!,
-                  sl: signalData.sl!,
-                  side: signalData.signal,
-                  positionSize,
-                  leverage,
-                  reason: signalData.reason,
-                });
-              }
-            }
-          }
-        } else {
-          addLog('warning', `Signal rejected: ${signalData.reason}`);
-        }
-      } else if (botRunning && !canTrade) {
-        addLog('warning', 'Trading paused: Daily limit reached');
-      } else if (!botRunning && signalData && signalData.signal) {
-        addLog('info', `Signal detected but bot is stopped: ${signalData.signal} @ $${signalData.touchedLevel!.toFixed(2)}`);
-      }
-
-      // Fill pending limit orders when price retests the entry
-      if (candlesData.length > 0) {
-        const pendingTradesSnapshot = tradesRef.current.filter(
-          (trade) => trade.status === 'pending' && trade.symbol === symbol
-        );
-
-        for (const trade of pendingTradesSnapshot) {
-          const placedAt = new Date(trade.time).getTime();
-          if (Date.now() - placedAt < PENDING_FILL_DELAY_MS) {
-            continue;
-          }
-
-          const biasBuffer = Math.abs(lv.vwap) * NO_TRADE_BAND_PCT;
-          const biasValid = trade.side === 'LONG'
-            ? lastClose > lv.vwap + biasBuffer
-            : lastClose < lv.vwap - biasBuffer;
-
-          if (!biasValid) {
-            continue;
-          }
-
-          const retest = trade.side === 'LONG'
-            ? lastCandle.low <= trade.entry
-            : lastCandle.high >= trade.entry;
-
-          if (retest) {
-            const filled = await fillTradeOnServer(trade, trade.entry);
-            if (filled) {
-              trade.status = 'open';
-            }
-          }
-        }
-      }
-
-      // Simulate TP/SL checks for open trades
-      // Use ticker data if available (more real-time), otherwise use candle data
-      const priceForChecks = wsTicker?.lastPrice && wsTicker.lastPrice > 0 
-        ? wsTicker.lastPrice 
-        : (candlesData.length > 0 ? lastClose : null);
-      
-      if (priceForChecks && Number.isFinite(priceForChecks)) {
-        const openTradesSnapshot = tradesRef.current.filter(
-          (trade) => trade.status === 'open' && trade.symbol === symbol
-        );
-
-        for (const trade of openTradesSnapshot) {
-          // Check for breakeven: if price goes against VWAP direction, move stop to entry
-          // This takes priority over trailing stop
-          if (levels?.vwap && levels.vwap > 0) {
-            // Parse entry time for grace period check
-            const entryTime = trade.time ? new Date(trade.time) : undefined;
-            const breakevenSl = applyBreakevenOnVWAPFlip(
-              priceForChecks,
-              levels.vwap,
-              trade.side,
-              trade.entry,
-              trade.sl,
-              0.005, // confirmationBufferPct (0.5% - requires significant move)
-              entryTime, // entryTime for grace period
-              300000 // 5 minutes grace period
-            );
-
-            if (breakevenSl !== null && breakevenSl !== trade.sl) {
-              await updateTradeStopOnServer(trade, breakevenSl);
-              continue; // Skip trailing stop if breakeven was applied
-            }
-          }
-
-          // Update trailing stop loss (only if breakeven not applied)
-          const initialSl = trade.initialSl ?? trade.sl;
-          const trailingSl = computeTrailingBreakeven(
-            trade.side,
-            trade.entry,
-            initialSl,
-            trade.sl,
-            priceForChecks
-          );
-
-          if (trailingSl !== null && trailingSl !== trade.sl) {
-            await updateTradeStopOnServer(trade, trailingSl);
-            continue;
-          }
-
-          if (trade.side === 'LONG') {
-            // Use candle high/low for accurate execution, ticker provides real-time price
-            const highPrice = candlesData.length > 0 ? lastCandle.high : priceForChecks;
-            const lowPrice = candlesData.length > 0 ? lastCandle.low : priceForChecks;
-              
-            if (highPrice >= trade.tp) {
-              await closeTradeOnServer(
-                trade,
-                'tp',
-                trade.tp,
-                'success',
-                `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
-              );
-              continue;
-            }
-            if (lowPrice <= trade.sl) {
-              await closeTradeOnServer(
-                trade,
-                'sl',
-                trade.sl,
-                'error',
-                `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
-              );
-            }
-          } else {
-            // SHORT - use candle high/low for accurate execution
-            const highPrice = candlesData.length > 0 ? lastCandle.high : priceForChecks;
-            const lowPrice = candlesData.length > 0 ? lastCandle.low : priceForChecks;
-              
-            if (lowPrice <= trade.tp) {
-              await closeTradeOnServer(
-                trade,
-                'tp',
-                trade.tp,
-                'success',
-                `Take profit hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.tp.toFixed(2)}`
-              );
-              continue;
-            }
-            if (highPrice >= trade.sl) {
-              await closeTradeOnServer(
-                trade,
-                'sl',
-                trade.sl,
-                'error',
-                `Stop loss hit: ${trade.side} @ $${trade.entry.toFixed(2)} → $${trade.sl.toFixed(2)}`
-              );
-            }
-          }
-        }
-      }
-
-      setLoading(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to poll data');
-      setLoading(false);
-    }
-  };
-
-  // Check auth status and load bot status on mount
-  useEffect(() => {
-    const checkAuthAndLoadStatus = async () => {
-      // First check if user is authenticated
-      try {
+        // Check auth
         const authRes = await fetch('/api/auth/me');
         if (!authRes.ok) {
-          // Not authenticated, redirect to login
           window.location.href = '/login';
           return;
         }
-      } catch (err) {
-        console.error('Auth check failed:', err);
-        window.location.href = '/login';
-        return;
-      }
 
-      // User is authenticated, load bot status
-      try {
-        setLoadingBotStatus(true);
-        
-        // Calculate GARCH volatility to see debug logs in console
-        try {
-          console.log('🚀 [INIT] Calculating GARCH volatility...');
-          const garchRes = await fetch('/api/garch/calculate?symbol=BTCUSDT');
-          if (garchRes.ok) {
-            const garchData = await garchRes.json();
-            if (garchData.success && garchData.debugInfo) {
-              console.log('\n' + '='.repeat(80));
-              console.log('✅ [INIT] GARCH Calculation Complete');
-              console.log('='.repeat(80));
-              console.log(`📊 Symbol: ${garchData.symbol}`);
-              console.log(`📅 Data Points: ${garchData.dataPoints} days`);
-              console.log(`\n📈 Results:`);
-              console.log(`  Historical Std Dev: ${garchData.debugInfo.historicalStdDev?.toFixed(4) || 'N/A'}%`);
-              if (garchData.debugInfo.garchForecasts && Array.isArray(garchData.debugInfo.garchForecasts)) {
-                console.log(`  GARCH Forecasts: ${garchData.debugInfo.garchForecasts.map((f: number) => (f || 0).toFixed(4)).join(', ')}%`);
-              }
-              if (garchData.debugInfo.gjrForecasts && Array.isArray(garchData.debugInfo.gjrForecasts)) {
-                console.log(`  GJR Forecasts: ${garchData.debugInfo.gjrForecasts.map((f: number) => (f || 0).toFixed(4)).join(', ')}%`);
-              }
-              if (garchData.debugInfo.egarchForecasts && Array.isArray(garchData.debugInfo.egarchForecasts)) {
-                console.log(`  EGARCH Forecasts: ${garchData.debugInfo.egarchForecasts.map((f: number) => (f || 0).toFixed(4)).join(', ')}%`);
-              } else {
-                console.warn(`  ⚠️ EGARCH Forecasts: Missing or invalid`);
-              }
-              console.log(`\n📊 Model Averages:`);
-              console.log(`  Prom GARCH: ${garchData.debugInfo.promGarch?.toFixed(4)}%`);
-              console.log(`  Prom GJR: ${garchData.debugInfo.promGjr?.toFixed(4)}%`);
-              console.log(`  Prom EGARCH: ${garchData.debugInfo.promEgarch?.toFixed(4)}%`);
-              console.log(`  ⭐ Prom Global (avg of three): ${garchData.debugInfo.promGlobal?.toFixed(4)}%`);
-              console.log(`\n🎯 Final Results:`);
-              console.log(`  GARCH(1,1) kPct: ${(garchData.models.garch11.kPct * 100).toFixed(4)}%`);
-              console.log(`  GJR-GARCH(1,1) kPct: ${(garchData.models.gjrgarch11.kPct * 100).toFixed(4)}%`);
-              console.log(`  EGARCH(1,1) kPct: ${(garchData.models.egarch11.kPct * 100).toFixed(4)}%`);
-              console.log(`  🎯 Averaged kPct: ${(garchData.models.averaged.kPct * 100).toFixed(4)}%`);
-              console.log('='.repeat(80) + '\n');
-              console.log('💡 Check the server terminal (where npm run dev runs) for detailed GARCH debug logs');
-            }
-          } else {
-            const errorData = await garchRes.json().catch(() => ({}));
-            console.warn('⚠️  [INIT] GARCH calculation failed:', errorData.error || 'Unknown error');
-          }
-        } catch (err) {
-          console.warn('⚠️  [INIT] GARCH calculation error:', err instanceof Error ? err.message : err);
-        }
-        
+        // Load bot config
         const res = await fetch('/api/bot/status');
-        
         if (res.ok) {
           const data = await res.json();
-          
-          // Load ALL bot configuration settings from database
           if (data.botConfig) {
             const config = data.botConfig;
-            
-            // Set bot running state
             setBotRunning(config.is_running || false);
-            
-            // Load trading settings
             setSymbol(config.symbol || DEFAULT_SYMBOL);
             setCandleInterval(config.candle_interval || DEFAULT_INTERVAL);
-            setMaxTrades(config.max_trades || DEFAULT_MAX_TRADES);
-            setLeverage(config.leverage || DEFAULT_LEVERAGE);
-            setCapital(Number(config.capital) || DEFAULT_CAPITAL);
-            setRiskAmount(Number(config.risk_amount) || DEFAULT_RISK_AMOUNT);
-            setRiskType(config.risk_type || DEFAULT_RISK_TYPE);
-            
-            // Load daily limits
-            setDailyTargetType(config.daily_target_type || DEFAULT_DAILY_TARGET_TYPE);
-            setDailyTargetAmount(Number(config.daily_target_amount) || DEFAULT_DAILY_TARGET_AMOUNT);
-            setDailyStopType(config.daily_stop_type || DEFAULT_DAILY_STOP_TYPE);
-            setDailyStopAmount(Number(config.daily_stop_amount) || DEFAULT_DAILY_STOP_AMOUNT);
+            setMaxTrades(config.max_trades || 3);
+            setLeverage(config.leverage || 1);
+            setCapital(Number(config.capital) || 10000);
             setDailyPnL(Number(config.daily_pnl || 0));
-            
-            // Load GARCH settings
             setGarchMode(config.garch_mode || 'auto');
-            if (config.custom_k_pct !== null) {
-              setCustomKPct(Number(config.custom_k_pct));
-            }
-            
-            // Load other settings
+            if (config.custom_k_pct !== null) setCustomKPct(Number(config.custom_k_pct));
             setUseOrderBookConfirm(config.use_orderbook_confirm !== false);
-            setApiMode((config.api_mode as 'demo' | 'live') || 'demo');
-            setApiKey(config.api_key || '');
-            setApiSecret(config.api_secret || '');
-            setApiConnectionStatus('idle');
-            setConnectionMessage(null);
-            setWalletInfo(null);
-            
-            addLog('success', `Bot config loaded: ${config.symbol}, ${config.garch_mode} mode, k%: ${config.custom_k_pct ? (Number(config.custom_k_pct) * 100).toFixed(2) + '%' : 'auto'}`);
           }
           
-          // Load trades from database if any
+          // Load trades
           if (data.allTrades && data.allTrades.length > 0) {
             const dbTrades = data.allTrades.map((t: any) => ({
               id: t.id,
@@ -999,193 +114,67 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
               positionSize: Number(t.position_size),
               exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
             }));
-            // Only set trades if we don't already have them (avoid overwriting active trades)
-            if (trades.length === 0) {
-              setTrades(dbTrades);
-            }
+            setTrades(dbTrades);
           }
           
-          // Load session P&L
-          if (data.sessionPnL !== undefined) {
-            setSessionPnL(Number(data.sessionPnL));
-          }
-          
-          // Load activity logs
-          if (data.activityLogs && data.activityLogs.length > 0) {
-            const dbLogs = data.activityLogs.map((log: any) => ({
-              id: log.id,
-              timestamp: new Date(log.created_at),
-              level: log.level,
-              message: log.message,
-            }));
-            setActivityLogs(dbLogs);
-          }
-          
-          addLog('success', 'Bot status and settings loaded from database');
+          if (data.sessionPnL !== undefined) setSessionPnL(Number(data.sessionPnL));
         }
       } catch (err) {
         console.error('Failed to load bot status:', err);
-        addLog('warning', 'Could not load previous bot status');
       } finally {
-        setLoadingBotStatus(false);
-      }
-    };
-    
-    checkAuthAndLoadStatus();
-  }, [addLog]);
-
-  // Start/stop order book on symbol change
-  useEffect(() => {
-    addLog('info', `Connecting to order book for ${symbol}...`);
-    startOrderBook(symbol);
-    return () => {
-      stopOrderBook(symbol);
-      addLog('info', `Disconnected order book for ${symbol}`);
-    };
-  }, [symbol, addLog]);
-
-  // Fetch levels when symbol changes (levels are based on daily candles, independent of interval)
-  useEffect(() => {
-    const loadLevels = async () => {
-      try {
-        // Reset levels first to ensure UI updates
-        setLevels(null);
-        addLog('info', `Loading levels for ${symbol}...`);
-        
-        const levelsRes = await fetch('/api/levels', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            symbol, 
-            subdivisions: SUBDIVISIONS,
-            testnet: true, // Default to testnet
-            ...(garchMode === 'custom' && { customKPct }),
-          }),
-        });
-        
-        if (!levelsRes.ok) {
-          throw new Error('Failed to fetch levels');
-        }
-        
-        const levelsData = await levelsRes.json();
-        
-        // Only update if symbol hasn't changed during fetch
-        if (levelsData.symbol === symbol) {
-          setLevels(levelsData);
-          setKPct(levelsData.kPct); // Store kPct from levels
-          addLog('success', `Levels loaded for ${symbol}: k% = ${(levelsData.kPct * 100).toFixed(2)}%`);
-        }
-      } catch (err) {
-        console.error('Failed to load levels:', err);
-        const errorMsg = err instanceof Error ? err.message : 'Failed to load levels';
-        setError(errorMsg);
-        addLog('error', `Failed to load levels for ${symbol}: ${errorMsg}`);
+        setLoading(false);
       }
     };
 
-    loadLevels();
-  }, [symbol, garchMode, customKPct, addLog]); // Refetch levels when symbol or GARCH settings change
+    loadBotStatus();
+  }, []);
 
-  // Initial load and polling - handles candles, signals, and interval changes
+  // Load levels and start polling when bot is running
   useEffect(() => {
-    // Notify parent wrapper to update WebSocket
     if (onSymbolChange) onSymbolChange(symbol);
     if (onIntervalChange) onIntervalChange(candleInterval);
-    
-    // Reset signal and candles when symbol or interval changes
-    setSignal(null);
-    setCandles([]);
-    setCurrentPrice(null);
 
-    // Create a function that uses current symbol/interval values
     const loadData = async () => {
       try {
         setLoading(true);
-        setError(null);
-
-        // Fetch klines with current symbol and interval (for display only)
-        // Use mainnet for accurate prices, fallback to testnet
+        
+        // Fetch klines
         let klinesData;
         try {
           const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
           if (res.ok) {
             klinesData = await res.json();
           } else {
-            // Fallback to testnet
             const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
             klinesData = await testnetRes.json();
           }
         } catch (err) {
-          // Final fallback to testnet
           const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
           klinesData = await testnetRes.json();
         }
         
-        if (!klinesData || !Array.isArray(klinesData) || klinesData.length === 0) {
-          setLoading(false);
-          return;
+        if (klinesData && Array.isArray(klinesData) && klinesData.length > 0) {
+          setCandles(klinesData);
+          if (onInitialCandlesLoaded) onInitialCandlesLoaded(klinesData);
+          const latest = klinesData[klinesData.length - 1];
+          setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
         }
 
-        setCandles(klinesData);
-        
-        // Pass candles to WebSocket provider for initial chart display
-        if (onInitialCandlesLoaded && klinesData.length > 0) {
-          onInitialCandlesLoaded(klinesData);
-        }
-        
-        const latest = klinesData[klinesData.length - 1];
-        setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
-
-        // Fetch levels for this symbol (may already be loading from symbol change useEffect)
-        // This ensures we have levels even if symbol change useEffect hasn't completed
+        // Fetch levels
         const levelsRes = await fetch('/api/levels', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             symbol, 
             subdivisions: SUBDIVISIONS,
-            testnet: true, // Default to testnet
+            testnet: true,
             ...(garchMode === 'custom' && { customKPct }),
           }),
         });
         
         if (levelsRes.ok) {
           const levelsData = await levelsRes.json();
-          if (levelsData.symbol === symbol) {
-            setLevels(levelsData);
-            setKPct(levelsData.kPct);
-            addLog('success', `Levels loaded: k% = ${(levelsData.kPct * 100).toFixed(2)}%`);
-            
-            // Calculate signal using kPct from levels
-            // Include real-time price if available from WebSocket
-            const signalRequestBody: any = {
-              symbol,
-              kPct: levelsData.kPct,
-              subdivisions: SUBDIVISIONS,
-              noTradeBandPct: NO_TRADE_BAND_PCT,
-              candles: klinesData,
-            };
-            
-            // Add real-time price if available
-            if (wsTicker?.lastPrice && wsTicker.lastPrice > 0) {
-              signalRequestBody.realtimePrice = wsTicker.lastPrice;
-            }
-            
-            const signalRes = await fetch('/api/signal', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(signalRequestBody),
-            });
-            if (signalRes.ok) {
-              const signalData = await signalRes.json();
-              if (signalData.symbol === symbol) {
-                setSignal(signalData);
-                if (signalData.signal) {
-                  addLog('info', `Initial signal: ${signalData.signal} @ $${signalData.touchedLevel?.toFixed(2) || 'N/A'}`);
-                }
-              }
-            }
-          }
+          setLevels(levelsData);
         }
 
         setLoading(false);
@@ -1195,14 +184,10 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
       }
     };
 
+    loadData();
+
     if (botRunning) {
-      loadData();
-      // OPTIMIZATION: Increase polling interval when WebSocket is active
-      // WebSocket provides real-time data, so we only need periodic fallback polling
-      const pollInterval = wsConnected ? 60000 : POLL_INTERVAL; // 60s if WS active, 12s if not
-      const intervalId = setInterval(() => {
-        pollData();
-      }, pollInterval);
+      const intervalId = setInterval(loadData, POLL_INTERVAL);
       pollingIntervalRef.current = intervalId;
       return () => {
         if (pollingIntervalRef.current) {
@@ -1210,20 +195,16 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
           pollingIntervalRef.current = null;
         }
       };
-    } else {
-      // Load initial data even when bot is stopped
-      loadData();
     }
-  }, [symbol, candleInterval, botRunning, onSymbolChange, onIntervalChange]); // Candles and signals depend on interval, but levels don't
+  }, [symbol, candleInterval, botRunning, garchMode, customKPct]);
 
-  // Real-time trade updates via Server-Sent Events
+  // Real-time trade updates
   useEffect(() => {
     const eventSource = new EventSource('/api/trades/stream');
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
         if (data.type === 'trades' && data.trades) {
           const dbTrades = data.trades.map((t: any) => ({
             id: t.id,
@@ -1241,688 +222,305 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
             exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
             pnl: t.pnl !== null && t.pnl !== undefined ? Number(t.pnl) : undefined,
           }));
-
-          // Update trades state - use server data as source of truth
           setTrades(dbTrades);
           tradesRef.current = dbTrades;
         } else if (data.type === 'pnl') {
-          // Update P&L values
-          if (data.sessionPnL !== undefined) {
-            setSessionPnL(Number(data.sessionPnL));
-          }
-          if (data.dailyPnL !== undefined) {
-            setDailyPnL(Number(data.dailyPnL));
-          }
-        } else if (data.type === 'error') {
-          console.error('SSE stream error:', data.message);
+          if (data.sessionPnL !== undefined) setSessionPnL(Number(data.sessionPnL));
+          if (data.dailyPnL !== undefined) setDailyPnL(Number(data.dailyPnL));
         }
       } catch (err) {
         console.error('Error parsing SSE message:', err);
       }
     };
 
-    eventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-      // EventSource will automatically reconnect
-    };
-
     return () => {
       eventSource.close();
     };
-  }, [leverage]); // Only re-run if leverage changes (affects trade mapping)
+  }, [leverage]);
 
-  // Prepare chart markers from signals - memoize to prevent unnecessary re-renders
+  // Start/Stop Bot
+  const handleQuickToggle = async () => {
+    if (botRunning) {
+      try {
+        const res = await fetch('/api/bot/stop', { method: 'POST' });
+        if (res.ok) {
+          setBotRunning(false);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to stop bot:', err);
+      }
+    } else {
+      try {
+        const res = await fetch('/api/bot/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (res.ok) {
+          setBotRunning(true);
+        }
+      } catch (err) {
+        console.error('Failed to start bot:', err);
+      }
+    }
+  };
+
+  // Calculate stats
+  const activeTrades = trades.filter(t => t.status === 'open' || t.status === 'pending');
+  const openTrades = trades.filter(t => t.status === 'open');
+  const closedTrades = trades.filter(t => t.status !== 'open' && t.status !== 'pending');
+  const wins = closedTrades.filter(t => t.status === 'tp').length;
+  const losses = closedTrades.filter(t => t.status === 'sl').length;
+  const winRate = closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : 0;
+
+  const totalUnrealizedPnL = openTrades.reduce((sum, trade) => {
+    if (currentPrice !== null && currentPrice > 0) {
+      const positionSize = trade.positionSize || 0;
+      const pnl = trade.side === 'LONG' 
+        ? (currentPrice - trade.entry) * positionSize
+        : (trade.entry - currentPrice) * positionSize;
+      return sum + pnl;
+    }
+    return sum;
+  }, 0);
+
+  // Chart markers
   const chartMarkers = useMemo(() => {
     if (signal && signal.signal && signal.touchedLevel && candles.length > 0) {
-      return [
-        {
-          time: candles[candles.length - 1]?.ts / 1000,
-          position: signal.signal === 'LONG' ? ('belowBar' as const) : ('aboveBar' as const),
-          color: signal.signal === 'LONG' ? '#10b981' : '#ef4444',
-          shape: signal.signal === 'LONG' ? ('arrowUp' as const) : ('arrowDown' as const),
-          text: `${signal.signal} @ ${signal.touchedLevel.toFixed(2)}`,
-        },
-      ];
+      return [{
+        time: candles[candles.length - 1]?.ts / 1000,
+        position: signal.signal === 'LONG' ? ('belowBar' as const) : ('aboveBar' as const),
+        color: signal.signal === 'LONG' ? '#10b981' : '#ef4444',
+        shape: signal.signal === 'LONG' ? ('arrowUp' as const) : ('arrowDown' as const),
+        text: `${signal.signal} @ ${signal.touchedLevel.toFixed(2)}`,
+      }];
     }
     return [];
   }, [signal, candles]);
 
-  // Get open trades for chart visualization - memoize to prevent unnecessary re-renders
-  const openTrades = useMemo(() => {
-    return trades
-      .filter((t) => t.status === 'open')
-      .map((t) => ({
-        entry: t.entry,
-        tp: t.tp,
-        sl: t.sl,
-        side: t.side,
-      }));
-  }, [trades]);
+  const openTradesForChart = useMemo(() => {
+    return openTrades.map((t) => ({
+      entry: t.entry,
+      tp: t.tp,
+      sl: t.sl,
+      side: t.side,
+    }));
+  }, [openTrades]);
 
-  // Get current price
-  const handleStartBot = async () => {
-    setTrades([]);
-    tradesRef.current = [];
-    setSessionPnL(0);
-    setError(null);
-    
-    // Check if we should show a message about resetting limits
-    if (!canTrade) {
-      addLog('info', `Daily limits reached. Starting new session with P&L reset...`);
-    }
-
-    // Check if phases are completed before starting (Phase 1 and Phase 2 must be completed)
-    try {
-      if (apiMode === 'live' && (!apiKey.trim() || !apiSecret.trim())) {
-        const errorMsg = 'Live mode requires Bybit API key and secret.';
-        setError(errorMsg);
-        addLog('error', errorMsg);
-        return;
-      }
-
-      const levelsRes = await fetch('/api/levels', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol,
-          subdivisions: SUBDIVISIONS,
-          testnet: true,
-        }),
-      });
-
-      if (!levelsRes.ok) {
-        const errorMsg = 'Cannot start bot: Daily setup not completed. Please wait for Phase 1 & 2 to finish.';
-        setError(errorMsg);
-        addLog('error', errorMsg);
-        return;
-      }
-    } catch (err) {
-      const errorMsg = 'Cannot start bot: Unable to verify daily setup completion.';
-      setError(errorMsg);
-      addLog('error', errorMsg);
-      return;
-    }
-    
-    try {
-      // Backend automatically resets and starts new session if limits are hit
-      const res = await fetch('/api/bot/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      
-      const data = await res.json();
-      
-      if (!res.ok) {
-        const errorMsg = data.error || `Failed to start bot (${res.status})`;
-        console.error('[BOT START] Error:', errorMsg);
-        setError(errorMsg);
-        addLog('error', errorMsg);
-        return; // Don't continue if there's an error
-      }
-      
-      setBotRunning(true);
-      setError(null);
-      
-      // If limits were hit, backend reset the P&L, so sync frontend state
-      if (!canTrade) {
-        setDailyPnL(0);
-        setDailyStartDate(new Date().toISOString().split('T')[0]);
-      }
-      
-      // Update daily P&L from response if provided
-      if (data.botConfig?.daily_pnl !== undefined) {
-        setDailyPnL(Number(data.botConfig.daily_pnl));
-      }
-      
-      addLog('success', `Bot started for ${symbol} - running in background`);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to start bot';
-      console.error('[BOT START] Exception:', err);
-      setError(errorMsg);
-      addLog('error', errorMsg);
-    }
-  };
-
-  const handleStopBot = async () => {
-    try {
-      const res = await fetch('/api/bot/stop', { method: 'POST' });
-      const data = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to stop bot');
-      }
-      
-      setBotRunning(false);
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-      setOverrideDailyLimits(false);
-      addLog('warning', 'Bot stopped');
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to stop bot';
-      setError(errorMsg);
-      addLog('error', errorMsg);
-    }
-  };
-
-  const handleSaveSettings = async () => {
-    try {
-      const sanitizedKey = apiKey.trim();
-      const sanitizedSecret = apiSecret.trim();
-      const settingsToSave = {
-        symbol,
-        candle_interval: candleInterval,
-        max_trades: maxTrades,
-        leverage,
-        capital,
-        risk_amount: riskAmount,
-        risk_type: riskType,
-        daily_target_type: dailyTargetType,
-        daily_target_amount: dailyTargetAmount,
-        daily_stop_type: dailyStopType,
-        daily_stop_amount: dailyStopAmount,
-        garch_mode: garchMode,
-        custom_k_pct: customKPct,
-        use_orderbook_confirm: useOrderBookConfirm,
-        api_mode: apiMode,
-        api_key: sanitizedKey.length > 0 ? sanitizedKey : null,
-        api_secret: sanitizedSecret.length > 0 ? sanitizedSecret : null,
-      };
-
-      const res = await fetch('/api/bot/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settingsToSave),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to save settings');
-      }
-
-      addLog('success', 'Settings saved successfully!');
-      setError(null);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to save settings';
-      setError(errorMsg);
-      addLog('error', errorMsg);
-    }
-  };
-
-  const handleTestConnection = async () => {
-    const key = apiKey.trim();
-    const secret = apiSecret.trim();
-
-    if (!key || !secret) {
-      const message = 'Please provide both API key and secret before testing.';
-      setApiConnectionStatus('error');
-      setConnectionMessage(message);
-      setWalletInfo(null);
-      addLog('error', message);
-      return;
-    }
-
-    try {
-      setApiConnectionStatus('loading');
-      setConnectionMessage(null);
-      setWalletInfo(null);
-
-      const res = await fetch('/api/bybit/test-connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey: key,
-          apiSecret: secret,
-          mode: apiMode,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Connection failed');
-      }
-
-      const balances = Array.isArray(data.wallet?.list)
-        ? data.wallet.list.flatMap((wallet: any) =>
-            (wallet.coin || []).map((coin: any) => ({
-              coin: coin.coin,
-              equity: Number(coin.equity || 0),
-              // Use availableBalance for trading, fallback to availableToWithdraw if not present
-              availableToWithdraw: Number(coin.availableBalance || coin.availableToWithdraw || 0),
-            }))
-          )
-          .filter((wallet: { equity: number; availableToWithdraw: number }) => wallet.equity > 0 || wallet.availableToWithdraw > 0)
-        : [];
-
-      setWalletInfo(balances);
-      setApiConnectionStatus('success');
-      setConnectionMessage('Connection successful.');
-      addLog('success', `Bybit ${apiMode} connection successful.`);
-
-      // Auto-sync capital from wallet balance when in live mode
-      if (apiMode === 'live' && balances.length > 0) {
-        // Calculate total equity (use equity, not available balance, as capital represents total account value)
-        const totalEquity = balances.reduce((sum: number, wallet: { equity: number; availableToWithdraw: number }) => sum + (wallet.equity || 0), 0);
-        if (totalEquity > 0) {
-          setCapital(totalEquity);
-          addLog('info', `Capital auto-synced from wallet balance: $${totalEquity.toFixed(2)}`);
-          
-          // Auto-save capital to database
-          try {
-            const settingsToSave = {
-              symbol,
-              candle_interval: candleInterval,
-              max_trades: maxTrades,
-              leverage,
-              capital: totalEquity,
-              risk_amount: riskAmount,
-              risk_type: riskType,
-              daily_target_type: dailyTargetType,
-              daily_target_amount: dailyTargetAmount,
-              daily_stop_type: dailyStopType,
-              daily_stop_amount: dailyStopAmount,
-              garch_mode: garchMode,
-              custom_k_pct: customKPct,
-              use_orderbook_confirm: useOrderBookConfirm,
-              api_mode: apiMode,
-              api_key: key,
-              api_secret: secret,
-            };
-
-            await fetch('/api/bot/config', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(settingsToSave),
-            });
-          } catch (error) {
-            console.error('Failed to auto-save capital:', error);
-          }
-        }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to test connection';
-      setApiConnectionStatus('error');
-      setConnectionMessage(message);
-      setWalletInfo(null);
-      addLog('error', message);
-    }
-  };
-
-  const handleManualCloseTrade = async (trade: Trade) => {
-    try {
-      if (trade.status === 'pending') {
-        await closeTradeOnServer(
-          trade,
-          'cancelled',
-          trade.entry,
-          'warning',
-          `Pending order cancelled: ${trade.side} @ $${trade.entry.toFixed(2)}`
-        );
-        return;
-      }
-
-      const exitPrice = currentPrice ?? trade.entry;
-      await closeTradeOnServer(
-        trade,
-        'breakeven',
-        exitPrice,
-        'warning',
-        `Trade manually closed: ${trade.side} @ $${trade.entry.toFixed(2)} → $${exitPrice.toFixed(2)}`
-      );
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to close trade';
-      setError(errorMsg);
-      addLog('error', errorMsg);
-    }
-  };
-
-  // Calculate statistics for dashboard
-  const activeTrades = trades.filter(t => t.status === 'open').length;
-  const pendingTrades = trades.filter(t => t.status === 'pending').length;
-  const totalTrades = activeTrades + pendingTrades;
-  
-  // Calculate win rate: TP = win, SL = loss
-  const wins = trades.filter(t => t.status === 'tp').length;
-  const losses = trades.filter(t => t.status === 'sl').length;
-  const totalClosed = wins + losses;
-  const winRate = totalClosed > 0 ? (wins / totalClosed) * 100 : 0;
-  
-  return (
-    <div className="min-h-screen text-slate-100 flex relative bg-[#0a0e1a]">
-      {/* Sidebar - Desktop: fixed left, Mobile: slide-out */}
-      <Sidebar
-        symbol={symbol}
-        setSymbol={setSymbol}
-        candleInterval={candleInterval}
-        setCandleInterval={setCandleInterval}
-        maxTrades={maxTrades}
-        setMaxTrades={setMaxTrades}
-        leverage={leverage}
-        setLeverage={setLeverage}
-        capital={capital}
-        setCapital={setCapital}
-        riskAmount={riskAmount}
-        setRiskAmount={setRiskAmount}
-        riskType={riskType}
-        setRiskType={setRiskType}
-        dailyTargetType={dailyTargetType}
-        setDailyTargetType={setDailyTargetType}
-        dailyTargetAmount={dailyTargetAmount}
-        setDailyTargetAmount={setDailyTargetAmount}
-        dailyStopType={dailyStopType}
-        setDailyStopType={setDailyStopType}
-        dailyStopAmount={dailyStopAmount}
-        setDailyStopAmount={setDailyStopAmount}
-        useOrderBookConfirm={useOrderBookConfirm}
-        setUseOrderBookConfirm={setUseOrderBookConfirm}
-        dailyPnL={dailyPnL}
-        dailyTargetValue={dailyTargetValue}
-        dailyStopValue={dailyStopValue}
-        isDailyTargetHit={isDailyTargetHit}
-        isDailyStopHit={isDailyStopHit}
-        canTrade={canTrade}
-        botRunning={botRunning}
-        onStartBot={handleStartBot}
-        onStopBot={handleStopBot}
-        onSaveSettings={handleSaveSettings}
-        symbols={symbols}
-        symbolsLoading={symbolsLoading}
-        intervals={INTERVALS}
-        garchMode={garchMode}
-        setGarchMode={setGarchMode}
-        customKPct={customKPct}
-        setCustomKPct={setCustomKPct}
-        apiMode={apiMode}
-        setApiMode={setApiMode}
-        apiKey={apiKey}
-        setApiKey={setApiKey}
-        apiSecret={apiSecret}
-        setApiSecret={setApiSecret}
-        onTestConnection={handleTestConnection}
-        connectionStatus={apiConnectionStatus}
-        connectionMessage={connectionMessage}
-        walletInfo={walletInfo}
-      />
-
-      {/* Main Content */}
-      <div className="flex-1 p-6 lg:p-8 overflow-x-hidden bg-[#0a0e1a]">
-        <div className="max-w-[1800px] mx-auto">
-          {/* Modern Header */}
-          <ModernHeader
-            isConnected={wsConnected}
-            connectionStatus={connectionStatus}
-            lastUpdateTime={lastUpdateTime}
-            botRunning={botRunning}
-            currentPrice={currentPrice}
-            symbol={symbol}
-          />
-
-          {/* Dashboard Grid - Key Metrics */}
-          <DashboardGrid>
-            <MetricCard
-              label="Active Positions"
-              value={`${totalTrades}/${maxTrades}`}
-              trend={totalTrades > 0 ? 'up' : 'neutral'}
-              icon={<span>📊</span>}
-              className="animate-fade-in"
-            />
-            
-            <MetricCard
-              label="Session P&L"
-              value={`$${sessionPnL.toFixed(2)}`}
-              trend={sessionPnL > 0 ? 'up' : sessionPnL < 0 ? 'down' : 'neutral'}
-              change={{
-                value: parseFloat(((sessionPnL / (capital || 1)) * 100).toFixed(2)),
-                label: 'of capital'
-              }}
-              icon={<span>💰</span>}
-              className="animate-fade-in"
-            />
-            
-            <MetricCard
-              label="Win Rate"
-              value={`${winRate.toFixed(1)}%`}
-              trend={winRate > 50 ? 'up' : winRate < 50 ? 'down' : 'neutral'}
-              icon={<span>🎯</span>}
-              className="animate-fade-in"
-            />
-            
-            <MetricCard
-              label="Volatility (GARCH)"
-              value={levels ? `${(levels.kPct * 100).toFixed(2)}%` : 'Loading...'}
-              trend="neutral"
-              icon={<span>📈</span>}
-              className="animate-fade-in"
-            />
-          </DashboardGrid>
-
-          {/* Quick Stats Bar */}
-          <div className="mb-6 flex flex-wrap gap-3 animate-fade-in">
-            {/* Core Trading Stats */}
-            <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-cyan-400 rounded-full opacity-80"></div>
-                <div className="text-xs">
-                  <div className="text-gray-400 font-medium">Active Orders</div>
-                  <div className="text-cyan-300 font-bold text-sm">{trades.filter(t => t.status === 'open' || t.status === 'pending').length}/{maxTrades}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-purple-400 rounded-full opacity-80"></div>
-                <div className="text-xs">
-                  <div className="text-gray-400 font-medium">Leverage</div>
-                  <div className="text-purple-300 font-bold text-sm">{leverage}x</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-              <div className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-pink-400 rounded-full opacity-80"></div>
-                <div className="text-xs">
-                  <div className="text-gray-400 font-medium">Interval</div>
-                  <div className="text-pink-300 font-bold text-sm">{INTERVALS.find(i => i.value === candleInterval)?.label || candleInterval}</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Volatility with Real-Time Price */}
-            {levels && (
-              <>
-                <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                  <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 bg-yellow-400 rounded-full opacity-80"></div>
-                    <div className="text-xs">
-                      <div className="text-gray-400 font-medium">Volatility</div>
-                      <div className="text-yellow-300 font-bold text-sm">{(levels.kPct * 100).toFixed(2)}%</div>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Real-Time Price with Freshness Indicator */}
-                {currentPrice && (
-                  <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                    <div className="flex items-center gap-3">
-                      <RealTimeIndicator lastUpdateTime={lastUpdateTime} showAge={false} />
-                      <div className="text-xs">
-                        <div className="text-gray-400 font-medium">Price</div>
-                        <div className="text-cyan-300 font-bold text-sm">${currentPrice.toFixed(2)}</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Daily Limits Status */}
-            {isDailyTargetHit && (
-              <StatusBadge variant="success">
-                ✓ Target Achieved
-              </StatusBadge>
-            )}
-            
-            {isDailyStopHit && (
-              <StatusBadge variant="danger">
-                ✗ Stop Loss Hit
-              </StatusBadge>
-            )}
-          </div>
-
-        {error && (
-          <div className="glass-effect border-2 border-red-500/50 rounded-xl p-4 mb-6 text-red-300 shadow-2xl shadow-red-500/20 backdrop-blur-xl bg-red-500/5 animate-pulse">
-            <div className="flex items-center gap-3">
-              <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-              </svg>
-              <div className="flex-1">
-                <span className="font-bold">Error: {error}</span>
-                <div className="text-sm text-red-200 mt-1 opacity-80">
-                  Please check your configuration and try again. If the issue persists, contact support.
-                </div>
-              </div>
-              <button
-                onClick={() => setError(null)}
-                className="text-red-300 hover:text-red-100 transition-colors"
-              >
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {loadingBotStatus && (
-          <div className="text-center py-12">
-            <div className="inline-flex items-center gap-3 text-cyan-300">
-              <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <span className="font-bold text-lg">Loading bot status from database...</span>
-            </div>
-          </div>
-        )}
-
-        {loading && !loadingBotStatus && candles.length === 0 && !currentPrice && (
-          <div className="text-center py-12">
-            <div className="inline-flex items-center gap-3 text-cyan-300">
-              <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <span className="font-bold text-lg">Loading market data...</span>
-            </div>
-          </div>
-        )}
-
-          {/* Main layout */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            {/* Cards above chart - full width */}
-            <div className="xl:col-span-3 mb-6">
-              <Cards
-                price={currentPrice}
-                garchPct={levels?.kPct ?? null}
-                vwap={levels?.vwap ?? null}
-                dOpen={levels?.dOpen ?? null}
-                upper={levels?.upper ?? null}
-                lower={levels?.lower ?? null}
-              />
-            </div>
-
-            {/* Chart spans full width - Modern Card Design */}
-            <div className="xl:col-span-3 card p-6 animate-fade-in">
-              <div className="mb-5 flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold gradient-text mb-1">Price Chart</h2>
-                  <p className="text-sm text-slate-400">Real-time candlestick data with trading levels</p>
-                </div>
-                <StatusBadge variant={wsConnected ? 'success' : 'danger'} dot pulse={wsConnected}>
-                  {wsConnected ? 'Live Data' : 'Disconnected'}
-                </StatusBadge>
-              </div>
-              <Chart
-                candles={candles}
-                dOpen={levels?.dOpen ?? null}
-                vwap={levels?.vwap ?? null}
-                vwapLine={levels?.vwapLine}
-                upLevels={levels?.upLevels ?? []}
-                dnLevels={levels?.dnLevels ?? []}
-                upper={levels?.upper ?? null}
-                lower={levels?.lower ?? null}
-                symbol={symbol}
-                interval={candleInterval}
-                markers={chartMarkers}
-                openTrades={openTrades}
-                onPriceUpdate={setCurrentPrice}
-              />
-            </div>
-
-            {/* Trade statistics & activity - Modern Cards */}
-            <div className="space-y-6">
-              <div className="card p-5 animate-fade-in">
-                <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
-                  <span className="text-xl">💼</span>
-                  Trade Summary
-                </h3>
-                <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} walletInfo={walletInfo} />
-              </div>
-              
-              <div className="card p-5 animate-fade-in">
-                <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
-                  <span className="text-xl">📝</span>
-                  Activity Log
-                </h3>
-                <ActivityLog logs={activityLogs} maxLogs={50} />
-              </div>
-            </div>
-
-            {/* Trades Table - Modern Card */}
-            <div className="xl:col-span-2 space-y-4 animate-fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-                  <span className="text-2xl">📋</span>
-                  Recent Trades
-                </h2>
-                <Link href="/history" className="btn btn-ghost text-sm">
-                  View Full History →
-                </Link>
-              </div>
-              <div className="card p-6">
-                <TradesTable
-                  trades={trades}
-                  currentPrice={currentPrice}
-                  onCloseTrade={handleManualCloseTrade}
-                  candles={candles}
-                  symbol={symbol}
-                  interval={candleInterval}
-                  levels={levels}
-                />
-              </div>
-            </div>
-          </div>
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#0a0e1a] flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-400 mx-auto mb-4"></div>
+          <p className="text-gray-300">Loading dashboard...</p>
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#0a0e1a]">
+      <Navigation botRunning={botRunning} onQuickToggle={handleQuickToggle} />
+      
+      <main className="pt-20 md:pt-24 pb-24 md:pb-8 px-4 md:px-6">
+        <div className="max-w-[1800px] mx-auto space-y-6">
+          {/* Hero Metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 md:gap-4">
+            <HeroMetric
+              label="Bot Status"
+              value={botRunning ? 'Active' : 'Inactive'}
+              variant={botRunning ? 'success' : 'neutral'}
+              icon="⚡"
+            />
+            <HeroMetric
+              label="Active Trades"
+              value={`${activeTrades.length}/${maxTrades}`}
+              icon="📊"
+            />
+            <HeroMetric
+              label="Session P&L"
+              value={formatCurrency(sessionPnL)}
+              variant={sessionPnL >= 0 ? 'success' : 'danger'}
+              icon="💰"
+            />
+            <HeroMetric
+              label="Daily P&L"
+              value={formatCurrency(dailyPnL)}
+              variant={dailyPnL >= 0 ? 'success' : 'danger'}
+              icon="📅"
+            />
+            <HeroMetric
+              label="Win Rate"
+              value={`${winRate.toFixed(0)}%`}
+              variant={winRate >= 50 ? 'success' : 'danger'}
+              icon="🎯"
+            />
+            <HeroMetric
+              label="Volatility"
+              value={levels ? `${(levels.kPct * 100).toFixed(2)}%` : '—'}
+              icon="📈"
+            />
+          </div>
+
+          {/* Error Display */}
+          {error && (
+            <div className="card p-4 border-red-500/30 bg-red-500/10">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <div className="font-bold text-red-300">Error</div>
+                  <div className="text-sm text-red-400">{error}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Market Info Cards */}
+          <Cards
+            price={currentPrice}
+            garchPct={levels?.kPct ?? null}
+            vwap={levels?.vwap ?? null}
+            dOpen={levels?.dOpen ?? null}
+            upper={levels?.upper ?? null}
+            lower={levels?.lower ?? null}
+          />
+
+          {/* Chart */}
+          <div className="card p-4 md:p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl md:text-2xl font-bold text-white">Price Chart</h2>
+                <p className="text-sm text-slate-400">{symbol} • {candleInterval}m interval</p>
+              </div>
+              <div className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                wsConnected ? 'bg-green-500/20 text-green-300 border border-green-500/30' : 'bg-red-500/20 text-red-300 border border-red-500/30'
+              }`}>
+                {wsConnected ? '🟢 Live' : '🔴 Offline'}
+              </div>
+            </div>
+            <Chart
+              candles={candles}
+              dOpen={levels?.dOpen ?? null}
+              vwap={levels?.vwap ?? null}
+              vwapLine={levels?.vwapLine}
+              upLevels={levels?.upLevels ?? []}
+              dnLevels={levels?.dnLevels ?? []}
+              upper={levels?.upper ?? null}
+              lower={levels?.lower ?? null}
+              symbol={symbol}
+              interval={candleInterval}
+              markers={chartMarkers}
+              openTrades={openTradesForChart}
+              onPriceUpdate={setCurrentPrice}
+            />
+          </div>
+
+          {/* Active Positions */}
+          {activeTrades.length > 0 && (
+            <div className="card p-4 md:p-6">
+              <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                <span className="text-2xl">💼</span>
+                Active Positions ({activeTrades.length})
+              </h2>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {activeTrades.map((trade) => {
+                  const unrealizedPnL = currentPrice && trade.status === 'open'
+                    ? (trade.side === 'LONG' 
+                        ? (currentPrice - trade.entry) * (trade.positionSize || 0)
+                        : (trade.entry - currentPrice) * (trade.positionSize || 0))
+                    : 0;
+
+                  return (
+                    <div key={trade.id} className="card p-4 bg-slate-800/50">
+                      <div className="flex items-start justify-between mb-3">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`px-2 py-1 rounded text-xs font-semibold ${
+                              trade.side === 'LONG' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                            }`}>
+                              {trade.side}
+                            </span>
+                            <span className="text-white font-bold">{trade.symbol}</span>
+                          </div>
+                          <div className="text-xs text-slate-400">{new Date(trade.time).toLocaleString()}</div>
+                        </div>
+                        <div className={`text-right ${unrealizedPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          <div className="text-xs font-semibold">Unrealized P&L</div>
+                          <div className="text-lg font-bold">{formatCurrency(unrealizedPnL)}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3 text-sm">
+                        <div>
+                          <div className="text-xs text-slate-400">Entry</div>
+                          <div className="font-semibold text-white">${trade.entry.toFixed(2)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-slate-400">TP</div>
+                          <div className="font-semibold text-green-400">${trade.tp.toFixed(2)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-slate-400">SL</div>
+                          <div className="font-semibold text-red-400">${trade.sl.toFixed(2)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Quick Actions */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Link href="/trades" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
+              <div className="text-3xl mb-2">💹</div>
+              <h3 className="text-lg font-bold text-white mb-1">View All Trades</h3>
+              <p className="text-sm text-slate-400">Full trade history and performance</p>
+            </Link>
+            <Link href="/analytics" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
+              <div className="text-3xl mb-2">📈</div>
+              <h3 className="text-lg font-bold text-white mb-1">Analytics</h3>
+              <p className="text-sm text-slate-400">Detailed performance insights</p>
+            </Link>
+            <Link href="/settings" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
+              <div className="text-3xl mb-2">⚙️</div>
+              <h3 className="text-lg font-bold text-white mb-1">Settings</h3>
+              <p className="text-sm text-slate-400">Configure bot parameters</p>
+            </Link>
+          </div>
+        </div>
+      </main>
     </div>
   );
 }
 
-// Wrapper component that manages symbol/interval state and provides WebSocket
+function HeroMetric({ label, value, variant, icon }: { label: string; value: string | number; variant?: 'success' | 'danger' | 'neutral'; icon?: string }) {
+  const colorClass = variant === 'success' 
+    ? 'border-green-500/30 bg-green-500/10 text-green-400' 
+    : variant === 'danger'
+    ? 'border-red-500/30 bg-red-500/10 text-red-400'
+    : 'border-slate-700/50 bg-slate-800/50 text-slate-300';
+
+  return (
+    <div className={`card p-4 border ${colorClass} hover:shadow-xl transition-all duration-300`}>
+      {icon && <div className="text-2xl mb-2">{icon}</div>}
+      <div className="text-xs uppercase tracking-wider text-slate-400 mb-1">{label}</div>
+      <div className="text-lg md:text-xl lg:text-2xl font-bold truncate">{value}</div>
+    </div>
+  );
+}
+
+// Wrapper component
 export default function Home() {
-  // Use ref to track if we've loaded initial data
   const [isReady, setIsReady] = useState(false);
   const [wrapperSymbol, setWrapperSymbol] = useState<string>(DEFAULT_SYMBOL);
   const [wrapperInterval, setWrapperInterval] = useState<string>(DEFAULT_INTERVAL);
   const [initialCandles, setInitialCandles] = useState<Candle[]>([]);
 
-  // Wait a tick to ensure initial render
   useEffect(() => {
     setIsReady(true);
   }, []);
