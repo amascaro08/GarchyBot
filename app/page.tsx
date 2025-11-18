@@ -51,9 +51,11 @@ const DEFAULT_INTERVAL = '5';
 
 interface HomeContentProps {
   onInitialCandlesLoaded?: (candles: Candle[]) => void;
+  onSymbolChange?: (symbol: string) => void;
+  onIntervalChange?: (interval: string) => void;
 }
 
-function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
+function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange }: HomeContentProps) {
   const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
   const [symbolsLoading, setSymbolsLoading] = useState<boolean>(true);
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
@@ -99,7 +101,10 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
   const tradesRef = useRef<Trade[]>([]);
   
   // Access shared WebSocket connection (eliminates duplicate connections)
-  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected, connectionStatus, lastUpdateTime } = useSharedWebSocket();
+  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected, connectionStatus: wsConnectionStatus, lastUpdateTime } = useSharedWebSocket();
+  
+  // Use WebSocket connection status, fallback to 'connected' if we have data
+  const connectionStatus = wsConnectionStatus || (candles.length > 0 ? 'connected' : 'connecting');
   
   // Throttle price updates for UI (100ms = 10 updates/sec max)
   // Still fast enough for real-time trading feel, but reduces re-renders by 90%
@@ -1083,6 +1088,10 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
 
   // Initial load and polling - handles candles, signals, and interval changes
   useEffect(() => {
+    // Notify parent wrapper to update WebSocket
+    if (onSymbolChange) onSymbolChange(symbol);
+    if (onIntervalChange) onIntervalChange(candleInterval);
+    
     // Reset signal and candles when symbol or interval changes
     setSignal(null);
     setCandles([]);
@@ -1205,7 +1214,7 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
       // Load initial data even when bot is stopped
       loadData();
     }
-  }, [symbol, candleInterval, botRunning]); // Candles and signals depend on interval, but levels don't
+  }, [symbol, candleInterval, botRunning, onSymbolChange, onIntervalChange]); // Candles and signals depend on interval, but levels don't
 
   // Real-time trade updates via Server-Sent Events
   useEffect(() => {
@@ -1907,14 +1916,31 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
 
 // Wrapper component that manages symbol/interval state and provides WebSocket
 export default function Home() {
-  const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
-  const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
+  // Use ref to track if we've loaded initial data
+  const [isReady, setIsReady] = useState(false);
+  const [wrapperSymbol, setWrapperSymbol] = useState<string>(DEFAULT_SYMBOL);
+  const [wrapperInterval, setWrapperInterval] = useState<string>(DEFAULT_INTERVAL);
   const [initialCandles, setInitialCandles] = useState<Candle[]>([]);
 
+  // Wait a tick to ensure initial render
+  useEffect(() => {
+    setIsReady(true);
+  }, []);
+
+  if (!isReady) {
+    return (
+      <div className="min-h-screen bg-[#0a0e1a] flex items-center justify-center">
+        <div className="text-slate-300">Loading...</div>
+      </div>
+    );
+  }
+
   return (
-    <WebSocketProvider symbol={symbol} interval={candleInterval} initialCandles={initialCandles}>
+    <WebSocketProvider symbol={wrapperSymbol} interval={wrapperInterval} initialCandles={initialCandles}>
       <HomeContent 
         onInitialCandlesLoaded={setInitialCandles}
+        onSymbolChange={setWrapperSymbol}
+        onIntervalChange={setWrapperInterval}
       />
     </WebSocketProvider>
   );
