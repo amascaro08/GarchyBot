@@ -24,6 +24,7 @@ import { placeOrder, cancelOrder, getKlines, getTicker } from '@/lib/bybit';
 import { confirmLevelTouch } from '@/lib/orderbook';
 import { computeSessionAnchoredVWAP, computeSessionAnchoredVWAPLine } from '@/lib/vwap';
 import type { Candle } from '@/lib/types';
+import { tpslSyncManager } from '@/lib/tpsl-sync-manager';
 
 const NO_TRADE_BAND_PCT = 0.001;
 
@@ -411,80 +412,40 @@ export async function POST(request: NextRequest) {
                             } as any);
                             
                             // Set TP/SL on Bybit now that we have an actual position
-                            // Wait a small delay to ensure position is fully established on Bybit
+                            // Use TP/SL sync manager to prevent duplicate calls
                             if (trade.tp_price && trade.sl_price) {
-                              try {
-                                // Small delay to ensure position is established
-                                await new Promise(resolve => setTimeout(resolve, 1000));
-                                
-                                const { setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
-                                
-                                // Round TP/SL to match tick size
-                                let roundedTP = Number(trade.tp_price);
-                                let roundedSL = Number(trade.current_sl ?? trade.sl_price);
-                                try {
-                                  const instrumentInfo = await getInstrumentInfo(trade.symbol, botConfig.api_mode !== 'live');
-                                  if (instrumentInfo && instrumentInfo.tickSize) {
-                                    roundedTP = roundPrice(roundedTP, instrumentInfo.tickSize);
-                                    roundedSL = roundPrice(roundedSL, instrumentInfo.tickSize);
-                                  }
-                                } catch (priceRoundError) {
-                                  console.warn(`[CRON] Failed to round TP/SL prices:`, priceRoundError);
-                                }
-                                
-                                await setTakeProfitStopLoss({
-                                  symbol: trade.symbol,
-                                  takeProfit: roundedTP,
-                                  stopLoss: roundedSL,
-                                  testnet: botConfig.api_mode !== 'live',
-                                  apiKey: botConfig.api_key,
-                                  apiSecret: botConfig.api_secret,
-                                  positionIdx: 0,
-                                });
-                                console.log(`[CRON] TP/SL set on Bybit after order fill: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
+                              // Small delay to ensure position is established
+                              await new Promise(resolve => setTimeout(resolve, 1000));
+                              
+                              const result = await tpslSyncManager.setTPSL({
+                                tradeId: trade.id,
+                                symbol: trade.symbol,
+                                takeProfit: Number(trade.tp_price),
+                                stopLoss: Number(trade.current_sl ?? trade.sl_price),
+                                testnet: botConfig.api_mode !== 'live',
+                                apiKey: botConfig.api_key,
+                                apiSecret: botConfig.api_secret,
+                                positionIdx: 0,
+                              });
+                              
+                              if (result.success) {
+                                console.log(`[CRON] ✓ TP/SL set on Bybit after order fill`);
                                 await addActivityLog(
                                   botConfig.user_id,
                                   'success',
-                                  `TP/SL set on Bybit: ${trade.side} ${trade.symbol} TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`,
-                                  { orderId: trade.order_id, tp: roundedTP, sl: roundedSL },
+                                  `TP/SL set on Bybit: ${trade.side} ${trade.symbol}`,
+                                  { orderId: trade.order_id },
                                   botConfig.id
                                 );
-                              } catch (tpSlError) {
-                                console.error(`[CRON] Failed to set TP/SL after order fill:`, tpSlError);
-                                // Retry once
-                                try {
-                                  await new Promise(resolve => setTimeout(resolve, 2000));
-                                  const { setTakeProfitStopLoss, getInstrumentInfo, roundPrice } = await import('@/lib/bybit');
-                                  let roundedTP = Number(trade.tp_price);
-                                  let roundedSL = Number(trade.current_sl ?? trade.sl_price);
-                                  try {
-                                    const instrumentInfo = await getInstrumentInfo(trade.symbol, botConfig.api_mode !== 'live');
-                                    if (instrumentInfo && instrumentInfo.tickSize) {
-                                      roundedTP = roundPrice(roundedTP, instrumentInfo.tickSize);
-                                      roundedSL = roundPrice(roundedSL, instrumentInfo.tickSize);
-                                    }
-                                  } catch (priceRoundError) {
-                                    // Use unrounded values
-                                  }
-                                  await setTakeProfitStopLoss({
-                                    symbol: trade.symbol,
-                                    takeProfit: roundedTP,
-                                    stopLoss: roundedSL,
-                                    testnet: botConfig.api_mode !== 'live',
-                                    apiKey: botConfig.api_key,
-                                    apiSecret: botConfig.api_secret,
-                                    positionIdx: 0,
-                                  });
-                                  console.log(`[CRON] ✓ TP/SL set on retry: TP=$${roundedTP.toFixed(2)}, SL=$${roundedSL.toFixed(2)}`);
-                                } catch (retryError) {
-                                  await addActivityLog(
-                                    botConfig.user_id,
-                                    'warning',
-                                    `Failed to set TP/SL on Bybit after order fill for ${trade.side} ${trade.symbol}: ${tpSlError instanceof Error ? tpSlError.message : 'Unknown error'}. Will retry on next cron run.`,
-                                    { orderId: trade.order_id, error: tpSlError instanceof Error ? tpSlError.message : String(tpSlError) },
-                                    botConfig.id
-                                  );
-                                }
+                              } else if (!result.skipped) {
+                                console.error(`[CRON] Failed to set TP/SL:`, result.error);
+                                await addActivityLog(
+                                  botConfig.user_id,
+                                  'warning',
+                                  `Failed to set TP/SL on Bybit: ${result.error}. Will retry on next cron run.`,
+                                  { orderId: trade.order_id, error: result.error },
+                                  botConfig.id
+                                );
                               }
                             }
                             

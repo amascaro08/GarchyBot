@@ -7,6 +7,8 @@
 
 import { getOrderBookSnapshot, startOrderBook, type DepthSnapshot } from '../orderbook';
 import type { Candle } from '../types';
+import { LimitOrderAnalyzer, type LimitOrderAnalysis } from './limit-order-analysis';
+import { DeltaAnalyzer, type DeltaSignal } from './delta';
 
 export type OrderflowBias = 'long' | 'short' | 'neutral';
 
@@ -26,6 +28,10 @@ export interface OrderflowSignal {
     /** High sell volume surge */
     sellVolumeSurge: boolean;
   };
+  /** Delta analysis (cumulative volume delta) */
+  delta?: DeltaSignal;
+  /** Limit order analysis */
+  limitOrders?: LimitOrderAnalysis;
 }
 
 export interface OrderflowConfig {
@@ -56,9 +62,21 @@ export class OrderflowAnalyzer {
   private config: OrderflowConfig;
   private recentCandles: Candle[] = [];
   private volumeHistory: Array<{ timestamp: number; volume: number; side: 'buy' | 'sell' | 'unknown' }> = [];
+  private limitOrderAnalyzer: LimitOrderAnalyzer;
+  private deltaAnalyzer: DeltaAnalyzer;
 
   constructor(config: Partial<OrderflowConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.limitOrderAnalyzer = new LimitOrderAnalyzer({
+      minClusterNotional: config.minWallNotional || 20000,
+      priceGroupingPct: 0.001,
+      maxDepth: 50,
+    });
+    this.deltaAnalyzer = new DeltaAnalyzer({
+      windowSize: 20,
+      divergenceLookback: 10,
+      minConfidence: 0.4,
+    });
   }
 
   /**
@@ -255,15 +273,40 @@ export class OrderflowAnalyzer {
       console.log(`[ORDERFLOW] Volume surge detected, boosting confidence from ${confidence.toFixed(2)} to ${finalConfidence.toFixed(2)}`);
     }
 
+    // Add delta analysis for trend confirmation
+    const deltaSignal = this.deltaAnalyzer.analyzeDelta(this.recentCandles);
+    console.log(`[ORDERFLOW] Delta analysis: trend=${deltaSignal.trend}, cvd=${deltaSignal.cumulativeDelta.toFixed(2)}, confidence=${deltaSignal.confidence.toFixed(2)}`);
+    
+    // Add limit order positioning analysis
+    const limitOrderAnalysis = this.limitOrderAnalyzer.analyzeLimitOrders(snapshot, currentPrice);
+    console.log(`[ORDERFLOW] Limit order analysis: imbalance=${limitOrderAnalysis.imbalance.bias}, strength=${limitOrderAnalysis.imbalance.strength.toFixed(2)}, bid clusters=${limitOrderAnalysis.bidClusters.length}, ask clusters=${limitOrderAnalysis.askClusters.length}`);
+    
+    // Enhance confidence with delta and limit order signals
+    let enhancedConfidence = finalConfidence;
+    
+    // Delta confirmation boost
+    if (this.deltaAnalyzer.confirmsTrade(deltaSignal, side)) {
+      enhancedConfidence = Math.min(1, enhancedConfidence + deltaSignal.confidence * 0.2);
+      console.log(`[ORDERFLOW] Delta confirms trade, boosting confidence from ${finalConfidence.toFixed(2)} to ${enhancedConfidence.toFixed(2)}`);
+    }
+    
+    // Limit order positioning boost
+    if (this.limitOrderAnalyzer.confirmsTrade(limitOrderAnalysis, side, level)) {
+      enhancedConfidence = Math.min(1, enhancedConfidence + 0.15);
+      console.log(`[ORDERFLOW] Limit orders confirm trade, boosting confidence to ${enhancedConfidence.toFixed(2)}`);
+    }
+    
     const result = {
       bias,
-      confidence: finalConfidence,
+      confidence: enhancedConfidence,
       flags: {
-        absorbingBids: flags.absorbingBids,
-        absorbingAsks: flags.absorbingAsks,
+        absorbingBids: flags.absorbingBids || limitOrderAnalysis.absorption.detected && limitOrderAnalysis.absorption.side === 'bid',
+        absorbingAsks: flags.absorbingAsks || limitOrderAnalysis.absorption.detected && limitOrderAnalysis.absorption.side === 'ask',
         buyVolumeSurge: volumeFlags.buyVolumeSurge,
         sellVolumeSurge: volumeFlags.sellVolumeSurge,
       },
+      delta: deltaSignal,
+      limitOrders: limitOrderAnalysis,
     };
     
     console.log(`[ORDERFLOW] Final signal: bias=${result.bias}, confidence=${result.confidence.toFixed(2)}`);
