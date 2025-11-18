@@ -14,7 +14,7 @@
 import { setTakeProfitStopLoss, getInstrumentInfo, roundPrice } from './bybit';
 
 interface TPSLRequest {
-  tradeId: number;
+  tradeId: string | number;
   symbol: string;
   takeProfit?: number;
   stopLoss?: number;
@@ -35,7 +35,7 @@ interface TPSLState {
  * TP/SL Synchronization Manager
  */
 export class TPSLSyncManager {
-  private pendingRequests: Map<number, TPSLState> = new Map();
+  private pendingRequests: Map<string | number, TPSLState> = new Map();
   private readonly MAX_RETRIES = 2;
   private readonly RETRY_DELAY_MS = 2000;
   private readonly MIN_REQUEST_INTERVAL_MS = 1000; // Minimum time between requests for same trade
@@ -159,7 +159,7 @@ export class TPSLSyncManager {
   /**
    * Check if a trade has a pending TP/SL request
    */
-  isPending(tradeId: number): boolean {
+  isPending(tradeId: string | number): boolean {
     const state = this.pendingRequests.get(tradeId);
     return state?.inProgress || false;
   }
@@ -167,14 +167,14 @@ export class TPSLSyncManager {
   /**
    * Clear pending state for a trade (useful when trade is closed)
    */
-  clearPending(tradeId: number): void {
+  clearPending(tradeId: string | number): void {
     this.pendingRequests.delete(tradeId);
   }
 
   /**
    * Get pending request info for debugging
    */
-  getPendingInfo(tradeId: number): TPSLState | undefined {
+  getPendingInfo(tradeId: string | number): TPSLState | undefined {
     return this.pendingRequests.get(tradeId);
   }
 
