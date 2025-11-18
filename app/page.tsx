@@ -11,6 +11,10 @@ import OrderBook from '@/components/OrderBook';
 import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
 import ConnectionIndicator from '@/components/ConnectionIndicator';
 import RealTimeIndicator from '@/components/RealTimeIndicator';
+import ModernHeader from '@/components/ModernHeader';
+import MetricCard from '@/components/MetricCard';
+import StatusBadge from '@/components/StatusBadge';
+import DashboardGrid from '@/components/DashboardGrid';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
@@ -1567,8 +1571,14 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
     }
   };
 
+  // Calculate statistics for dashboard
+  const activeTrades = trades.filter(t => t.status === 'open').length;
+  const pendingTrades = trades.filter(t => t.status === 'pending').length;
+  const totalTrades = activeTrades + pendingTrades;
+  const winRate = trades.filter(t => t.status === 'win').length / Math.max(trades.filter(t => t.status === 'win' || t.status === 'loss').length, 1) * 100;
+  
   return (
-    <div className="min-h-screen text-white flex relative">
+    <div className="min-h-screen text-slate-100 flex relative bg-[#0a0e1a]">
       {/* Sidebar - Desktop: fixed left, Mobile: slide-out */}
       <Sidebar
         symbol={symbol}
@@ -1625,38 +1635,59 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
       />
 
       {/* Main Content */}
-      <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
-        <div className="max-w-[1600px] mx-auto">
-          {/* Header with Real-Time Connection Status */}
-          <div className="mb-6 lg:mb-8 relative">
-            <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 via-purple-500/20 to-pink-500/20 blur-3xl rounded-full"></div>
-            <div className="relative">
-              <div className="flex items-start justify-between gap-4 mb-2">
-                <div className="flex-1">
-                  <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black mb-2 lg:mb-3 text-gradient-animated">
-                    GARCHY BOT
-                  </h1>
-                  <div className="flex items-center gap-2 lg:gap-3 flex-wrap">
-                    <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-cyan-500 to-purple-500 rounded-full"></div>
-                    <p className="text-gray-300 text-xs sm:text-sm lg:text-base font-medium tracking-wide">Real-time trading signals powered by volatility analysis</p>
-                    <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"></div>
-                  </div>
-                </div>
-                
-                {/* Real-Time Connection Indicator */}
-                <div className="flex-shrink-0">
-                  <ConnectionIndicator
-                    isConnected={wsConnected}
-                    connectionStatus={connectionStatus}
-                    lastUpdateTime={lastUpdateTime}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
+      <div className="flex-1 p-6 lg:p-8 overflow-x-hidden bg-[#0a0e1a]">
+        <div className="max-w-[1800px] mx-auto">
+          {/* Modern Header */}
+          <ModernHeader
+            isConnected={wsConnected}
+            connectionStatus={connectionStatus}
+            lastUpdateTime={lastUpdateTime}
+            botRunning={botRunning}
+            currentPrice={currentPrice}
+            symbol={symbol}
+          />
 
-          {/* Enhanced Status badges */}
-          <div className="mb-8 flex flex-wrap gap-3">
+          {/* Dashboard Grid - Key Metrics */}
+          <DashboardGrid>
+            <MetricCard
+              label="Active Positions"
+              value={`${totalTrades}/${maxTrades}`}
+              trend={totalTrades > 0 ? 'up' : 'neutral'}
+              icon={<span>📊</span>}
+              className="animate-fade-in"
+            />
+            
+            <MetricCard
+              label="Session P&L"
+              value={`$${sessionPnL.toFixed(2)}`}
+              trend={sessionPnL > 0 ? 'up' : sessionPnL < 0 ? 'down' : 'neutral'}
+              change={{
+                value: parseFloat(((sessionPnL / (capital || 1)) * 100).toFixed(2)),
+                label: 'of capital'
+              }}
+              icon={<span>💰</span>}
+              className="animate-fade-in"
+            />
+            
+            <MetricCard
+              label="Win Rate"
+              value={`${winRate.toFixed(1)}%`}
+              trend={winRate > 50 ? 'up' : winRate < 50 ? 'down' : 'neutral'}
+              icon={<span>🎯</span>}
+              className="animate-fade-in"
+            />
+            
+            <MetricCard
+              label="Volatility (GARCH)"
+              value={levels ? `${(levels.kPct * 100).toFixed(2)}%` : 'Loading...'}
+              trend="neutral"
+              icon={<span>📈</span>}
+              className="animate-fade-in"
+            />
+          </DashboardGrid>
+
+          {/* Quick Stats Bar */}
+          <div className="mb-6 flex flex-wrap gap-3 animate-fade-in">
             {/* Core Trading Stats */}
             <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
               <div className="flex items-center gap-3">
@@ -1716,58 +1747,17 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
               </>
             )}
 
-            {/* Bot Status */}
-            {botRunning && (
-              <div className="px-4 py-2.5 rounded-xl bg-green-500/15 border border-green-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse shadow-lg shadow-green-400/50"></div>
-                  <div className="text-xs">
-                    <div className="text-green-400 font-bold">Bot Active</div>
-                    <div className="text-green-300/80 text-xs">Trading enabled</div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!botRunning && canTrade && (
-              <div className="px-4 py-2.5 rounded-xl bg-orange-500/15 border border-orange-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-orange-400 rounded-full"></div>
-                  <div className="text-xs">
-                    <div className="text-orange-400 font-bold">Bot Stopped</div>
-                    <div className="text-orange-300/80 text-xs">Ready to trade</div>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* Daily Limits Status */}
             {isDailyTargetHit && (
-              <div className="px-4 py-2.5 rounded-xl bg-blue-500/15 border border-blue-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <svg className="w-5 h-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                  </svg>
-                  <div className="text-xs">
-                    <div className="text-blue-400 font-bold">Target Achieved</div>
-                    <div className="text-blue-300/80 text-xs">Daily goal reached</div>
-                  </div>
-                </div>
-              </div>
+              <StatusBadge variant="success">
+                ✓ Target Achieved
+              </StatusBadge>
             )}
-
+            
             {isDailyStopHit && (
-              <div className="px-4 py-2.5 rounded-xl bg-red-500/15 border border-red-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                  </svg>
-                  <div className="text-xs">
-                    <div className="text-red-400 font-bold">Stop Loss Triggered</div>
-                    <div className="text-red-300/80 text-xs">Daily limit reached</div>
-                  </div>
-                </div>
-              </div>
+              <StatusBadge variant="danger">
+                ✗ Stop Loss Hit
+              </StatusBadge>
             )}
           </div>
 
@@ -1833,11 +1823,16 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
               />
             </div>
 
-            {/* Chart spans full width */}
-            <div className="xl:col-span-3 glass-effect rounded-2xl p-5 sm:p-7 shadow-2xl card-hover border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
-              <div className="mb-5">
-                <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-2">Price Chart</h2>
-                <p className="text-sm text-gray-300 font-medium">Real-time candlestick data with trading levels</p>
+            {/* Chart spans full width - Modern Card Design */}
+            <div className="xl:col-span-3 card p-6 animate-fade-in">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold gradient-text mb-1">Price Chart</h2>
+                  <p className="text-sm text-slate-400">Real-time candlestick data with trading levels</p>
+                </div>
+                <StatusBadge variant={wsConnected ? 'success' : 'danger'} dot pulse={wsConnected}>
+                  {wsConnected ? 'Live Data' : 'Disconnected'}
+                </StatusBadge>
               </div>
               <Chart
                 candles={candles}
@@ -1856,21 +1851,37 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
               />
             </div>
 
-            {/* Trade statistics & activity */}
+            {/* Trade statistics & activity - Modern Cards */}
             <div className="space-y-6">
-              <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} walletInfo={walletInfo} />
-              <ActivityLog logs={activityLogs} maxLogs={50} />
+              <div className="card p-5 animate-fade-in">
+                <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
+                  <span className="text-xl">💼</span>
+                  Trade Summary
+                </h3>
+                <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} walletInfo={walletInfo} />
+              </div>
+              
+              <div className="card p-5 animate-fade-in">
+                <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
+                  <span className="text-xl">📝</span>
+                  Activity Log
+                </h3>
+                <ActivityLog logs={activityLogs} maxLogs={50} />
+              </div>
             </div>
 
-            {/* Trades Table */}
-            <div className="xl:col-span-2 space-y-4">
+            {/* Trades Table - Modern Card */}
+            <div className="xl:col-span-2 space-y-4 animate-fade-in">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <h2 className="text-xl font-bold text-white">Recent Trades</h2>
-                <Link href="/history" className="text-cyan-400 hover:text-cyan-300 transition-colors text-sm">
+                <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                  <span className="text-2xl">📋</span>
+                  Recent Trades
+                </h2>
+                <Link href="/history" className="btn btn-ghost text-sm">
                   View Full History →
                 </Link>
               </div>
-              <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50 bg-slate-900/70 backdrop-blur-xl">
+              <div className="card p-6">
                 <TradesTable
                   trades={trades}
                   currentPrice={currentPrice}
