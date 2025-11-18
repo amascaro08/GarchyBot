@@ -3,7 +3,7 @@
 import { useEffect, useRef, useMemo } from 'react';
 import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine, PriceScaleMode } from 'lightweight-charts';
 import type { Candle } from '@/lib/types';
-import { useWebSocket } from '@/lib/useWebSocket';
+import { useSharedWebSocket } from '@/lib/WebSocketContext';
 
 interface ChartProps {
   candles: Candle[];
@@ -65,8 +65,8 @@ export default function Chart({
     onPriceUpdateRef.current = onPriceUpdate;
   }, [onPriceUpdate]);
 
-  // Use WebSocket hook for real-time data, initialize with static candles
-  const { candles: wsCandles, isConnected: wsConnected, ticker } = useWebSocket(symbol, interval, candles);
+  // Use shared WebSocket connection (eliminates duplicate connections)
+  const { candles: wsCandles, isConnected: wsConnected, ticker } = useSharedWebSocket();
 
   // Update price from ticker in real-time (separate from candle updates)
   useEffect(() => {

@@ -9,11 +9,14 @@ import TradesTable from '@/components/TradesTable';
 import Sidebar from '@/components/Sidebar';
 import OrderBook from '@/components/OrderBook';
 import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
+import ConnectionIndicator from '@/components/ConnectionIndicator';
+import RealTimeIndicator from '@/components/RealTimeIndicator';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
-import { useWebSocket } from '@/lib/useWebSocket';
+import { WebSocketProvider, useSharedWebSocket } from '@/lib/WebSocketContext';
+import { useThrottle } from '@/lib/hooks/useThrottle';
 
 const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = DEFAULT_SYMBOLS[0];
@@ -42,7 +45,7 @@ const INTERVALS = [
 ];
 const DEFAULT_INTERVAL = '5';
 
-export default function Home() {
+function HomeContent() {
   const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
   const [symbolsLoading, setSymbolsLoading] = useState<boolean>(true);
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
@@ -78,7 +81,7 @@ export default function Home() {
   const [apiMode, setApiMode] = useState<'demo' | 'live'>('demo');
   const [apiKey, setApiKey] = useState<string>('');
   const [apiSecret, setApiSecret] = useState<string>('');
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [apiConnectionStatus, setApiConnectionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [walletInfo, setWalletInfo] = useState<Array<{ coin: string; equity: number; availableToWithdraw: number }> | null>(null);
   const [overrideDailyLimits, setOverrideDailyLimits] = useState<boolean>(false);
@@ -86,17 +89,20 @@ export default function Home() {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const levelsRecalcIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const tradesRef = useRef<Trade[]>([]);
-  const wsDataRef = useRef<{ candles: Candle[]; ticker: any; lastCandleCloseTime: number | null } | null>(null);
   
-  // Use WebSocket for real-time ticker data and candle updates (shared with Chart)
-  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected } = useWebSocket(symbol, candleInterval, candles);
+  // Access shared WebSocket connection (eliminates duplicate connections)
+  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected, connectionStatus, lastUpdateTime } = useSharedWebSocket();
+  
+  // Throttle price updates for UI (100ms = 10 updates/sec max)
+  // Still fast enough for real-time trading feel, but reduces re-renders by 90%
+  const throttledTickerPrice = useThrottle(wsTicker?.lastPrice, 100);
   
   // Update currentPrice from WebSocket ticker in real-time (for trade P&L calculations)
   useEffect(() => {
-    if (wsTicker?.lastPrice && wsTicker.lastPrice > 0) {
-      setCurrentPrice(wsTicker.lastPrice);
+    if (throttledTickerPrice && throttledTickerPrice > 0) {
+      setCurrentPrice(throttledTickerPrice);
     }
-  }, [wsTicker?.lastPrice, wsTicker?.timestamp]);
+  }, [throttledTickerPrice]);
   
   // Helper function to add log entries (memoized to avoid dependency warnings)
   const addLog = useCallback((level: LogLevel, message: string) => {
@@ -461,8 +467,11 @@ export default function Home() {
   }, [replaceTradeInState, addLog]);
 
   // Real-time TP/SL checks using ticker data (faster than waiting for candle close)
+  // Throttle to 200ms (5 checks per second) - fast enough for trading, prevents overload
+  const throttledTickerForTPSL = useThrottle(wsTicker?.lastPrice, 200);
+  
   useEffect(() => {
-    if (!botRunning || !wsTicker?.lastPrice || wsTicker.lastPrice <= 0) {
+    if (!botRunning || !throttledTickerForTPSL || throttledTickerForTPSL <= 0) {
       return;
     }
 
@@ -472,7 +481,7 @@ export default function Home() {
       );
 
       for (const trade of openTradesSnapshot) {
-        const currentPrice = wsTicker.lastPrice;
+        const currentPrice = throttledTickerForTPSL;
         
         // Check TP/SL with current price (more responsive than waiting for candle close)
         if (trade.side === 'LONG') {
@@ -559,10 +568,19 @@ export default function Home() {
     };
 
     checkTPSL();
-  }, [wsTicker?.lastPrice, wsTicker?.timestamp, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer, levels?.vwap]);
+  }, [throttledTickerForTPSL, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer, levels?.vwap]);
 
   // Main polling function - uses current symbol/interval from closure
+  // OPTIMIZATION: Reduce frequency when WebSocket is active (real-time data available)
   const pollData = async () => {
+    // Skip polling if WebSocket is connected and providing real-time data
+    // WebSocket provides: candles, ticker, orderbook - no need to poll!
+    if (wsConnected && wsCandles.length > 0) {
+      console.log('[POLL] Skipping - WebSocket active with real-time data');
+      setLoading(false);
+      return;
+    }
+    
     // Capture current values to ensure we use latest
     const currentSymbol = symbol;
     
@@ -570,20 +588,17 @@ export default function Home() {
       setLoading(true);
       setError(null);
 
-      // Fetch klines
-      // Use mainnet for accurate prices, fallback to testnet
+      // Fetch klines (only if WebSocket not providing data)
       let candlesData;
       try {
         const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
         if (res.ok) {
           candlesData = await res.json();
         } else {
-          // Fallback to testnet
           const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
           candlesData = await testnetRes.json();
         }
       } catch (err) {
-        // Final fallback to testnet
         const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
         candlesData = await testnetRes.json();
       }
@@ -941,7 +956,7 @@ export default function Home() {
             setApiMode((config.api_mode as 'demo' | 'live') || 'demo');
             setApiKey(config.api_key || '');
             setApiSecret(config.api_secret || '');
-            setConnectionStatus('idle');
+            setApiConnectionStatus('idle');
             setConnectionMessage(null);
             setWalletInfo(null);
             
@@ -1153,9 +1168,12 @@ export default function Home() {
 
     if (botRunning) {
       loadData();
+      // OPTIMIZATION: Increase polling interval when WebSocket is active
+      // WebSocket provides real-time data, so we only need periodic fallback polling
+      const pollInterval = wsConnected ? 60000 : POLL_INTERVAL; // 60s if WS active, 12s if not
       const intervalId = setInterval(() => {
         pollData();
-      }, POLL_INTERVAL);
+      }, pollInterval);
       pollingIntervalRef.current = intervalId;
       return () => {
         if (pollingIntervalRef.current) {
@@ -1411,7 +1429,7 @@ export default function Home() {
 
     if (!key || !secret) {
       const message = 'Please provide both API key and secret before testing.';
-      setConnectionStatus('error');
+      setApiConnectionStatus('error');
       setConnectionMessage(message);
       setWalletInfo(null);
       addLog('error', message);
@@ -1419,7 +1437,7 @@ export default function Home() {
     }
 
     try {
-      setConnectionStatus('loading');
+      setApiConnectionStatus('loading');
       setConnectionMessage(null);
       setWalletInfo(null);
 
@@ -1452,7 +1470,7 @@ export default function Home() {
         : [];
 
       setWalletInfo(balances);
-      setConnectionStatus('success');
+      setApiConnectionStatus('success');
       setConnectionMessage('Connection successful.');
       addLog('success', `Bybit ${apiMode} connection successful.`);
 
@@ -1498,7 +1516,7 @@ export default function Home() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to test connection';
-      setConnectionStatus('error');
+      setApiConnectionStatus('error');
       setConnectionMessage(message);
       setWalletInfo(null);
       addLog('error', message);
@@ -1534,7 +1552,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen text-white flex">
+    <div className="min-h-screen text-white flex relative">
       {/* Sidebar - Desktop: fixed left, Mobile: slide-out */}
       <Sidebar
         symbol={symbol}
@@ -1585,7 +1603,7 @@ export default function Home() {
         apiSecret={apiSecret}
         setApiSecret={setApiSecret}
         onTestConnection={handleTestConnection}
-        connectionStatus={connectionStatus}
+        connectionStatus={apiConnectionStatus}
         connectionMessage={connectionMessage}
         walletInfo={walletInfo}
       />
@@ -1593,17 +1611,30 @@ export default function Home() {
       {/* Main Content */}
       <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
         <div className="max-w-[1600px] mx-auto">
-          {/* Header */}
+          {/* Header with Real-Time Connection Status */}
           <div className="mb-6 lg:mb-8 relative">
             <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 via-purple-500/20 to-pink-500/20 blur-3xl rounded-full"></div>
             <div className="relative">
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black mb-2 lg:mb-3 text-gradient-animated">
-                GARCHY BOT
-              </h1>
-              <div className="flex items-center gap-2 lg:gap-3 flex-wrap">
-                <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-cyan-500 to-purple-500 rounded-full"></div>
-                <p className="text-gray-300 text-xs sm:text-sm lg:text-base font-medium tracking-wide">Real-time trading signals powered by volatility analysis</p>
-                <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"></div>
+              <div className="flex items-start justify-between gap-4 mb-2">
+                <div className="flex-1">
+                  <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black mb-2 lg:mb-3 text-gradient-animated">
+                    GARCHY BOT
+                  </h1>
+                  <div className="flex items-center gap-2 lg:gap-3 flex-wrap">
+                    <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-cyan-500 to-purple-500 rounded-full"></div>
+                    <p className="text-gray-300 text-xs sm:text-sm lg:text-base font-medium tracking-wide">Real-time trading signals powered by volatility analysis</p>
+                    <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"></div>
+                  </div>
+                </div>
+                
+                {/* Real-Time Connection Indicator */}
+                <div className="flex-shrink-0">
+                  <ConnectionIndicator
+                    isConnected={wsConnected}
+                    connectionStatus={connectionStatus}
+                    lastUpdateTime={lastUpdateTime}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -1641,17 +1672,32 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Volatility */}
+            {/* Volatility with Real-Time Price */}
             {levels && (
-              <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-yellow-400 rounded-full opacity-80"></div>
-                  <div className="text-xs">
-                    <div className="text-gray-400 font-medium">Volatility</div>
-                    <div className="text-yellow-300 font-bold text-sm">{(levels.kPct * 100).toFixed(2)}%</div>
+              <>
+                <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                  <div className="flex items-center gap-3">
+                    <div className="w-3 h-3 bg-yellow-400 rounded-full opacity-80"></div>
+                    <div className="text-xs">
+                      <div className="text-gray-400 font-medium">Volatility</div>
+                      <div className="text-yellow-300 font-bold text-sm">{(levels.kPct * 100).toFixed(2)}%</div>
+                    </div>
                   </div>
                 </div>
-              </div>
+                
+                {/* Real-Time Price with Freshness Indicator */}
+                {currentPrice && (
+                  <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                    <div className="flex items-center gap-3">
+                      <RealTimeIndicator lastUpdateTime={lastUpdateTime} showAge={false} />
+                      <div className="text-xs">
+                        <div className="text-gray-400 font-medium">Price</div>
+                        <div className="text-cyan-300 font-bold text-sm">${currentPrice.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Bot Status */}
@@ -1825,4 +1871,36 @@ export default function Home() {
       </div>
     </div>
   );
+}
+
+// Wrapper component that manages symbol/interval state and provides WebSocket
+export default function Home() {
+  const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
+  const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
+
+  return (
+    <WebSocketProvider symbol={symbol} interval={candleInterval} initialCandles={[]}>
+      <HomeContentWrapper 
+        initialSymbol={symbol} 
+        initialInterval={candleInterval}
+        onSymbolChange={setSymbol}
+        onIntervalChange={setCandleInterval}
+      />
+    </WebSocketProvider>
+  );
+}
+
+// Bridge component to pass symbol/interval changes back to provider
+function HomeContentWrapper({ 
+  initialSymbol, 
+  initialInterval,
+  onSymbolChange,
+  onIntervalChange
+}: { 
+  initialSymbol: string; 
+  initialInterval: string;
+  onSymbolChange: (symbol: string) => void;
+  onIntervalChange: (interval: string) => void;
+}) {
+  return <HomeContent />;
 }
