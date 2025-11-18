@@ -84,13 +84,13 @@ The trailing stop **only activates** when ALL of these conditions are met:
 2. **Minimum Profit Threshold:**
    - Must exceed **BOTH** of these thresholds (uses the higher):
      - **Absolute:** 2% profit minimum (`minProfitPct = 0.02`)
-     - **Risk-based:** 2x the initial risk (2:1 risk/reward ratio)
+     - **Risk-based:** 1x the initial risk (1:1 risk/reward ratio)
    
    Example:
    - If entry = $100, initial SL = $98 (2% risk)
    - Risk = $2
-   - Minimum profit needed = MAX(2% of $100, 2 × $2) = MAX($2, $4) = $4
-   - Trailing activates when price reaches $104+
+   - Minimum profit needed = MAX(2% of $100, 1 × $2) = MAX($2, $2) = $2
+   - Trailing activates when price reaches $102+
 
 3. **Breakeven NOT Applied:**
    - If breakeven was triggered, trailing stop is skipped for that cycle
@@ -174,7 +174,7 @@ Lines 870-909 (demo mode only)
 | **Grace Period** | 5-10 min | Bot-runner line 740/833 | Time before breakeven can trigger |
 | **Trailing Offset** | 5 bps (0.05%) | strategy.ts line 651 | Distance of trailing stop from price |
 | **Min Profit %** | 2% | strategy.ts line 652 | Minimum profit to activate trailing |
-| **Min Risk/Reward** | 2:1 | strategy.ts line 677 | Alternative profit threshold |
+| **Min Risk/Reward** | 1:1 | strategy.ts line 677 | Alternative profit threshold |
 | **Min Stop Change** | $0.01 | strategy.ts line 722 | Minimum change to update stop |
 
 ---
@@ -207,7 +207,7 @@ Lines 870-909 (demo mode only)
 
 **T+15 min:** Price recovers to $51,100 (back above VWAP)
 - ✅ Profit = $1,100 (2.2% of entry)
-- ✅ Exceeds 2% minimum AND 2x risk ($1,000)
+- ✅ Exceeds 2% minimum AND 1x risk ($500)
 - 🔄 **TRAILING STOP ACTIVATED!**
 - Trailing stop = $51,100 - 0.05% = $51,074.45
 - **Stop moved:** $50,000 → $51,074.45
@@ -253,7 +253,7 @@ Lines 870-909 (demo mode only)
 
 ### Profit Optimization
 ✅ **Let Winners Run:** Trailing allows trades to capture extended moves  
-✅ **Smart Activation:** Only trails after achieving 2:1 risk/reward  
+✅ **Smart Activation:** Only trails after achieving 1:1 risk/reward  
 ✅ **Controlled Risk:** Maximum loss always capped at initial stop loss  
 
 ### Practical Execution

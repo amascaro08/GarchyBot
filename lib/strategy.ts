@@ -672,11 +672,11 @@ export function computeTrailingBreakeven(
 
   // Require minimum profit before trailing stop activates (2% by default)
   // This gives trades room to breathe and avoids stopping out on minor pullbacks
-  // Alternative approach: wait until profit is at least 2x the risk (better risk/reward)
+  // Alternative approach: wait until profit is at least 1x the risk (1:1 risk/reward)
   const riskPct = risk / entry;
-  const minProfitByRisk = riskPct * 2; // Wait for at least 2:1 risk/reward
+  const minProfitByRisk = riskPct * 1; // Wait for at least 1:1 risk/reward
   
-  // Use the higher of the two thresholds: absolute 2% OR 2x risk
+  // Use the higher of the two thresholds: absolute 2% OR 1x risk
   const effectiveMinProfit = Math.max(minProfitPct, minProfitByRisk);
   
   if (profitPct < effectiveMinProfit) {
