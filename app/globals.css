@@ -80,7 +80,12 @@
   
   .card:hover {
     @apply border-slate-700/80 shadow-xl;
-    transform: translateY(-1px);
+  }
+  
+  @media (min-width: 768px) {
+    .card:hover {
+      transform: translateY(-1px);
+    }
   }
   
   .card-elevated {
