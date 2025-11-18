@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
             throw new Error(`No historical data received for ${symbol}`);
           }
 
-          console.log(`[DAILY-SETUP] Fetched ${candles.length} days of historical data (3 years) for ${symbol}`);
+          console.log(`[DAILY-SETUP] Fetched ${candles.length} days of historical data (15 years) for ${symbol}`);
           debugInfo.dataPoints = candles.length;
 
           // Extract closing prices
