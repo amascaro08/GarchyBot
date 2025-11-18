@@ -85,10 +85,11 @@ export async function GET(request: NextRequest) {
                     sl: parseFloat(pos.stopLoss || '0') || parseFloat(pos.avgPrice || '0') * (pos.side === 'Buy' ? 0.95 : 1.05),
                     initialSl: parseFloat(pos.stopLoss || '0') || parseFloat(pos.avgPrice || '0') * (pos.side === 'Buy' ? 0.95 : 1.05),
                     reason: 'External Position (Bybit)',
-                    status: 'open',
+                    status: 'open' as const,
                     symbol: pos.symbol,
                     leverage: parseFloat(pos.leverage || '1'),
                     positionSize: parseFloat(pos.size || '0'),
+                    exitPrice: undefined,
                     pnl: parseFloat(pos.unrealisedPnl || '0'),
                   });
                 });

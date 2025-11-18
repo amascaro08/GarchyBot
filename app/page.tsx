@@ -138,10 +138,11 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
                   sl: pos.stopLoss || pos.avgPrice * (pos.side === 'LONG' ? 0.95 : 1.05),
                   initialSl: pos.stopLoss || pos.avgPrice * (pos.side === 'LONG' ? 0.95 : 1.05),
                   reason: 'External Position (Bybit)',
-                  status: 'open',
+                  status: 'open' as const,
                   symbol: pos.symbol,
                   leverage: pos.leverage || 1,
                   positionSize: pos.size,
+                  exitPrice: undefined,
                   pnl: pos.unrealisedPnl,
                 });
               }
