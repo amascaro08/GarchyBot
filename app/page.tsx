@@ -1575,7 +1575,12 @@ function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
   const activeTrades = trades.filter(t => t.status === 'open').length;
   const pendingTrades = trades.filter(t => t.status === 'pending').length;
   const totalTrades = activeTrades + pendingTrades;
-  const winRate = trades.filter(t => t.status === 'win').length / Math.max(trades.filter(t => t.status === 'win' || t.status === 'loss').length, 1) * 100;
+  
+  // Calculate win rate: TP = win, SL = loss
+  const wins = trades.filter(t => t.status === 'tp').length;
+  const losses = trades.filter(t => t.status === 'sl').length;
+  const totalClosed = wins + losses;
+  const winRate = totalClosed > 0 ? (wins / totalClosed) * 100 : 0;
   
   return (
     <div className="min-h-screen text-slate-100 flex relative bg-[#0a0e1a]">
