@@ -68,20 +68,24 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
     tradesRef.current = trades;
   }, [trades]);
 
-  // Load bot status on mount
+  // Load bot status on mount (only once!)
   useEffect(() => {
+    let mounted = true;
+    
     const loadBotStatus = async () => {
       try {
-        // Check auth
+        // Check auth once
         const authRes = await fetch('/api/auth/me');
         if (!authRes.ok) {
           window.location.href = '/login';
           return;
         }
 
+        if (!mounted) return;
+
         // Load bot config
         const res = await fetch('/api/bot/status');
-        if (res.ok) {
+        if (res.ok && mounted) {
           const data = await res.json();
           if (data.botConfig) {
             const config = data.botConfig;
@@ -114,29 +118,37 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
               positionSize: Number(t.position_size),
               exitPrice: t.exit_price ? Number(t.exit_price) : undefined,
             }));
-            setTrades(dbTrades);
+            if (mounted) setTrades(dbTrades);
           }
           
-          if (data.sessionPnL !== undefined) setSessionPnL(Number(data.sessionPnL));
+          if (data.sessionPnL !== undefined && mounted) setSessionPnL(Number(data.sessionPnL));
         }
       } catch (err) {
         console.error('Failed to load bot status:', err);
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     };
 
     loadBotStatus();
-  }, []);
+    
+    return () => {
+      mounted = false;
+    };
+  }, []); // Empty deps - run only once on mount
 
-  // Load levels and start polling when bot is running
+  // Load initial data once, then only when symbol/interval changes
   useEffect(() => {
+    let mounted = true;
+    
     if (onSymbolChange) onSymbolChange(symbol);
     if (onIntervalChange) onIntervalChange(candleInterval);
 
     const loadData = async () => {
       try {
-        setLoading(true);
+        // Only show loading on initial load or symbol change, not on polling
+        const isInitialLoad = candles.length === 0;
+        if (isInitialLoad && mounted) setLoading(true);
         
         // Fetch klines
         let klinesData;
@@ -153,11 +165,11 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
           klinesData = await testnetRes.json();
         }
         
-        if (klinesData && Array.isArray(klinesData) && klinesData.length > 0) {
+        if (mounted && klinesData && Array.isArray(klinesData) && klinesData.length > 0) {
           setCandles(klinesData);
-          if (onInitialCandlesLoaded) onInitialCandlesLoaded(klinesData);
+          if (onInitialCandlesLoaded && isInitialLoad) onInitialCandlesLoaded(klinesData);
           const latest = klinesData[klinesData.length - 1];
-          setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
+          if (latest && Number.isFinite(latest.close)) setCurrentPrice(latest.close);
         }
 
         // Fetch levels
@@ -172,31 +184,45 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
           }),
         });
         
-        if (levelsRes.ok) {
+        if (mounted && levelsRes.ok) {
           const levelsData = await levelsRes.json();
           setLevels(levelsData);
         }
 
-        setLoading(false);
+        if (mounted) setLoading(false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load data');
-        setLoading(false);
+        if (mounted) {
+          setError(err instanceof Error ? err.message : 'Failed to load data');
+          setLoading(false);
+        }
       }
     };
 
     loadData();
 
-    if (botRunning) {
-      const intervalId = setInterval(loadData, POLL_INTERVAL);
+    // Only poll if bot is running AND WebSocket isn't connected
+    // This prevents double polling when WebSocket is active
+    if (botRunning && !wsConnected) {
+      const intervalId = setInterval(() => {
+        if (!wsConnected && mounted) { // Only poll if WebSocket is down
+          loadData();
+        }
+      }, POLL_INTERVAL);
       pollingIntervalRef.current = intervalId;
+      
       return () => {
+        mounted = false;
         if (pollingIntervalRef.current) {
           clearInterval(pollingIntervalRef.current);
           pollingIntervalRef.current = null;
         }
       };
     }
-  }, [symbol, candleInterval, botRunning, garchMode, customKPct]);
+    
+    return () => {
+      mounted = false;
+    };
+  }, [symbol, candleInterval, garchMode, customKPct, botRunning, wsConnected]);
 
   // Real-time trade updates
   useEffect(() => {
@@ -311,7 +337,10 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
     }));
   }, [openTrades]);
 
-  if (loading) {
+  // Only show full-page loading on initial mount, not on updates
+  const showFullPageLoading = loading && candles.length === 0 && !currentPrice;
+  
+  if (showFullPageLoading) {
     return (
       <div className="min-h-screen bg-[#0a0e1a] flex items-center justify-center">
         <div className="text-center">
