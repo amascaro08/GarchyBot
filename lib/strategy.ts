@@ -226,6 +226,41 @@ export function findClosestGridLevels(
   const currentPrice = realtimePrice && realtimePrice > 0 ? realtimePrice : lastCandle.close;
   const { close } = lastCandle;
 
+  // PRIORITY CHECK: Mean-reversion at GARCH boundaries
+  // Upper bound (highest level) = SHORT signal (fade the high)
+  // Lower bound (lowest level) = LONG signal (fade the low)
+  if (upLevels.length > 0 && dnLevels.length > 0) {
+    const upperBound = roundLevel(upLevels[upLevels.length - 1]);
+    const lowerBound = roundLevel(dnLevels[dnLevels.length - 1]);
+    const boundaryTolerance = Math.max(Math.abs(currentPrice) * 0.0005, 0.01); // 0.05% tolerance
+
+    // Check if price is at upper boundary → SHORT (mean reversion)
+    if (Math.abs(currentPrice - upperBound) <= boundaryTolerance) {
+      const entry = upperBound;
+      const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'SHORT');
+      return {
+        side: 'SHORT',
+        entry,
+        tp,
+        sl,
+        reason: `SHORT (mean-reversion): price at upper boundary ${entry.toFixed(2)} - expecting reversion to mean`,
+      };
+    }
+
+    // Check if price is at lower boundary → LONG (mean reversion)
+    if (Math.abs(currentPrice - lowerBound) <= boundaryTolerance) {
+      const entry = lowerBound;
+      const { tp, sl } = findClosestGridLevels(entry, dOpen, upLevels, dnLevels, 'LONG');
+      return {
+        side: 'LONG',
+        entry,
+        tp,
+        sl,
+        reason: `LONG (mean-reversion): price at lower boundary ${entry.toFixed(2)} - expecting reversion to mean`,
+      };
+    }
+  }
+
   // Check if within no-trade band around VWAP (use real-time price if available)
   const vwapBand = vwap * noTradeBandPct;
   if (Math.abs(currentPrice - vwap) < vwapBand) {
@@ -304,8 +339,8 @@ export function findClosestGridLevels(
         }
       }
 
-      // Check other levels
-      for (let i = 1; i < upLevels.length; i++) {
+      // Check other levels (EXCEPT upper boundary - handled by mean-reversion above)
+      for (let i = 1; i < upLevels.length - 1; i++) {
         const level = roundLevel(upLevels[i]);
         if (checkRealtimeLevelTouch(realtimePrice, level)) {
           const entry = level;
@@ -402,8 +437,8 @@ export function findClosestGridLevels(
       }
     }
 
-    // Check if any recent candle touches any other upper level (U2, U3, etc.)
-    for (let i = 1; i < upLevels.length; i++) {
+    // Check if any recent candle touches any other upper level (U2, U3, U4, etc. - EXCEPT upper boundary)
+    for (let i = 1; i < upLevels.length - 1; i++) {
       const level = roundLevel(upLevels[i]);
       for (let j = 0; j < candlesToCheck.length; j++) {
         const candle = candlesToCheck[j];
@@ -482,8 +517,8 @@ export function findClosestGridLevels(
         }
       }
 
-      // Check other levels
-      for (let i = 0; i < dnLevels.length; i++) {
+      // Check other levels (EXCEPT lower boundary - handled by mean-reversion above)
+      for (let i = 0; i < dnLevels.length - 1; i++) {
         const level = roundLevel(dnLevels[i]);
         if (checkRealtimeLevelTouch(realtimePrice, level)) {
           const entry = level;
@@ -558,8 +593,8 @@ export function findClosestGridLevels(
       }
     }
 
-    // Check if any recent candle touches any lower level (D1, D2, etc.)
-    for (let i = 0; i < dnLevels.length; i++) {
+    // Check if any recent candle touches any lower level (D1, D2, D3, D4 etc. - EXCEPT lower boundary)
+    for (let i = 0; i < dnLevels.length - 1; i++) {
       const level = roundLevel(dnLevels[i]);
       for (let j = 0; j < candlesToCheck.length; j++) {
         const candle = candlesToCheck[j];
