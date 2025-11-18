@@ -45,7 +45,11 @@ const INTERVALS = [
 ];
 const DEFAULT_INTERVAL = '5';
 
-function HomeContent() {
+interface HomeContentProps {
+  onInitialCandlesLoaded?: (candles: Candle[]) => void;
+}
+
+function HomeContent({ onInitialCandlesLoaded }: HomeContentProps) {
   const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
   const [symbolsLoading, setSymbolsLoading] = useState<boolean>(true);
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
@@ -242,6 +246,12 @@ function HomeContent() {
       }
       
       setCandles(data);
+      
+      // Pass candles to WebSocket provider for initial chart display
+      if (onInitialCandlesLoaded && data.length > 0) {
+        onInitialCandlesLoaded(data);
+      }
+      
       const latest = data[data.length - 1];
       setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
       return data;
@@ -1104,6 +1114,12 @@ function HomeContent() {
         }
 
         setCandles(klinesData);
+        
+        // Pass candles to WebSocket provider for initial chart display
+        if (onInitialCandlesLoaded && klinesData.length > 0) {
+          onInitialCandlesLoaded(klinesData);
+        }
+        
         const latest = klinesData[klinesData.length - 1];
         setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
 
@@ -1877,30 +1893,13 @@ function HomeContent() {
 export default function Home() {
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
   const [candleInterval, setCandleInterval] = useState<string>(DEFAULT_INTERVAL);
+  const [initialCandles, setInitialCandles] = useState<Candle[]>([]);
 
   return (
-    <WebSocketProvider symbol={symbol} interval={candleInterval} initialCandles={[]}>
-      <HomeContentWrapper 
-        initialSymbol={symbol} 
-        initialInterval={candleInterval}
-        onSymbolChange={setSymbol}
-        onIntervalChange={setCandleInterval}
+    <WebSocketProvider symbol={symbol} interval={candleInterval} initialCandles={initialCandles}>
+      <HomeContent 
+        onInitialCandlesLoaded={setInitialCandles}
       />
     </WebSocketProvider>
   );
-}
-
-// Bridge component to pass symbol/interval changes back to provider
-function HomeContentWrapper({ 
-  initialSymbol, 
-  initialInterval,
-  onSymbolChange,
-  onIntervalChange
-}: { 
-  initialSymbol: string; 
-  initialInterval: string;
-  onSymbolChange: (symbol: string) => void;
-  onIntervalChange: (interval: string) => void;
-}) {
-  return <HomeContent />;
 }
