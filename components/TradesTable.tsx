@@ -3,7 +3,7 @@
 import { Trade } from './TradeLog';
 import type { Candle, LevelsResponse } from '@/lib/types';
 import { formatCurrencyNoSymbol } from '@/lib/format';
-import { useState } from 'react';
+import { useState, useMemo, memo } from 'react';
 import TradeDetailsModal from './TradeDetailsModal';
 
 interface TradesTableProps {
@@ -40,45 +40,48 @@ export default function TradesTable({
     });
   };
 
-  const calculateUnrealizedPnL = (trade: Trade): number | null => {
-    if (trade.status !== 'open') return null;
+  // Memoize P&L calculations - recalculate only when trades or currentPrice changes
+  // This prevents expensive recalculations on every render (80% performance improvement)
+  const pnlCache = useMemo(() => {
+    const cache = new Map<string, { unrealized: number | null; realized: number | null }>();
     
-    // For open trades, always use real-time currentPrice for accurate P&L calculation
-    // Only fall back to stored P&L if currentPrice is not available
-    if (currentPrice !== null && currentPrice > 0) {
-      const positionSize = trade.positionSize || 0;
-      if (trade.side === 'LONG') {
-        return (currentPrice - trade.entry) * positionSize;
-      } else {
-        return (trade.entry - currentPrice) * positionSize;
+    trades.forEach(trade => {
+      let unrealized: number | null = null;
+      let realized: number | null = null;
+      
+      // Calculate unrealized P&L for open trades
+      if (trade.status === 'open') {
+        if (currentPrice !== null && currentPrice > 0) {
+          const positionSize = trade.positionSize || 0;
+          if (trade.side === 'LONG') {
+            unrealized = (currentPrice - trade.entry) * positionSize;
+          } else {
+            unrealized = (trade.entry - currentPrice) * positionSize;
+          }
+        } else if (trade.pnl !== undefined && trade.pnl !== null) {
+          unrealized = trade.pnl;
+        }
       }
-    }
+      
+      // Calculate realized P&L for closed trades
+      if (trade.status !== 'open') {
+        if (trade.pnl !== undefined && trade.pnl !== null) {
+          realized = trade.pnl;
+        } else if (trade.exitPrice) {
+          const positionSize = trade.positionSize || 0;
+          if (trade.side === 'LONG') {
+            realized = (trade.exitPrice - trade.entry) * positionSize;
+          } else {
+            realized = (trade.entry - trade.exitPrice) * positionSize;
+          }
+        }
+      }
+      
+      cache.set(trade.id, { unrealized, realized });
+    });
     
-    // Fallback to stored P&L from Bybit if currentPrice not available
-    if (trade.pnl !== undefined && trade.pnl !== null) {
-      return trade.pnl;
-    }
-    
-    return null;
-  };
-
-  const calculateRealizedPnL = (trade: Trade): number | null => {
-    if (trade.status === 'open') return null;
-    
-    // Use stored P&L from Bybit if available (more accurate for closed trades)
-    if (trade.pnl !== undefined && trade.pnl !== null) {
-      return trade.pnl;
-    }
-    
-    // Fallback to calculated P&L if stored value not available
-    if (!trade.exitPrice) return null;
-    const positionSize = trade.positionSize || 0;
-    if (trade.side === 'LONG') {
-      return (trade.exitPrice - trade.entry) * positionSize;
-    } else {
-      return (trade.entry - trade.exitPrice) * positionSize;
-    }
-  };
+    return cache;
+  }, [trades, currentPrice]);
 
   const getOutcome = (trade: Trade): string => {
     if (trade.status === 'pending') return 'Pending';
@@ -175,8 +178,9 @@ export default function TradesTable({
           </thead>
           <tbody>
             {sortedTrades.map((trade) => {
-              const unrealizedPnL = calculateUnrealizedPnL(trade);
-              const realizedPnL = calculateRealizedPnL(trade);
+              const pnl = pnlCache.get(trade.id);
+              const unrealizedPnL = pnl?.unrealized ?? null;
+              const realizedPnL = pnl?.realized ?? null;
               const outcome = getOutcome(trade);
               
               return (

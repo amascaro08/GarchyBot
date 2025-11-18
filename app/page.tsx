@@ -9,11 +9,18 @@ import TradesTable from '@/components/TradesTable';
 import Sidebar from '@/components/Sidebar';
 import OrderBook from '@/components/OrderBook';
 import ActivityLog, { LogEntry, LogLevel } from '@/components/ActivityLog';
+import ConnectionIndicator from '@/components/ConnectionIndicator';
+import RealTimeIndicator from '@/components/RealTimeIndicator';
+import ModernHeader from '@/components/ModernHeader';
+import MetricCard from '@/components/MetricCard';
+import StatusBadge from '@/components/StatusBadge';
+import DashboardGrid from '@/components/DashboardGrid';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
 import { startOrderBook, stopOrderBook, confirmLevelTouch } from '@/lib/orderbook';
 import { io, Socket } from 'socket.io-client';
-import { useWebSocket } from '@/lib/useWebSocket';
+import { WebSocketProvider, useSharedWebSocket } from '@/lib/WebSocketContext';
+import { useThrottle } from '@/lib/hooks/useThrottle';
 
 const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const DEFAULT_SYMBOL = DEFAULT_SYMBOLS[0];
@@ -42,7 +49,13 @@ const INTERVALS = [
 ];
 const DEFAULT_INTERVAL = '5';
 
-export default function Home() {
+interface HomeContentProps {
+  onInitialCandlesLoaded?: (candles: Candle[]) => void;
+  onSymbolChange?: (symbol: string) => void;
+  onIntervalChange?: (interval: string) => void;
+}
+
+function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange }: HomeContentProps) {
   const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
   const [symbolsLoading, setSymbolsLoading] = useState<boolean>(true);
   const [symbol, setSymbol] = useState<string>(DEFAULT_SYMBOL);
@@ -78,7 +91,7 @@ export default function Home() {
   const [apiMode, setApiMode] = useState<'demo' | 'live'>('demo');
   const [apiKey, setApiKey] = useState<string>('');
   const [apiSecret, setApiSecret] = useState<string>('');
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [apiConnectionStatus, setApiConnectionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [walletInfo, setWalletInfo] = useState<Array<{ coin: string; equity: number; availableToWithdraw: number }> | null>(null);
   const [overrideDailyLimits, setOverrideDailyLimits] = useState<boolean>(false);
@@ -86,17 +99,23 @@ export default function Home() {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const levelsRecalcIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const tradesRef = useRef<Trade[]>([]);
-  const wsDataRef = useRef<{ candles: Candle[]; ticker: any; lastCandleCloseTime: number | null } | null>(null);
   
-  // Use WebSocket for real-time ticker data and candle updates (shared with Chart)
-  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected } = useWebSocket(symbol, candleInterval, candles);
+  // Access shared WebSocket connection (eliminates duplicate connections)
+  const { ticker: wsTicker, candles: wsCandles, lastCandleCloseTime, isConnected: wsConnected, connectionStatus: wsConnectionStatus, lastUpdateTime } = useSharedWebSocket();
+  
+  // Use WebSocket connection status, fallback to 'connected' if we have data
+  const connectionStatus = wsConnectionStatus || (candles.length > 0 ? 'connected' : 'connecting');
+  
+  // Throttle price updates for UI (100ms = 10 updates/sec max)
+  // Still fast enough for real-time trading feel, but reduces re-renders by 90%
+  const throttledTickerPrice = useThrottle(wsTicker?.lastPrice, 100);
   
   // Update currentPrice from WebSocket ticker in real-time (for trade P&L calculations)
   useEffect(() => {
-    if (wsTicker?.lastPrice && wsTicker.lastPrice > 0) {
-      setCurrentPrice(wsTicker.lastPrice);
+    if (throttledTickerPrice && throttledTickerPrice > 0) {
+      setCurrentPrice(throttledTickerPrice);
     }
-  }, [wsTicker?.lastPrice, wsTicker?.timestamp]);
+  }, [throttledTickerPrice]);
   
   // Helper function to add log entries (memoized to avoid dependency warnings)
   const addLog = useCallback((level: LogLevel, message: string) => {
@@ -236,6 +255,12 @@ export default function Home() {
       }
       
       setCandles(data);
+      
+      // Pass candles to WebSocket provider for initial chart display
+      if (onInitialCandlesLoaded && data.length > 0) {
+        onInitialCandlesLoaded(data);
+      }
+      
       const latest = data[data.length - 1];
       setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
       return data;
@@ -461,8 +486,11 @@ export default function Home() {
   }, [replaceTradeInState, addLog]);
 
   // Real-time TP/SL checks using ticker data (faster than waiting for candle close)
+  // Throttle to 200ms (5 checks per second) - fast enough for trading, prevents overload
+  const throttledTickerForTPSL = useThrottle(wsTicker?.lastPrice, 200);
+  
   useEffect(() => {
-    if (!botRunning || !wsTicker?.lastPrice || wsTicker.lastPrice <= 0) {
+    if (!botRunning || !throttledTickerForTPSL || throttledTickerForTPSL <= 0) {
       return;
     }
 
@@ -472,7 +500,7 @@ export default function Home() {
       );
 
       for (const trade of openTradesSnapshot) {
-        const currentPrice = wsTicker.lastPrice;
+        const currentPrice = throttledTickerForTPSL;
         
         // Check TP/SL with current price (more responsive than waiting for candle close)
         if (trade.side === 'LONG') {
@@ -559,10 +587,19 @@ export default function Home() {
     };
 
     checkTPSL();
-  }, [wsTicker?.lastPrice, wsTicker?.timestamp, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer, levels?.vwap]);
+  }, [throttledTickerForTPSL, botRunning, symbol, closeTradeOnServer, updateTradeStopOnServer, levels?.vwap]);
 
   // Main polling function - uses current symbol/interval from closure
+  // OPTIMIZATION: Reduce frequency when WebSocket is active (real-time data available)
   const pollData = async () => {
+    // Skip polling if WebSocket is connected and providing real-time data
+    // WebSocket provides: candles, ticker, orderbook - no need to poll!
+    if (wsConnected && wsCandles.length > 0) {
+      console.log('[POLL] Skipping - WebSocket active with real-time data');
+      setLoading(false);
+      return;
+    }
+    
     // Capture current values to ensure we use latest
     const currentSymbol = symbol;
     
@@ -570,20 +607,17 @@ export default function Home() {
       setLoading(true);
       setError(null);
 
-      // Fetch klines
-      // Use mainnet for accurate prices, fallback to testnet
+      // Fetch klines (only if WebSocket not providing data)
       let candlesData;
       try {
         const res = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=false`);
         if (res.ok) {
           candlesData = await res.json();
         } else {
-          // Fallback to testnet
           const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
           candlesData = await testnetRes.json();
         }
       } catch (err) {
-        // Final fallback to testnet
         const testnetRes = await fetch(`/api/klines?symbol=${symbol}&interval=${candleInterval}&limit=200&testnet=true`);
         candlesData = await testnetRes.json();
       }
@@ -941,7 +975,7 @@ export default function Home() {
             setApiMode((config.api_mode as 'demo' | 'live') || 'demo');
             setApiKey(config.api_key || '');
             setApiSecret(config.api_secret || '');
-            setConnectionStatus('idle');
+            setApiConnectionStatus('idle');
             setConnectionMessage(null);
             setWalletInfo(null);
             
@@ -1054,6 +1088,10 @@ export default function Home() {
 
   // Initial load and polling - handles candles, signals, and interval changes
   useEffect(() => {
+    // Notify parent wrapper to update WebSocket
+    if (onSymbolChange) onSymbolChange(symbol);
+    if (onIntervalChange) onIntervalChange(candleInterval);
+    
     // Reset signal and candles when symbol or interval changes
     setSignal(null);
     setCandles([]);
@@ -1089,6 +1127,12 @@ export default function Home() {
         }
 
         setCandles(klinesData);
+        
+        // Pass candles to WebSocket provider for initial chart display
+        if (onInitialCandlesLoaded && klinesData.length > 0) {
+          onInitialCandlesLoaded(klinesData);
+        }
+        
         const latest = klinesData[klinesData.length - 1];
         setCurrentPrice(latest && Number.isFinite(latest.close) ? latest.close : null);
 
@@ -1153,9 +1197,12 @@ export default function Home() {
 
     if (botRunning) {
       loadData();
+      // OPTIMIZATION: Increase polling interval when WebSocket is active
+      // WebSocket provides real-time data, so we only need periodic fallback polling
+      const pollInterval = wsConnected ? 60000 : POLL_INTERVAL; // 60s if WS active, 12s if not
       const intervalId = setInterval(() => {
         pollData();
-      }, POLL_INTERVAL);
+      }, pollInterval);
       pollingIntervalRef.current = intervalId;
       return () => {
         if (pollingIntervalRef.current) {
@@ -1167,7 +1214,7 @@ export default function Home() {
       // Load initial data even when bot is stopped
       loadData();
     }
-  }, [symbol, candleInterval, botRunning]); // Candles and signals depend on interval, but levels don't
+  }, [symbol, candleInterval, botRunning, onSymbolChange, onIntervalChange]); // Candles and signals depend on interval, but levels don't
 
   // Real-time trade updates via Server-Sent Events
   useEffect(() => {
@@ -1411,7 +1458,7 @@ export default function Home() {
 
     if (!key || !secret) {
       const message = 'Please provide both API key and secret before testing.';
-      setConnectionStatus('error');
+      setApiConnectionStatus('error');
       setConnectionMessage(message);
       setWalletInfo(null);
       addLog('error', message);
@@ -1419,7 +1466,7 @@ export default function Home() {
     }
 
     try {
-      setConnectionStatus('loading');
+      setApiConnectionStatus('loading');
       setConnectionMessage(null);
       setWalletInfo(null);
 
@@ -1452,7 +1499,7 @@ export default function Home() {
         : [];
 
       setWalletInfo(balances);
-      setConnectionStatus('success');
+      setApiConnectionStatus('success');
       setConnectionMessage('Connection successful.');
       addLog('success', `Bybit ${apiMode} connection successful.`);
 
@@ -1498,7 +1545,7 @@ export default function Home() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to test connection';
-      setConnectionStatus('error');
+      setApiConnectionStatus('error');
       setConnectionMessage(message);
       setWalletInfo(null);
       addLog('error', message);
@@ -1533,8 +1580,19 @@ export default function Home() {
     }
   };
 
+  // Calculate statistics for dashboard
+  const activeTrades = trades.filter(t => t.status === 'open').length;
+  const pendingTrades = trades.filter(t => t.status === 'pending').length;
+  const totalTrades = activeTrades + pendingTrades;
+  
+  // Calculate win rate: TP = win, SL = loss
+  const wins = trades.filter(t => t.status === 'tp').length;
+  const losses = trades.filter(t => t.status === 'sl').length;
+  const totalClosed = wins + losses;
+  const winRate = totalClosed > 0 ? (wins / totalClosed) * 100 : 0;
+  
   return (
-    <div className="min-h-screen text-white flex">
+    <div className="min-h-screen text-slate-100 flex relative bg-[#0a0e1a]">
       {/* Sidebar - Desktop: fixed left, Mobile: slide-out */}
       <Sidebar
         symbol={symbol}
@@ -1585,31 +1643,65 @@ export default function Home() {
         apiSecret={apiSecret}
         setApiSecret={setApiSecret}
         onTestConnection={handleTestConnection}
-        connectionStatus={connectionStatus}
+        connectionStatus={apiConnectionStatus}
         connectionMessage={connectionMessage}
         walletInfo={walletInfo}
       />
 
       {/* Main Content */}
-      <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
-        <div className="max-w-[1600px] mx-auto">
-          {/* Header */}
-          <div className="mb-6 lg:mb-8 relative">
-            <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 via-purple-500/20 to-pink-500/20 blur-3xl rounded-full"></div>
-            <div className="relative">
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black mb-2 lg:mb-3 text-gradient-animated">
-                GARCHY BOT
-              </h1>
-              <div className="flex items-center gap-2 lg:gap-3 flex-wrap">
-                <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-cyan-500 to-purple-500 rounded-full"></div>
-                <p className="text-gray-300 text-xs sm:text-sm lg:text-base font-medium tracking-wide">Real-time trading signals powered by volatility analysis</p>
-                <div className="h-1 w-12 lg:w-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"></div>
-              </div>
-            </div>
-          </div>
+      <div className="flex-1 p-6 lg:p-8 overflow-x-hidden bg-[#0a0e1a]">
+        <div className="max-w-[1800px] mx-auto">
+          {/* Modern Header */}
+          <ModernHeader
+            isConnected={wsConnected}
+            connectionStatus={connectionStatus}
+            lastUpdateTime={lastUpdateTime}
+            botRunning={botRunning}
+            currentPrice={currentPrice}
+            symbol={symbol}
+          />
 
-          {/* Enhanced Status badges */}
-          <div className="mb-8 flex flex-wrap gap-3">
+          {/* Dashboard Grid - Key Metrics */}
+          <DashboardGrid>
+            <MetricCard
+              label="Active Positions"
+              value={`${totalTrades}/${maxTrades}`}
+              trend={totalTrades > 0 ? 'up' : 'neutral'}
+              icon={<span>📊</span>}
+              className="animate-fade-in"
+            />
+            
+            <MetricCard
+              label="Session P&L"
+              value={`$${sessionPnL.toFixed(2)}`}
+              trend={sessionPnL > 0 ? 'up' : sessionPnL < 0 ? 'down' : 'neutral'}
+              change={{
+                value: parseFloat(((sessionPnL / (capital || 1)) * 100).toFixed(2)),
+                label: 'of capital'
+              }}
+              icon={<span>💰</span>}
+              className="animate-fade-in"
+            />
+            
+            <MetricCard
+              label="Win Rate"
+              value={`${winRate.toFixed(1)}%`}
+              trend={winRate > 50 ? 'up' : winRate < 50 ? 'down' : 'neutral'}
+              icon={<span>🎯</span>}
+              className="animate-fade-in"
+            />
+            
+            <MetricCard
+              label="Volatility (GARCH)"
+              value={levels ? `${(levels.kPct * 100).toFixed(2)}%` : 'Loading...'}
+              trend="neutral"
+              icon={<span>📈</span>}
+              className="animate-fade-in"
+            />
+          </DashboardGrid>
+
+          {/* Quick Stats Bar */}
+          <div className="mb-6 flex flex-wrap gap-3 animate-fade-in">
             {/* Core Trading Stats */}
             <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
               <div className="flex items-center gap-3">
@@ -1641,71 +1733,45 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Volatility */}
+            {/* Volatility with Real-Time Price */}
             {levels && (
-              <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-yellow-400 rounded-full opacity-80"></div>
-                  <div className="text-xs">
-                    <div className="text-gray-400 font-medium">Volatility</div>
-                    <div className="text-yellow-300 font-bold text-sm">{(levels.kPct * 100).toFixed(2)}%</div>
+              <>
+                <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                  <div className="flex items-center gap-3">
+                    <div className="w-3 h-3 bg-yellow-400 rounded-full opacity-80"></div>
+                    <div className="text-xs">
+                      <div className="text-gray-400 font-medium">Volatility</div>
+                      <div className="text-yellow-300 font-bold text-sm">{(levels.kPct * 100).toFixed(2)}%</div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-
-            {/* Bot Status */}
-            {botRunning && (
-              <div className="px-4 py-2.5 rounded-xl bg-green-500/15 border border-green-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse shadow-lg shadow-green-400/50"></div>
-                  <div className="text-xs">
-                    <div className="text-green-400 font-bold">Bot Active</div>
-                    <div className="text-green-300/80 text-xs">Trading enabled</div>
+                
+                {/* Real-Time Price with Freshness Indicator */}
+                {currentPrice && (
+                  <div className="px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
+                    <div className="flex items-center gap-3">
+                      <RealTimeIndicator lastUpdateTime={lastUpdateTime} showAge={false} />
+                      <div className="text-xs">
+                        <div className="text-gray-400 font-medium">Price</div>
+                        <div className="text-cyan-300 font-bold text-sm">${currentPrice.toFixed(2)}</div>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            )}
-
-            {!botRunning && canTrade && (
-              <div className="px-4 py-2.5 rounded-xl bg-orange-500/15 border border-orange-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-orange-400 rounded-full"></div>
-                  <div className="text-xs">
-                    <div className="text-orange-400 font-bold">Bot Stopped</div>
-                    <div className="text-orange-300/80 text-xs">Ready to trade</div>
-                  </div>
-                </div>
-              </div>
+                )}
+              </>
             )}
 
             {/* Daily Limits Status */}
             {isDailyTargetHit && (
-              <div className="px-4 py-2.5 rounded-xl bg-blue-500/15 border border-blue-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <svg className="w-5 h-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                  </svg>
-                  <div className="text-xs">
-                    <div className="text-blue-400 font-bold">Target Achieved</div>
-                    <div className="text-blue-300/80 text-xs">Daily goal reached</div>
-                  </div>
-                </div>
-              </div>
+              <StatusBadge variant="success">
+                ✓ Target Achieved
+              </StatusBadge>
             )}
-
+            
             {isDailyStopHit && (
-              <div className="px-4 py-2.5 rounded-xl bg-red-500/15 border border-red-500/40 backdrop-blur-sm shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                  </svg>
-                  <div className="text-xs">
-                    <div className="text-red-400 font-bold">Stop Loss Triggered</div>
-                    <div className="text-red-300/80 text-xs">Daily limit reached</div>
-                  </div>
-                </div>
-              </div>
+              <StatusBadge variant="danger">
+                ✗ Stop Loss Hit
+              </StatusBadge>
             )}
           </div>
 
@@ -1771,11 +1837,16 @@ export default function Home() {
               />
             </div>
 
-            {/* Chart spans full width */}
-            <div className="xl:col-span-3 glass-effect rounded-2xl p-5 sm:p-7 shadow-2xl card-hover border-2 border-slate-700/50 bg-gradient-to-br from-slate-900/80 to-slate-800/80 backdrop-blur-xl">
-              <div className="mb-5">
-                <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300 mb-2">Price Chart</h2>
-                <p className="text-sm text-gray-300 font-medium">Real-time candlestick data with trading levels</p>
+            {/* Chart spans full width - Modern Card Design */}
+            <div className="xl:col-span-3 card p-6 animate-fade-in">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold gradient-text mb-1">Price Chart</h2>
+                  <p className="text-sm text-slate-400">Real-time candlestick data with trading levels</p>
+                </div>
+                <StatusBadge variant={wsConnected ? 'success' : 'danger'} dot pulse={wsConnected}>
+                  {wsConnected ? 'Live Data' : 'Disconnected'}
+                </StatusBadge>
               </div>
               <Chart
                 candles={candles}
@@ -1794,21 +1865,37 @@ export default function Home() {
               />
             </div>
 
-            {/* Trade statistics & activity */}
+            {/* Trade statistics & activity - Modern Cards */}
             <div className="space-y-6">
-              <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} walletInfo={walletInfo} />
-              <ActivityLog logs={activityLogs} maxLogs={50} />
+              <div className="card p-5 animate-fade-in">
+                <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
+                  <span className="text-xl">💼</span>
+                  Trade Summary
+                </h3>
+                <TradeLog trades={trades} sessionPnL={sessionPnL} currentPrice={currentPrice} walletInfo={walletInfo} />
+              </div>
+              
+              <div className="card p-5 animate-fade-in">
+                <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
+                  <span className="text-xl">📝</span>
+                  Activity Log
+                </h3>
+                <ActivityLog logs={activityLogs} maxLogs={50} />
+              </div>
             </div>
 
-            {/* Trades Table */}
-            <div className="xl:col-span-2 space-y-4">
+            {/* Trades Table - Modern Card */}
+            <div className="xl:col-span-2 space-y-4 animate-fade-in">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <h2 className="text-xl font-bold text-white">Recent Trades</h2>
-                <Link href="/history" className="text-cyan-400 hover:text-cyan-300 transition-colors text-sm">
+                <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                  <span className="text-2xl">📋</span>
+                  Recent Trades
+                </h2>
+                <Link href="/history" className="btn btn-ghost text-sm">
                   View Full History →
                 </Link>
               </div>
-              <div className="glass-effect rounded-xl p-4 sm:p-6 shadow-2xl border-slate-700/50 bg-slate-900/70 backdrop-blur-xl">
+              <div className="card p-6">
                 <TradesTable
                   trades={trades}
                   currentPrice={currentPrice}
@@ -1824,5 +1911,37 @@ export default function Home() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Wrapper component that manages symbol/interval state and provides WebSocket
+export default function Home() {
+  // Use ref to track if we've loaded initial data
+  const [isReady, setIsReady] = useState(false);
+  const [wrapperSymbol, setWrapperSymbol] = useState<string>(DEFAULT_SYMBOL);
+  const [wrapperInterval, setWrapperInterval] = useState<string>(DEFAULT_INTERVAL);
+  const [initialCandles, setInitialCandles] = useState<Candle[]>([]);
+
+  // Wait a tick to ensure initial render
+  useEffect(() => {
+    setIsReady(true);
+  }, []);
+
+  if (!isReady) {
+    return (
+      <div className="min-h-screen bg-[#0a0e1a] flex items-center justify-center">
+        <div className="text-slate-300">Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <WebSocketProvider symbol={wrapperSymbol} interval={wrapperInterval} initialCandles={initialCandles}>
+      <HomeContent 
+        onInitialCandlesLoaded={setInitialCandles}
+        onSymbolChange={setWrapperSymbol}
+        onIntervalChange={setWrapperInterval}
+      />
+    </WebSocketProvider>
   );
 }

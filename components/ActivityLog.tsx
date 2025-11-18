@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { useDebounce } from '@/lib/hooks/useThrottle';
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 export type LogEntry = {
@@ -18,12 +19,16 @@ interface ActivityLogProps {
 export default function ActivityLog({ logs, maxLogs = 50 }: ActivityLogProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new logs arrive
+  // Debounce log updates to reduce layout thrashing
+  // Updates max 3x per second instead of on every log entry
+  const debouncedLogs = useDebounce(logs, 300);
+
+  // Auto-scroll to bottom when new logs arrive (debounced)
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [logs]);
+  }, [debouncedLogs]);
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString('en-US', { 

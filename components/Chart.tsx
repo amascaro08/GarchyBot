@@ -3,7 +3,7 @@
 import { useEffect, useRef, useMemo } from 'react';
 import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, LineData, Time, IPriceLine, PriceScaleMode } from 'lightweight-charts';
 import type { Candle } from '@/lib/types';
-import { useWebSocket } from '@/lib/useWebSocket';
+import { useSharedWebSocket } from '@/lib/WebSocketContext';
 
 interface ChartProps {
   candles: Candle[];
@@ -65,8 +65,8 @@ export default function Chart({
     onPriceUpdateRef.current = onPriceUpdate;
   }, [onPriceUpdate]);
 
-  // Use WebSocket hook for real-time data, initialize with static candles
-  const { candles: wsCandles, isConnected: wsConnected, ticker } = useWebSocket(symbol, interval, candles);
+  // Use shared WebSocket connection (eliminates duplicate connections)
+  const { candles: wsCandles, isConnected: wsConnected, ticker } = useSharedWebSocket();
 
   // Update price from ticker in real-time (separate from candle updates)
   useEffect(() => {
@@ -169,15 +169,20 @@ export default function Chart({
   }, [height]);
 
   useEffect(() => {
+    // Only reset fit flag on symbol/interval change, allowing new chart view to fit once
     hasInitialFitRef.current = false;
     candlesSignatureRef.current = ''; // Reset signature on symbol/interval change
     if (updateCheckIntervalRef.current) {
       clearInterval(updateCheckIntervalRef.current);
       updateCheckIntervalRef.current = null;
     }
+    // Only fit content when symbol/interval changes (user wants to see new data)
+    // Don't fit on regular updates - this preserves zoom/pan
     if (chartRef.current) {
       chartRef.current.timeScale().fitContent();
       chartRef.current.priceScale('right').applyOptions({ mode: PriceScaleMode.Normal });
+      // Mark as fitted so we don't auto-fit again
+      hasInitialFitRef.current = true;
     }
   }, [symbol, interval]);
 
@@ -271,9 +276,17 @@ export default function Chart({
       }
     }
 
+    // Only fit content on the VERY FIRST load (when chart is created)
+    // After that, preserve user zoom/pan settings
+    // This check ensures fitContent() is called only once per symbol/interval
     if (!hasInitialFitRef.current && chartRef.current && displayCandles.length > 0) {
-      chartRef.current.timeScale().fitContent();
-      hasInitialFitRef.current = true;
+      // Use setTimeout to ensure DOM is ready and avoid layout thrashing
+      setTimeout(() => {
+        if (chartRef.current && !hasInitialFitRef.current) {
+          chartRef.current.timeScale().fitContent();
+          hasInitialFitRef.current = true;
+        }
+      }, 100);
     }
 
     // Create a signature of price line data to prevent duplicate processing

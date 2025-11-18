@@ -14,12 +14,13 @@ export async function GET(request: NextRequest) {
     
     console.log(`[GARCH-CALC] Calculating volatility for ${symbol} using Yahoo Finance...`);
     
-    // Fetch 3 years of historical data (~1095 days) from Yahoo Finance
-    const daysToFetch = 1095; // 3 years of daily data
+    // Fetch 15 years of historical data for improved GARCH precision
+    // Recommendation from feedback: 10-15 years provides significantly better volatility forecasting
+    const daysToFetch = 5475; // 15 years of daily data (365.25 * 15)
     
     let candles;
     try {
-      console.log(`[GARCH-CALC] Fetching ${daysToFetch} days (3 years) from Yahoo Finance...`);
+      console.log(`[GARCH-CALC] Fetching ${daysToFetch} days (15 years) from Yahoo Finance...`);
       candles = await getYahooFinanceKlines(symbol, daysToFetch);
     } catch (yahooError) {
       console.error(`[GARCH-CALC] Yahoo Finance failed:`, yahooError instanceof Error ? yahooError.message : yahooError);
@@ -33,7 +34,7 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    console.log(`[GARCH-CALC] Successfully fetched ${candles.length} candles for ${symbol}`);
+    console.log(`[GARCH-CALC] Successfully fetched ${candles.length} candles (15-year dataset) for ${symbol}`);
     
     // Extract closing prices and validate
     // Yahoo Finance already provides adjusted close (if available), matching yfinance's auto_adjust=True
