@@ -492,6 +492,49 @@ export async function POST(request: NextRequest) {
                         parseFloat(p.size || '0') !== 0
                       );
                       
+                      // Sync TP/SL from Bybit to database (respect manual changes on Bybit)
+                      if (position) {
+                        const bybitTP = parseFloat(position.takeProfit || '0') || null;
+                        const bybitSL = parseFloat(position.stopLoss || '0') || null;
+                        const dbTP = trade.tp_price ? Number(trade.tp_price) : null;
+                        const dbSL = trade.current_sl ? Number(trade.current_sl) : (trade.sl_price ? Number(trade.sl_price) : null);
+                        
+                        // If Bybit TP/SL differs from database, update database (Bybit is source of truth)
+                        const tpChanged = bybitTP !== dbTP && Math.abs((bybitTP || 0) - (dbTP || 0)) > 0.01;
+                        const slChanged = bybitSL !== dbSL && Math.abs((bybitSL || 0) - (dbSL || 0)) > 0.01;
+                        
+                        if (tpChanged || slChanged) {
+                          console.log(`[CRON] TP/SL sync from Bybit for trade ${trade.id}:`);
+                          if (tpChanged) {
+                            console.log(`  TP: DB=${dbTP} -> Bybit=${bybitTP}`);
+                          }
+                          if (slChanged) {
+                            console.log(`  SL: DB=${dbSL} -> Bybit=${bybitSL}`);
+                          }
+                          
+                          // Update database with Bybit's values
+                          const updates: any = {};
+                          if (tpChanged && bybitTP) {
+                            updates.tp_price = bybitTP;
+                          }
+                          if (slChanged && bybitSL) {
+                            updates.current_sl = bybitSL;
+                            updates.sl_price = bybitSL;
+                          }
+                          
+                          if (Object.keys(updates).length > 0) {
+                            await updateTrade(trade.id, updates as any);
+                            await addActivityLog(
+                              botConfig.user_id,
+                              'info',
+                              `TP/SL synced from Bybit for ${trade.symbol}: ${tpChanged ? `TP=$${bybitTP?.toFixed(2)}` : ''} ${slChanged ? `SL=$${bybitSL?.toFixed(2)}` : ''}`.trim(),
+                              { bybitTP, bybitSL, dbTP, dbSL },
+                              botConfig.id
+                            );
+                          }
+                        }
+                      }
+                      
                       // Get mark price from position if available, otherwise use lastClose
                       const markPrice = position ? parseFloat(position.markPrice || '0') : lastClose;
                       
@@ -624,33 +667,16 @@ export async function POST(request: NextRequest) {
                         const unrealizedPnl = parseFloat(position.unrealisedPnl || '0');
                         const currentMarkPrice = parseFloat(position.markPrice || lastClose);
                         
-                        // Check if TP/SL are set on Bybit
+                        // TP/SL sync already handled above (lines 495-536)
+                        // This section only sets TP/SL if they're completely missing on Bybit
                         const bybitTP = position.takeProfit ? parseFloat(position.takeProfit) : null;
                         const bybitSL = position.stopLoss ? parseFloat(position.stopLoss) : null;
                         const tradeTP = Number(trade.tp_price);
                         const tradeSL = Number(trade.current_sl ?? trade.sl_price);
                         
-                        // Detect if SL was manually changed on Bybit (different from our database)
-                        // If Bybit SL exists and is different from our stored SL, sync it to database
-                        if (bybitSL !== null && Math.abs(bybitSL - tradeSL) > 0.01) {
-                          console.log(`[CRON] Detected SL change on Bybit for trade ${trade.id}: DB=${tradeSL.toFixed(2)}, Bybit=${bybitSL.toFixed(2)}`);
-                          await updateTrade(trade.id, {
-                            current_sl: bybitSL,
-                          } as any);
-                          await addActivityLog(
-                            botConfig.user_id,
-                            'info',
-                            `Stop loss synced from Bybit: ${trade.side} ${trade.symbol} SL → $${bybitSL.toFixed(2)} (manually changed on Bybit)`,
-                            { tradeId: trade.id, previousSl: tradeSL, newSl: bybitSL, source: 'bybit' },
-                            botConfig.id
-                          );
-                        }
-                        
-                        // Set TP/SL if they're not set on Bybit or don't match our trade values
-                        // But only if Bybit SL wasn't manually changed (we just synced it above)
-                        // Check if values are significantly different (> 0.01 or 1 cent) to avoid "not modified" errors
-                        const shouldSetTP = !bybitTP || (bybitTP && Math.abs(bybitTP - tradeTP) > 0.01);
-                        // Only set SL if it's not already set on Bybit (don't overwrite manual changes)
+                        // Only set TP/SL if they're NOT already set on Bybit (e.g., new position)
+                        // Never overwrite existing Bybit values - those are synced to DB instead
+                        const shouldSetTP = !bybitTP && tradeTP > 0;
                         const shouldSetSL = !bybitSL && tradeSL > 0;
                         
                         if (shouldSetTP || shouldSetSL) {
@@ -726,19 +752,25 @@ export async function POST(request: NextRequest) {
                         const currentSl = Number(trade.current_sl ?? trade.sl_price);
                         const currentVWAP = levels.vwap;
                         
-                        // Apply breakeven if price invalidates the trade (goes against VWAP direction)
-                        // Pass entry time for grace period check
-                        const entryTime = trade.entry_time ? new Date(trade.entry_time) : undefined;
-                        const breakevenSl = applyBreakevenOnVWAPFlip(
-                          currentMarkPrice,
-                          currentVWAP,
-                          trade.side as 'LONG' | 'SHORT',
-                          entryPrice,
-                          currentSl,
-                          0.01, // confirmationBufferPct (1% - requires significant move, increased from 0.5%)
-                          entryTime, // entryTime for grace period
-                          600000 // 10 minutes grace period (increased from 5 minutes)
-                        );
+                        // Check if Bybit SL matches our database - if not, user manually changed it
+                        // In that case, don't apply automatic SL adjustments (respect manual changes)
+                        const slManuallyChanged = bybitSL !== null && Math.abs(bybitSL - currentSl) > 0.01;
+                        
+                        if (!slManuallyChanged) {
+                          // Only apply automatic SL adjustments if SL hasn't been manually changed
+                          // Apply breakeven if price invalidates the trade (goes against VWAP direction)
+                          // Pass entry time for grace period check
+                          const entryTime = trade.entry_time ? new Date(trade.entry_time) : undefined;
+                          const breakevenSl = applyBreakevenOnVWAPFlip(
+                            currentMarkPrice,
+                            currentVWAP,
+                            trade.side as 'LONG' | 'SHORT',
+                            entryPrice,
+                            currentSl,
+                            0.01, // confirmationBufferPct (1% - requires significant move, increased from 0.5%)
+                            entryTime, // entryTime for grace period
+                            600000 // 10 minutes grace period (increased from 5 minutes)
+                          );
                         
                         if (breakevenSl !== null && Math.abs(breakevenSl - currentSl) > 0.01) {
                           await updateTrade(trade.id, { current_sl: breakevenSl } as any);
@@ -798,6 +830,9 @@ export async function POST(request: NextRequest) {
                               console.error(`[CRON] Failed to update SL on Bybit:`, slError);
                             }
                           }
+                        }
+                        } else {
+                          console.log(`[CRON] Skipping automatic SL adjustment for trade ${trade.id} - SL was manually changed on Bybit (DB: ${currentSl.toFixed(2)}, Bybit: ${bybitSL?.toFixed(2)})`);
                         }
                       }
                     } catch (positionError) {
