@@ -102,6 +102,17 @@ export class OrderflowAnalyzer {
     // Get current order book snapshot (from WebSocket if available)
     let snapshot = getOrderBookSnapshot(symbol);
 
+    // In serverless, check if snapshot is stale (> 10 seconds old)
+    // WebSocket connections don't persist between serverless invocations
+    const MAX_SNAPSHOT_AGE_MS = 10000; // 10 seconds
+    const isSnapshotStale = snapshot && (Date.now() - snapshot.ts > MAX_SNAPSHOT_AGE_MS);
+    
+    if (isServerless && snapshot && isSnapshotStale) {
+      const ageSeconds = ((Date.now() - snapshot.ts) / 1000).toFixed(1);
+      console.log(`[ORDERFLOW] ⚠ Cached orderbook data is ${ageSeconds}s old (stale) - fetching fresh data via REST API`);
+      snapshot = null; // Force refresh via REST API
+    }
+
     // If no snapshot, try to get one
     if (!snapshot || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
       // In serverless, WebSocket won't work, so try REST API first
@@ -150,7 +161,8 @@ export class OrderflowAnalyzer {
         return fallbackSignal;
       }
     } else {
-      console.log(`[ORDERFLOW] Using cached WebSocket orderbook snapshot for ${symbol} (${snapshot.bids.length} bids, ${snapshot.asks.length} asks)`);
+      const ageSeconds = snapshot ? ((Date.now() - snapshot.ts) / 1000).toFixed(1) : 'N/A';
+      console.log(`[ORDERFLOW] Using cached orderbook snapshot for ${symbol} (${snapshot.bids.length} bids, ${snapshot.asks.length} asks, age: ${ageSeconds}s)`);
     }
 
     // Log orderbook snapshot details
@@ -163,6 +175,24 @@ export class OrderflowAnalyzer {
       console.log(`  Best ask: $${snapshot.asks[0].price.toFixed(2)} (size: ${snapshot.asks[0].size.toFixed(4)})`);
     }
     console.log(`  Target level: $${level.toFixed(2)}, Current price: $${currentPrice.toFixed(2)}`);
+
+    // Sanity check: Verify orderbook prices are reasonable (within 2% of current price)
+    // This catches stale data from all sources (WebSocket, REST API, etc.)
+    const bestBid = snapshot.bids[0]?.price || 0;
+    const bestAsk = snapshot.asks[0]?.price || 0;
+    const midPrice = (bestBid + bestAsk) / 2;
+    const priceDeviation = Math.abs(midPrice - currentPrice) / currentPrice;
+    
+    if (priceDeviation > 0.02) { // More than 2% deviation
+      const deviationPct = (priceDeviation * 100).toFixed(2);
+      console.log(`[ORDERFLOW] ⚠ WARNING: Orderbook price significantly differs from current price!`);
+      console.log(`  Orderbook mid: $${midPrice.toFixed(2)}, Current: $${currentPrice.toFixed(2)}, Deviation: ${deviationPct}%`);
+      console.log(`  This indicates STALE orderbook data - using price action fallback instead`);
+      
+      const fallbackSignal = this.getFallbackSignal(side, currentPrice, level);
+      console.log(`[ORDERFLOW] Fallback signal (stale data): bias=${fallbackSignal.bias}, confidence=${fallbackSignal.confidence.toFixed(2)}`);
+      return fallbackSignal;
+    }
 
     // Analyze order book structure
     const { bias, confidence, flags } = this.analyzeOrderBook(
