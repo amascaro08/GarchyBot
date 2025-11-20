@@ -63,7 +63,14 @@ export default function SettingsPage() {
 
   const loadSettings = async () => {
     try {
-      const res = await fetch('/api/bot/status');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      const res = await fetch('/api/bot/status', {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      
       if (res.ok) {
         const data = await res.json();
         if (data.botConfig) {
@@ -86,9 +93,15 @@ export default function SettingsPage() {
           setApiKey(config.api_key || '');
           setApiSecret(config.api_secret || '');
         }
+      } else {
+        console.error('Failed to load settings: HTTP', res.status);
       }
     } catch (error) {
-      console.error('Failed to load settings:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error('Failed to load settings: Request timeout');
+      } else {
+        console.error('Failed to load settings:', error);
+      }
     }
   };
 

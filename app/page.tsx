@@ -171,6 +171,11 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
   useEffect(() => {
     let mounted = true;
     
+    // Clear existing data when symbol changes
+    setCandles([]);
+    setLevels(null);
+    setCurrentPrice(null);
+    
     if (onSymbolChange) onSymbolChange(symbol);
     if (onIntervalChange) onIntervalChange(candleInterval);
 
@@ -197,7 +202,7 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
         
         if (mounted && klinesData && Array.isArray(klinesData) && klinesData.length > 0) {
           setCandles(klinesData);
-          if (onInitialCandlesLoaded && isInitialLoad) onInitialCandlesLoaded(klinesData);
+          if (onInitialCandlesLoaded) onInitialCandlesLoaded(klinesData);
           const latest = klinesData[klinesData.length - 1];
           if (latest && Number.isFinite(latest.close)) setCurrentPrice(latest.close);
         }
@@ -483,15 +488,42 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
 
           {/* Chart */}
           <div className="card p-4 md:p-6">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
               <div>
                 <h2 className="text-xl md:text-2xl font-bold text-white">Price Chart</h2>
                 <p className="text-sm text-slate-400">{symbol} • {candleInterval}m interval</p>
               </div>
-              <div className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                wsConnected ? 'bg-green-500/20 text-green-300 border border-green-500/30' : 'bg-red-500/20 text-red-300 border border-red-500/30'
-              }`}>
-                {wsConnected ? '🟢 Live' : '🔴 Offline'}
+              <div className="flex items-center gap-3">
+                {/* Symbol Selector */}
+                <select 
+                  value={symbol} 
+                  onChange={async (e) => {
+                    const newSymbol = e.target.value;
+                    setSymbol(newSymbol);
+                    // Update bot config
+                    try {
+                      await fetch('/api/bot/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ symbol: newSymbol }),
+                      });
+                    } catch (err) {
+                      console.error('Failed to update symbol:', err);
+                    }
+                  }}
+                  className="px-3 py-2 bg-slate-800/50 border border-slate-700/60 rounded-lg text-sm font-semibold text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  {DEFAULT_SYMBOLS.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+                
+                {/* Connection Status */}
+                <div className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                  wsConnected ? 'bg-green-500/20 text-green-300 border border-green-500/30' : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                }`}>
+                  {wsConnected ? '🟢 Live' : '🔴 Offline'}
+                </div>
               </div>
             </div>
             <Chart

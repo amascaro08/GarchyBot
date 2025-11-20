@@ -81,24 +81,26 @@ export function useWebSocket(symbol: string, interval: string = '5', initialCand
   const [ticker, setTicker] = useState<TickerData | null>(null);
   const [lastCandleCloseTime, setLastCandleCloseTime] = useState<number | null>(null);
 
-  // Update candles state when initialCandles changes (but don't reset if we already have WS data)
-  useEffect(() => {
-    if (initialCandles.length > 0 && candles.length === 0) {
-      setCandles(initialCandles);
-    }
-  }, [initialCandles, candles.length]);
+  // Removed - handled in the main reset effect above
 
   const [trades, setTrades] = useState<TradeData[]>([]);
 
   useEffect(() => {
     intervalRef.current = interval;
-    setCandles(initialCandles.length > 0 ? initialCandles : []);
+    // Clear all data immediately when symbol/interval changes
+    setCandles([]);
     setOrderBook(null);
     setTrades([]);
     setTicker(null);
     lastCandleRef.current = null;
+    setLastCandleCloseTime(null);
     setIsConnected(false);
     setConnectionStatus('connecting');
+    
+    // Load initial candles after clearing (if available)
+    if (initialCandles.length > 0) {
+      setCandles(initialCandles);
+    }
   }, [symbol, interval, initialCandles]);
 
   // Get WebSocket URL based on environment
