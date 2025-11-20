@@ -38,6 +38,7 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
   const [sessionPnL, setSessionPnL] = useState<number>(0);
   const [dailyPnL, setDailyPnL] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
+  const [botConfigLoaded, setBotConfigLoaded] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [botRunning, setBotRunning] = useState<boolean>(false);
   const [botToggling, setBotToggling] = useState<boolean>(false);
@@ -102,6 +103,9 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
             setUseOrderBookConfirm(config.use_orderbook_confirm !== false);
           }
           
+          // Mark bot config as loaded so chart data can be fetched
+          setBotConfigLoaded(true);
+          
           // Load trades from database
           let allTradesData: Trade[] = [];
           if (data.allTrades && data.allTrades.length > 0) {
@@ -155,8 +159,8 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
         }
       } catch (err) {
         console.error('Failed to load bot status:', err);
-      } finally {
-        if (mounted) setLoading(false);
+        // Even if bot status fails, allow chart to load with defaults
+        if (mounted) setBotConfigLoaded(true);
       }
     };
 
@@ -168,7 +172,13 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
   }, []); // Empty deps - run only once on mount
 
   // Load initial data once, then only when symbol/interval changes
+  // IMPORTANT: Wait for bot config to load first to avoid double-painting
   useEffect(() => {
+    // Don't load chart data until bot config is loaded
+    if (!botConfigLoaded) {
+      return;
+    }
+    
     let mounted = true;
     
     // Clear existing data when symbol changes
@@ -257,7 +267,7 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
     return () => {
       mounted = false;
     };
-  }, [symbol, candleInterval, garchMode, customKPct, botRunning, wsConnected]);
+  }, [symbol, candleInterval, garchMode, customKPct, botRunning, wsConnected, botConfigLoaded]);
 
   // Real-time trade updates
   useEffect(() => {
@@ -405,8 +415,8 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
     }));
   }, [openTrades]);
 
-  // Only show full-page loading on initial mount, not on updates
-  const showFullPageLoading = loading && candles.length === 0 && !currentPrice;
+  // Show loading until bot config is loaded AND initial data is ready
+  const showFullPageLoading = (!botConfigLoaded || loading) && candles.length === 0 && !currentPrice;
   
   if (showFullPageLoading) {
     return (
