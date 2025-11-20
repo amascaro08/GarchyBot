@@ -753,6 +753,64 @@ export async function setTakeProfitStopLoss(params: {
     throw new Error('Either takeProfit or stopLoss must be provided');
   }
 
+  // CRITICAL FIX: Validate TP/SL orientation relative to position
+  // Fetch current position to validate TP/SL direction
+  if (takeProfit && stopLoss) {
+    try {
+      const positionData = await fetchPosition({
+        symbol,
+        testnet,
+        apiKey,
+        apiSecret,
+        positionIdx,
+      });
+      
+      const position = positionData.result?.list?.find((p: any) => 
+        p.symbol === symbol.toUpperCase() && 
+        parseFloat(p.size || '0') !== 0
+      );
+
+      if (position) {
+        const side = position.side; // "Buy" or "Sell"
+        const entryPrice = parseFloat(position.avgPrice || '0');
+        
+        if (entryPrice > 0) {
+          // Validate TP/SL direction based on position side
+          if (side === 'Buy') {
+            // LONG position: TP should be ABOVE entry, SL should be BELOW entry
+            if (takeProfit <= entryPrice) {
+              console.error(`[Bybit API] INVALID TP/SL for LONG: TP=${takeProfit.toFixed(2)} must be > entry=${entryPrice.toFixed(2)}`);
+              throw new BybitError(10001, `Invalid TP for LONG position: TP (${takeProfit.toFixed(2)}) must be above entry price (${entryPrice.toFixed(2)})`);
+            }
+            if (stopLoss >= entryPrice) {
+              console.error(`[Bybit API] INVALID TP/SL for LONG: SL=${stopLoss.toFixed(2)} must be < entry=${entryPrice.toFixed(2)}`);
+              throw new BybitError(10001, `Invalid SL for LONG position: SL (${stopLoss.toFixed(2)}) must be below entry price (${entryPrice.toFixed(2)})`);
+            }
+          } else if (side === 'Sell') {
+            // SHORT position: TP should be BELOW entry, SL should be ABOVE entry
+            if (takeProfit >= entryPrice) {
+              console.error(`[Bybit API] INVALID TP/SL for SHORT: TP=${takeProfit.toFixed(2)} must be < entry=${entryPrice.toFixed(2)}`);
+              throw new BybitError(10001, `Invalid TP for SHORT position: TP (${takeProfit.toFixed(2)}) must be below entry price (${entryPrice.toFixed(2)})`);
+            }
+            if (stopLoss <= entryPrice) {
+              console.error(`[Bybit API] INVALID TP/SL for SHORT: SL=${stopLoss.toFixed(2)} must be > entry=${entryPrice.toFixed(2)}`);
+              throw new BybitError(10001, `Invalid SL for SHORT position: SL (${stopLoss.toFixed(2)}) must be above entry price (${entryPrice.toFixed(2)})`);
+            }
+          }
+          
+          console.log(`[Bybit API] ✓ TP/SL validation passed for ${side} position: Entry=${entryPrice.toFixed(2)}, TP=${takeProfit.toFixed(2)}, SL=${stopLoss.toFixed(2)}`);
+        }
+      }
+    } catch (validationError) {
+      // If validation fetch fails, log warning but continue (to avoid blocking all TP/SL updates)
+      if (validationError instanceof BybitError) {
+        throw validationError; // Re-throw validation errors
+      }
+      console.warn(`[Bybit API] Failed to fetch position for TP/SL validation:`, validationError);
+      // Continue without validation if position fetch fails
+    }
+  }
+
   // Round TP/SL prices to match Bybit's tick size (price precision)
   let roundedTP = takeProfit;
   let roundedSL = stopLoss;

@@ -682,32 +682,77 @@ export async function POST(request: NextRequest) {
                         
                         if (shouldSetTP || shouldSetSL) {
                           try {
-                            const { setTakeProfitStopLoss } = await import('@/lib/bybit');
-                            const tpToSet = shouldSetTP ? tradeTP : undefined;
-                            const slToSet = shouldSetSL ? tradeSL : undefined;
+                            // CRITICAL: Validate TP/SL before setting on Bybit
+                            // Check if TP and SL are valid for the position side
+                            const entryPrice = Number(trade.entry_price);
+                            let validTPSL = true;
                             
-                            await setTakeProfitStopLoss({
-                              symbol: trade.symbol,
-                              takeProfit: tpToSet,
-                              stopLoss: slToSet,
-                              testnet: false,
-                              apiKey: botConfig.api_key,
-                              apiSecret: botConfig.api_secret,
-                              positionIdx: 0,
-                            });
+                            if (tradeTP === tradeSL) {
+                              console.error(`[CRON] INVALID TP/SL for trade ${trade.id}: TP and SL are both ${tradeTP.toFixed(2)} - SKIPPING Bybit update`);
+                              validTPSL = false;
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'error',
+                                `Trade ${trade.id} has invalid TP/SL (both set to ${tradeTP.toFixed(2)}). Please manually fix in database or close position.`,
+                                { tradeId: trade.id, tp: tradeTP, sl: tradeSL, entry: entryPrice },
+                                botConfig.id
+                              );
+                            } else if (trade.side === 'LONG') {
+                              if (shouldSetTP && tradeTP <= entryPrice) {
+                                console.error(`[CRON] INVALID TP for LONG trade ${trade.id}: TP=${tradeTP.toFixed(2)} must be > entry=${entryPrice.toFixed(2)} - SKIPPING`);
+                                validTPSL = false;
+                              }
+                              if (shouldSetSL && tradeSL >= entryPrice) {
+                                console.error(`[CRON] INVALID SL for LONG trade ${trade.id}: SL=${tradeSL.toFixed(2)} must be < entry=${entryPrice.toFixed(2)} - SKIPPING`);
+                                validTPSL = false;
+                              }
+                            } else if (trade.side === 'SHORT') {
+                              if (shouldSetTP && tradeTP >= entryPrice) {
+                                console.error(`[CRON] INVALID TP for SHORT trade ${trade.id}: TP=${tradeTP.toFixed(2)} must be < entry=${entryPrice.toFixed(2)} - SKIPPING`);
+                                validTPSL = false;
+                              }
+                              if (shouldSetSL && tradeSL <= entryPrice) {
+                                console.error(`[CRON] INVALID SL for SHORT trade ${trade.id}: SL=${tradeSL.toFixed(2)} must be > entry=${entryPrice.toFixed(2)} - SKIPPING`);
+                                validTPSL = false;
+                              }
+                            }
                             
-                            const setMsg = [];
-                            if (shouldSetTP) setMsg.push(`TP=$${tradeTP.toFixed(2)}`);
-                            if (shouldSetSL) setMsg.push(`SL=$${tradeSL.toFixed(2)}`);
-                            
-                            console.log(`[CRON] TP/SL set on Bybit for trade ${trade.id}: ${setMsg.join(', ')}`);
-                            await addActivityLog(
-                              botConfig.user_id,
-                              'success',
-                              `TP/SL set on Bybit: ${trade.side} ${trade.symbol} ${setMsg.join(', ')}`,
-                              { orderId: trade.order_id, tp: tpToSet, sl: slToSet },
-                              botConfig.id
-                            );
+                            if (!validTPSL) {
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'error',
+                                `Trade ${trade.id} has invalid TP/SL orientation. Entry: ${entryPrice.toFixed(2)}, TP: ${tradeTP.toFixed(2)}, SL: ${tradeSL.toFixed(2)}. Please close position manually.`,
+                                { tradeId: trade.id, side: trade.side, entry: entryPrice, tp: tradeTP, sl: tradeSL },
+                                botConfig.id
+                              );
+                            } else {
+                              const { setTakeProfitStopLoss } = await import('@/lib/bybit');
+                              const tpToSet = shouldSetTP ? tradeTP : undefined;
+                              const slToSet = shouldSetSL ? tradeSL : undefined;
+                              
+                              await setTakeProfitStopLoss({
+                                symbol: trade.symbol,
+                                takeProfit: tpToSet,
+                                stopLoss: slToSet,
+                                testnet: false,
+                                apiKey: botConfig.api_key,
+                                apiSecret: botConfig.api_secret,
+                                positionIdx: 0,
+                              });
+                              
+                              const setMsg = [];
+                              if (shouldSetTP) setMsg.push(`TP=$${tradeTP.toFixed(2)}`);
+                              if (shouldSetSL) setMsg.push(`SL=$${tradeSL.toFixed(2)}`);
+                              
+                              console.log(`[CRON] TP/SL set on Bybit for trade ${trade.id}: ${setMsg.join(', ')}`);
+                              await addActivityLog(
+                                botConfig.user_id,
+                                'success',
+                                `TP/SL set on Bybit: ${trade.side} ${trade.symbol} ${setMsg.join(', ')}`,
+                                { orderId: trade.order_id, tp: tpToSet, sl: slToSet },
+                                botConfig.id
+                              );
+                            }
                           } catch (tpSlError) {
                             // Handle error 34040 (not modified) gracefully - it's not really an error
                             const errorMsg = tpSlError instanceof Error ? tpSlError.message : String(tpSlError);
@@ -1350,6 +1395,35 @@ export async function POST(request: NextRequest) {
                         if (!signal.tp || !signal.sl) {
                           throw new Error(`Signal missing TP/SL: TP=${signal.tp}, SL=${signal.sl}`);
                         }
+                        
+                        // CRITICAL VALIDATION: Ensure TP/SL are correctly oriented for the trade direction
+                        if (signal.tp === signal.sl) {
+                          console.error(`[CRON] CRITICAL ERROR: TP and SL are identical (${signal.tp}) for ${signal.side} trade at ${entryPrice.toFixed(2)}`);
+                          throw new Error(`TP and SL cannot be the same value: ${signal.tp}`);
+                        }
+                        
+                        // Validate TP/SL orientation based on trade direction
+                        if (signal.side === 'LONG') {
+                          if (signal.tp <= entryPrice) {
+                            console.error(`[CRON] INVALID TP for LONG: TP=${signal.tp.toFixed(2)} must be > entry=${entryPrice.toFixed(2)}`);
+                            throw new Error(`Invalid TP for LONG: TP (${signal.tp.toFixed(2)}) must be above entry (${entryPrice.toFixed(2)})`);
+                          }
+                          if (signal.sl >= entryPrice) {
+                            console.error(`[CRON] INVALID SL for LONG: SL=${signal.sl.toFixed(2)} must be < entry=${entryPrice.toFixed(2)}`);
+                            throw new Error(`Invalid SL for LONG: SL (${signal.sl.toFixed(2)}) must be below entry (${entryPrice.toFixed(2)})`);
+                          }
+                        } else if (signal.side === 'SHORT') {
+                          if (signal.tp >= entryPrice) {
+                            console.error(`[CRON] INVALID TP for SHORT: TP=${signal.tp.toFixed(2)} must be < entry=${entryPrice.toFixed(2)}`);
+                            throw new Error(`Invalid TP for SHORT: TP (${signal.tp.toFixed(2)}) must be below entry (${entryPrice.toFixed(2)})`);
+                          }
+                          if (signal.sl <= entryPrice) {
+                            console.error(`[CRON] INVALID SL for SHORT: SL=${signal.sl.toFixed(2)} must be > entry=${entryPrice.toFixed(2)}`);
+                            throw new Error(`Invalid SL for SHORT: SL (${signal.sl.toFixed(2)}) must be above entry (${entryPrice.toFixed(2)})`);
+                          }
+                        }
+                        
+                        console.log(`[CRON] ✓ TP/SL validation passed: ${signal.side} @ ${entryPrice.toFixed(2)}, TP=${signal.tp.toFixed(2)}, SL=${signal.sl.toFixed(2)}`);
                         
                         const tpPrice = signal.tp;
                         const slPrice = signal.sl;
