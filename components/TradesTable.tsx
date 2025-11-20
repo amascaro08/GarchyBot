@@ -86,10 +86,26 @@ export default function TradesTable({
   const getOutcome = (trade: Trade): string => {
     if (trade.status === 'pending') return 'Pending';
     if (trade.status === 'open') return 'Active';
-    if (trade.status === 'tp') return 'Win';
-    if (trade.status === 'sl') return 'Loss';
     if (trade.status === 'breakeven') return 'Breakeven';
     if (trade.status === 'cancelled') return 'Cancelled';
+    
+    // For closed trades (tp/sl), check actual P&L to determine win/loss
+    if (trade.status === 'tp' || trade.status === 'sl') {
+      const pnl = pnlCache.get(trade.id);
+      const realizedPnL = pnl?.realized ?? null;
+      
+      if (realizedPnL !== null) {
+        // Determine outcome based on actual P&L value
+        if (realizedPnL > 0) return 'Win';
+        if (realizedPnL < 0) return 'Loss';
+        return 'Breakeven'; // P&L is exactly 0
+      }
+      
+      // Fallback to status-based outcome if P&L is not available
+      if (trade.status === 'tp') return 'Win';
+      if (trade.status === 'sl') return 'Loss';
+    }
+    
     return '—';
   };
 
