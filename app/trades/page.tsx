@@ -38,7 +38,14 @@ export default function TradesPage() {
 
   const loadTradeHistory = async () => {
     try {
-      const res = await fetch('/api/bot/status');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      const res = await fetch('/api/bot/status', {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      
       if (res.ok) {
         const data = await res.json();
         if (data.allTrades && Array.isArray(data.allTrades)) {
@@ -60,9 +67,15 @@ export default function TradesPage() {
           }));
           setTrades(formattedTrades);
         }
+      } else {
+        console.error('Failed to load trade history: HTTP', res.status);
       }
     } catch (error) {
-      console.error('Failed to load trade history:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error('Failed to load trade history: Request timeout');
+      } else {
+        console.error('Failed to load trade history:', error);
+      }
     } finally {
       setLoading(false);
     }

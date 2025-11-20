@@ -176,6 +176,7 @@ export default function Chart({
     candlesSignatureRef.current = '';
     lastCandleCountRef.current = 0;
     lastProcessedRef.current = '';
+    lastNotifiedPriceRef.current = null;
     
     if (updateCheckIntervalRef.current) {
       clearInterval(updateCheckIntervalRef.current);
@@ -184,7 +185,7 @@ export default function Chart({
     
     // Clear existing data and reset chart scale
     if (chartRef.current && seriesRef.current && vwapSeriesRef.current) {
-      // Clear series data
+      // Clear series data immediately
       seriesRef.current.setData([]);
       vwapSeriesRef.current.setData([]);
       
@@ -200,15 +201,16 @@ export default function Chart({
       });
       priceLinesRef.current = [];
       
+      // Clear any markers
+      seriesRef.current.setMarkers([]);
+      
       // Reset chart scale and fit content
       chartRef.current.timeScale().fitContent();
+      chartRef.current.timeScale().scrollToPosition(0, false);
       chartRef.current.priceScale('right').applyOptions({ 
         mode: PriceScaleMode.Normal,
         autoScale: true 
       });
-      
-      // Mark as fitted
-      hasInitialFitRef.current = true;
     }
   }, [symbol, interval]);
 
