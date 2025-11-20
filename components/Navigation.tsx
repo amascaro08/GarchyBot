@@ -7,9 +7,10 @@ import { usePathname } from 'next/navigation';
 interface NavigationProps {
   botRunning?: boolean;
   onQuickToggle?: () => void;
+  botToggling?: boolean;
 }
 
-export default function Navigation({ botRunning = false, onQuickToggle }: NavigationProps) {
+export default function Navigation({ botRunning = false, onQuickToggle, botToggling = false }: NavigationProps) {
   const pathname = usePathname();
   const [isMobile, setIsMobile] = useState(false);
 
@@ -84,9 +85,11 @@ export default function Navigation({ botRunning = false, onQuickToggle }: Naviga
             {onQuickToggle && (
               <button
                 onClick={onQuickToggle}
+                disabled={botToggling}
                 className={`
                   px-5 py-2.5 rounded-xl font-bold text-sm
                   transition-all duration-300 shadow-lg
+                  disabled:opacity-50 disabled:cursor-not-allowed
                   ${
                     botRunning
                       ? 'bg-gradient-to-r from-red-600 to-red-500 text-white hover:from-red-500 hover:to-red-400 shadow-red-500/30 hover:shadow-red-500/50'
@@ -94,7 +97,14 @@ export default function Navigation({ botRunning = false, onQuickToggle }: Naviga
                   }
                 `}
               >
-                {botRunning ? '⏸ Stop' : '▶ Start'}
+                {botToggling ? (
+                  <span className="flex items-center gap-2">
+                    <span className="animate-spin">⏳</span>
+                    {botRunning ? 'Stopping...' : 'Starting...'}
+                  </span>
+                ) : (
+                  <>{botRunning ? '⏸ Stop' : '▶ Start'}</>
+                )}
               </button>
             )}
 
@@ -159,9 +169,11 @@ export default function Navigation({ botRunning = false, onQuickToggle }: Naviga
           {onQuickToggle && (
             <button
               onClick={onQuickToggle}
+              disabled={botToggling}
               className={`
                 px-3 py-1.5 rounded-lg text-xs font-bold
                 transition-all duration-300
+                disabled:opacity-50 disabled:cursor-not-allowed
                 ${
                   botRunning
                     ? 'bg-red-600 text-white'
@@ -169,7 +181,11 @@ export default function Navigation({ botRunning = false, onQuickToggle }: Naviga
                 }
               `}
             >
-              {botRunning ? 'Stop' : 'Start'}
+              {botToggling ? (
+                botRunning ? '⏳' : '⏳'
+              ) : (
+                botRunning ? 'Stop' : 'Start'
+              )}
             </button>
           )}
         </div>
