@@ -60,6 +60,8 @@ export default function Chart({
   const lastNotifiedPriceRef = useRef<number | null>(null);
   const onPriceUpdateRef = useRef<typeof onPriceUpdate | null>(null);
   const updateCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const candlesSignatureRef = useRef<string>('');
+  const lastCandleCountRef = useRef<number>(0);
 
   useEffect(() => {
     onPriceUpdateRef.current = onPriceUpdate;
@@ -169,29 +171,48 @@ export default function Chart({
   }, [height]);
 
   useEffect(() => {
-    // Only reset fit flag on symbol/interval change, allowing new chart view to fit once
+    // Reset all tracking refs when symbol/interval changes
     hasInitialFitRef.current = false;
-    candlesSignatureRef.current = ''; // Reset signature on symbol/interval change
+    candlesSignatureRef.current = '';
+    lastCandleCountRef.current = 0;
+    lastProcessedRef.current = '';
+    
     if (updateCheckIntervalRef.current) {
       clearInterval(updateCheckIntervalRef.current);
       updateCheckIntervalRef.current = null;
     }
-    // Only fit content when symbol/interval changes (user wants to see new data)
-    // Don't fit on regular updates - this preserves zoom/pan
-    if (chartRef.current) {
+    
+    // Clear existing data and reset chart scale
+    if (chartRef.current && seriesRef.current && vwapSeriesRef.current) {
+      // Clear series data
+      seriesRef.current.setData([]);
+      vwapSeriesRef.current.setData([]);
+      
+      // Remove all price lines
+      priceLinesRef.current.forEach(line => {
+        try {
+          if (line && seriesRef.current) {
+            seriesRef.current.removePriceLine(line);
+          }
+        } catch (e) {
+          // Ignore errors if line was already removed
+        }
+      });
+      priceLinesRef.current = [];
+      
+      // Reset chart scale and fit content
       chartRef.current.timeScale().fitContent();
-      chartRef.current.priceScale('right').applyOptions({ mode: PriceScaleMode.Normal });
-      // Mark as fitted so we don't auto-fit again
+      chartRef.current.priceScale('right').applyOptions({ 
+        mode: PriceScaleMode.Normal,
+        autoScale: true 
+      });
+      
+      // Mark as fitted
       hasInitialFitRef.current = true;
     }
   }, [symbol, interval]);
 
 
-  // Use only websocket candles when available, otherwise fall back to static candles
-  // Track the last candles signature to detect changes
-  const candlesSignatureRef = useRef<string>('');
-  const lastCandleCountRef = useRef<number>(0);
-  
   // Use WebSocket candles when connected, otherwise use static candles
   // Force update when candle count changes or when WebSocket connects/disconnects
   const displayCandles = useMemo(() => {
