@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchWalletBalance } from '@/lib/bybit';
-import { getUserByEmail } from '@/lib/db';
-import { auth } from '@clerk/nextjs/server';
+import { getUserEmail, getUserId, getOrCreateUser } from '@/lib/auth';
+import { getBotConfig } from '@/lib/db';
 
 /**
  * GET /api/bybit/balance
@@ -9,16 +9,20 @@ import { auth } from '@clerk/nextjs/server';
  */
 export async function GET(request: NextRequest) {
   try {
-    const { userId: clerkUserId } = await auth();
+    const userId = await getUserId();
+    const userEmail = await getUserEmail();
 
-    if (!clerkUserId) {
+    if (!userId || !userEmail) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Get user from database using Clerk ID
-    const { user } = await getUserByEmail(clerkUserId);
+    // Get user from database
+    const user = await getOrCreateUser(userEmail, userId);
 
-    if (!user || !user.api_key || !user.api_secret) {
+    // Get bot config to access API credentials
+    const botConfig = await getBotConfig(user.id);
+    
+    if (!botConfig || !botConfig.api_key || !botConfig.api_secret) {
       return NextResponse.json(
         { error: 'API credentials not configured' },
         { status: 400 }
@@ -27,9 +31,9 @@ export async function GET(request: NextRequest) {
 
     // Fetch wallet balance from Bybit
     const balanceData = await fetchWalletBalance({
-      apiKey: user.api_key,
-      apiSecret: user.api_secret,
-      testnet: user.api_mode !== 'live',
+      apiKey: botConfig.api_key,
+      apiSecret: botConfig.api_secret,
+      testnet: botConfig.api_mode !== 'live',
       accountType: 'UNIFIED', // Use unified trading account
     });
 
