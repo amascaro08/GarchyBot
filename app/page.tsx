@@ -40,6 +40,7 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [botRunning, setBotRunning] = useState<boolean>(false);
+  const [botToggling, setBotToggling] = useState<boolean>(false);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   
   // Bot Config
@@ -295,18 +296,33 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
 
   // Start/Stop Bot
   const handleQuickToggle = async () => {
+    if (botToggling) return; // Prevent multiple clicks
+    
+    setBotToggling(true);
+    
     if (botRunning) {
       try {
         const res = await fetch('/api/bot/stop', { method: 'POST' });
         if (res.ok) {
+          const data = await res.json();
           setBotRunning(false);
           if (pollingIntervalRef.current) {
             clearInterval(pollingIntervalRef.current);
             pollingIntervalRef.current = null;
           }
+          console.log('Bot stopped successfully');
+        } else {
+          const data = await res.json();
+          console.error('Failed to stop bot:', data.error);
+          setError(data.error || 'Failed to stop bot');
+          setTimeout(() => setError(null), 5000);
         }
       } catch (err) {
         console.error('Failed to stop bot:', err);
+        setError(err instanceof Error ? err.message : 'Failed to stop bot');
+        setTimeout(() => setError(null), 5000);
+      } finally {
+        setBotToggling(false);
       }
     } else {
       try {
@@ -316,10 +332,21 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
           body: JSON.stringify({}),
         });
         if (res.ok) {
+          const data = await res.json();
           setBotRunning(true);
+          console.log('Bot started successfully');
+        } else {
+          const data = await res.json();
+          console.error('Failed to start bot:', data.error);
+          setError(data.error || 'Failed to start bot');
+          setTimeout(() => setError(null), 5000);
         }
       } catch (err) {
         console.error('Failed to start bot:', err);
+        setError(err instanceof Error ? err.message : 'Failed to start bot');
+        setTimeout(() => setError(null), 5000);
+      } finally {
+        setBotToggling(false);
       }
     }
   };
@@ -389,7 +416,7 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
 
   return (
     <div className="min-h-screen bg-[#0a0e1a]">
-      <Navigation botRunning={botRunning} onQuickToggle={handleQuickToggle} />
+      <Navigation botRunning={botRunning} onQuickToggle={handleQuickToggle} botToggling={botToggling} />
       
       <main className="pt-20 md:pt-24 pb-24 md:pb-8 px-4 md:px-6">
         <div className="max-w-[1800px] mx-auto space-y-6">
