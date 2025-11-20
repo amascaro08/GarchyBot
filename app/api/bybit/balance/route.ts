@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchWalletBalance } from '@/lib/bybit';
-import { getUserEmail, getUserId, getOrCreateUser } from '@/lib/auth';
-import { getBotConfig } from '@/lib/db';
+import { getUserEmail, getUserId } from '@/lib/auth';
+import { getBotConfig, getOrCreateUser } from '@/lib/db';
 
 /**
  * GET /api/bybit/balance
