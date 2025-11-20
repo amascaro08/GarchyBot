@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import BybitBalanceCard from './BybitBalanceCard';
 
 interface NavigationProps {
   botRunning?: boolean;
@@ -75,9 +74,6 @@ export default function Navigation({ botRunning = false, onQuickToggle, botToggl
 
           {/* Quick Actions */}
           <div className="flex items-center gap-4">
-            {/* Bybit Balance */}
-            <BybitBalanceCard />
-
             {/* Bot Status */}
             <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800/50 border border-slate-700/60">
               <div className={`w-2.5 h-2.5 rounded-full ${botRunning ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
