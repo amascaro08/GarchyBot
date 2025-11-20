@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Navigation from '@/components/Navigation';
 import Chart from '@/components/Chart';
 import Cards from '@/components/Cards';
+import BotDecisionPanel from '@/components/BotDecisionPanel';
 import type { Candle, LevelsResponse, SignalResponse } from '@/lib/types';
 import { Trade } from '@/components/TradeLog';
 import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
@@ -320,23 +321,43 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
     
     if (botRunning) {
       try {
+        console.log('[Bot Toggle] Stopping bot...');
         const res = await fetch('/api/bot/stop', { method: 'POST' });
+        const data = await res.json();
+        
         if (res.ok) {
-          const data = await res.json();
+          // Immediately update state
           setBotRunning(false);
           if (pollingIntervalRef.current) {
             clearInterval(pollingIntervalRef.current);
             pollingIntervalRef.current = null;
           }
-          console.log('Bot stopped successfully');
+          console.log('[Bot Toggle] ✓ Bot stopped successfully', data);
+          
+          // Verify stop by checking bot status
+          setTimeout(async () => {
+            try {
+              const statusRes = await fetch('/api/bot/status');
+              if (statusRes.ok) {
+                const statusData = await statusRes.json();
+                if (statusData.botConfig?.is_running) {
+                  console.warn('[Bot Toggle] Bot status still shows running, forcing state update');
+                  setBotRunning(false);
+                } else {
+                  console.log('[Bot Toggle] ✓ Confirmed bot is stopped');
+                }
+              }
+            } catch (verifyErr) {
+              console.error('[Bot Toggle] Failed to verify stop status:', verifyErr);
+            }
+          }, 500);
         } else {
-          const data = await res.json();
-          console.error('Failed to stop bot:', data.error);
+          console.error('[Bot Toggle] Failed to stop bot:', data.error);
           setError(data.error || 'Failed to stop bot');
           setTimeout(() => setError(null), 5000);
         }
       } catch (err) {
-        console.error('Failed to stop bot:', err);
+        console.error('[Bot Toggle] Exception while stopping bot:', err);
         setError(err instanceof Error ? err.message : 'Failed to stop bot');
         setTimeout(() => setError(null), 5000);
       } finally {
@@ -344,23 +365,25 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
       }
     } else {
       try {
+        console.log('[Bot Toggle] Starting bot...');
         const res = await fetch('/api/bot/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
         });
+        const data = await res.json();
+        
         if (res.ok) {
-          const data = await res.json();
+          // Immediately update state
           setBotRunning(true);
-          console.log('Bot started successfully');
+          console.log('[Bot Toggle] ✓ Bot started successfully', data);
         } else {
-          const data = await res.json();
-          console.error('Failed to start bot:', data.error);
+          console.error('[Bot Toggle] Failed to start bot:', data.error);
           setError(data.error || 'Failed to start bot');
           setTimeout(() => setError(null), 5000);
         }
       } catch (err) {
-        console.error('Failed to start bot:', err);
+        console.error('[Bot Toggle] Exception while starting bot:', err);
         setError(err instanceof Error ? err.message : 'Failed to start bot');
         setTimeout(() => setError(null), 5000);
       } finally {
@@ -615,23 +638,31 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
             </div>
           )}
 
-          {/* Quick Actions */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Link href="/trades" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
-              <div className="text-3xl mb-2">💹</div>
-              <h3 className="text-lg font-bold text-white mb-1">View All Trades</h3>
-              <p className="text-sm text-slate-400">Full trade history and performance</p>
-            </Link>
-            <Link href="/analytics" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
-              <div className="text-3xl mb-2">📈</div>
-              <h3 className="text-lg font-bold text-white mb-1">Analytics</h3>
-              <p className="text-sm text-slate-400">Detailed performance insights</p>
-            </Link>
-            <Link href="/settings" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
-              <div className="text-3xl mb-2">⚙️</div>
-              <h3 className="text-lg font-bold text-white mb-1">Settings</h3>
-              <p className="text-sm text-slate-400">Configure bot parameters</p>
-            </Link>
+          {/* Bot Activity & Quick Actions */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Bot Activity Panel */}
+            <div className="lg:col-span-1">
+              <BotDecisionPanel />
+            </div>
+
+            {/* Quick Actions */}
+            <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Link href="/trades" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
+                <div className="text-3xl mb-2">💹</div>
+                <h3 className="text-lg font-bold text-white mb-1">View All Trades</h3>
+                <p className="text-sm text-slate-400">Full trade history and performance</p>
+              </Link>
+              <Link href="/analytics" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
+                <div className="text-3xl mb-2">📈</div>
+                <h3 className="text-lg font-bold text-white mb-1">Analytics</h3>
+                <p className="text-sm text-slate-400">Detailed performance insights</p>
+              </Link>
+              <Link href="/settings" className="card p-6 hover:shadow-xl transition-all duration-300 cursor-pointer">
+                <div className="text-3xl mb-2">⚙️</div>
+                <h3 className="text-lg font-bold text-white mb-1">Settings</h3>
+                <p className="text-sm text-slate-400">Configure bot parameters</p>
+              </Link>
+            </div>
           </div>
         </div>
       </main>
