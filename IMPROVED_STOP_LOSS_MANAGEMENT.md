@@ -53,11 +53,51 @@ function computeTrailingBreakeven(
 ): number | null
 ```
 
-## Integration
-The function is already integrated in:
-- ✅ `/workspace/app/api/cron/bot-runner/route.ts` (line 801, 885)
-- ✅ Both live mode (with Bybit positions) and demo mode
-- ✅ Properly updates database and Bybit via `setTakeProfitStopLoss`
+## Serverless Integration ✅
+
+### Vercel Cron Configuration
+**File:** `/workspace/vercel.json`
+```json
+{
+  "crons": [
+    {
+      "path": "/api/cron/bot-runner",
+      "schedule": "* * * * *"  // Runs every minute
+    }
+  ]
+}
+```
+
+### Bot Runner Integration
+**File:** `/workspace/app/api/cron/bot-runner/route.ts`
+
+The improved stop loss logic is **fully integrated** into the serverless cron job:
+
+1. **Line 801** - LIVE MODE (with actual Bybit positions):
+   - ✅ Calls `computeTrailingBreakeven` with live market price
+   - ✅ Updates database with new SL
+   - ✅ Updates Bybit position via `setTakeProfitStopLoss`
+   - ✅ Logs activity to user's activity log
+
+2. **Line 885** - DEMO MODE (candle-based simulation):
+   - ✅ Calls `computeTrailingBreakeven` with last candle close
+   - ✅ Updates database with new SL
+   - ✅ Logs activity to user's activity log
+
+### How It Works
+
+**Every minute, the Vercel cron job:**
+1. Fetches all active trades from the database
+2. Gets current market price from Bybit (or latest candle)
+3. Calculates current profit percentage
+4. Applies stop loss logic:
+   - **Stage 1:** Moves to breakeven at 0.15% profit
+   - **Stage 2:** Starts trailing at 0.3% profit
+   - **Stage 3:** Tightens trailing as profit increases
+5. Updates database and Bybit with new SL
+6. Logs the change to activity log
+
+**This works 24/7 in the background** - no need to keep the webpage open!
 
 ## Example Scenario
 
@@ -94,9 +134,22 @@ To test the new logic:
 4. Verify trailing starts at ~0.3% profit
 5. Check Bybit position to confirm SL updates
 
-## Notes
+## Important Notes
 
-- The bot checks and updates stops on every cron run (1-minute intervals)
-- Manual SL changes on Bybit are respected (bot won't override)
-- TP/SL sync from Bybit ensures Bybit is always the source of truth
-- Includes safety checks to prevent immediate stop-outs
+### Serverless Operation
+- ✅ **Works 24/7** via Vercel cron (no need to keep webpage open)
+- ✅ **Runs every minute** - checks all active trades automatically
+- ✅ **Fully autonomous** - manages stops in the background
+- ✅ **Survives restarts** - runs on Vercel's infrastructure, not your computer
+
+### Safety Features
+- ✅ **Manual changes respected** - if you manually adjust SL on Bybit, bot won't override
+- ✅ **Bybit is source of truth** - bot syncs from Bybit first, then applies logic
+- ✅ **Grace periods** - won't immediately trigger after entry
+- ✅ **Prevents stop-outs** - checks price position before moving stops
+
+### Monitoring
+- Check Vercel logs: Filter by `/api/cron/bot-runner`
+- Look for `[TRAILING-STOP]` console messages
+- Activity log shows all SL adjustments with timestamps
+- Database tracks `current_sl` vs original `sl_price`
