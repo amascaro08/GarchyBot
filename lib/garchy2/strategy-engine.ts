@@ -861,6 +861,7 @@ export class Garchy2StrategyEngine {
 
   /**
    * Calculate TP/SL from GARCH zones
+   * Uses index-based logic to always select the CLOSEST adjacent boundary
    */
   private calculateTPSL(
     entry: number,
@@ -868,28 +869,68 @@ export class Garchy2StrategyEngine {
     zoneLevels: ReturnType<typeof this.garchZones.getLevels>
   ): { tp: number; sl: number } {
     const boundaries = this.garchZones!.getAllBoundaries();
-    const tolerance = entry * 0.001;
+    
+    // Use very tight tolerance to find entry level (same as old strategy)
+    // This ensures we match the entry boundary exactly
+    const tolerance = Math.max(Math.abs(entry) * 1e-8, 1e-6);
+    
+    // Find the index of the entry level in boundaries array
+    const entryIndex = boundaries.findIndex(level => Math.abs(level - entry) <= tolerance);
+
+    console.log(`[GARCHY2] calculateTPSL - Entry: ${entry.toFixed(2)}, Side: ${side}, EntryIndex: ${entryIndex}, Boundaries: [${boundaries.map(b => b.toFixed(2)).join(', ')}]`);
 
     if (side === 'LONG') {
-      // Find next boundary above entry for TP
-      const nextBoundary = boundaries.find((b) => b > entry + tolerance);
-      // Find previous boundary below entry for SL
-      const prevBoundary = [...boundaries].reverse().find((b) => b < entry - tolerance);
+      // For LONG: TP is next level up, SL is next level down
+      let tpIndex: number;
+      let slIndex: number;
 
-      return {
-        tp: nextBoundary || boundaries[boundaries.length - 1] || entry * 1.01,
-        sl: prevBoundary || boundaries[0] || entry * 0.99,
-      };
+      if (entryIndex >= 0 && entryIndex < boundaries.length - 1) {
+        // Entry is at a known boundary - use adjacent levels
+        tpIndex = entryIndex + 1;
+        slIndex = entryIndex > 0 ? entryIndex - 1 : 0;
+        console.log(`[GARCHY2] LONG at boundary[${entryIndex}] - Using adjacent levels: TP=boundary[${tpIndex}], SL=boundary[${slIndex}]`);
+      } else {
+        // Entry is between boundaries - find surrounding levels
+        tpIndex = boundaries.findIndex(b => b > entry);
+        slIndex = boundaries.length - 1 - [...boundaries].reverse().findIndex(b => b < entry);
+        
+        // Validate indices
+        if (tpIndex === -1) tpIndex = boundaries.length - 1;
+        if (slIndex === boundaries.length) slIndex = 0;
+        console.log(`[GARCHY2] LONG between boundaries - Using surrounding levels: TP=boundary[${tpIndex}], SL=boundary[${slIndex}]`);
+      }
+
+      const tp = boundaries[tpIndex] || entry * 1.01;
+      const sl = boundaries[slIndex] || entry * 0.99;
+      console.log(`[GARCHY2] LONG TP/SL - TP: ${tp.toFixed(2)} (1 level away), SL: ${sl.toFixed(2)} (1 level away)`);
+      
+      return { tp, sl };
     } else {
-      // Find next boundary below entry for TP
-      const prevBoundary = [...boundaries].reverse().find((b) => b < entry - tolerance);
-      // Find previous boundary above entry for SL
-      const nextBoundary = boundaries.find((b) => b > entry + tolerance);
+      // For SHORT: TP is next level down, SL is next level up
+      let tpIndex: number;
+      let slIndex: number;
 
-      return {
-        tp: prevBoundary || boundaries[0] || entry * 0.99,
-        sl: nextBoundary || boundaries[boundaries.length - 1] || entry * 1.01,
-      };
+      if (entryIndex >= 0 && entryIndex > 0) {
+        // Entry is at a known boundary - use adjacent levels
+        tpIndex = entryIndex - 1;
+        slIndex = entryIndex < boundaries.length - 1 ? entryIndex + 1 : boundaries.length - 1;
+        console.log(`[GARCHY2] SHORT at boundary[${entryIndex}] - Using adjacent levels: TP=boundary[${tpIndex}], SL=boundary[${slIndex}]`);
+      } else {
+        // Entry is between boundaries - find surrounding levels
+        tpIndex = boundaries.length - 1 - [...boundaries].reverse().findIndex(b => b < entry);
+        slIndex = boundaries.findIndex(b => b > entry);
+        
+        // Validate indices
+        if (tpIndex === boundaries.length) tpIndex = 0;
+        if (slIndex === -1) slIndex = boundaries.length - 1;
+        console.log(`[GARCHY2] SHORT between boundaries - Using surrounding levels: TP=boundary[${tpIndex}], SL=boundary[${slIndex}]`);
+      }
+
+      const tp = boundaries[tpIndex] || entry * 0.99;
+      const sl = boundaries[slIndex] || entry * 1.01;
+      console.log(`[GARCHY2] SHORT TP/SL - TP: ${tp.toFixed(2)} (1 level away), SL: ${sl.toFixed(2)} (1 level away)`);
+      
+      return { tp, sl };
     }
   }
 
