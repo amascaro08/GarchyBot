@@ -21,7 +21,8 @@ import {
 import { computeTrailingBreakeven, applyBreakevenOnVWAPFlip } from '@/lib/strategy';
 import { SignalAdapter } from '@/lib/garchy2/signal-adapter';
 import { placeOrder, cancelOrder, getKlines, getTicker } from '@/lib/bybit';
-import { confirmLevelTouch } from '@/lib/orderbook';
+import { getOrderBookSnapshot, fetchOrderBookSnapshot } from '@/lib/orderbook';
+import { LimitOrderAnalyzer } from '@/lib/garchy2/limit-order-analysis';
 import { computeSessionAnchoredVWAP, computeSessionAnchoredVWAPLine } from '@/lib/vwap';
 import type { Candle } from '@/lib/types';
 import { tpslSyncManager } from '@/lib/tpsl-sync-manager';
@@ -1204,30 +1205,118 @@ export async function POST(request: NextRequest) {
                   
                   let approved = false;
                   try {
-                    approved = await confirmLevelTouch({
-                      symbol: botConfig.symbol,
-                      level: orderbookCheckLevel,
-                      side: signal.side,
-                      windowMs: 8000, // 8 second window to observe order book activity
-                      minNotional: orderbookMinNotional,
-                      proximityBps: orderbookProximityBps,
-                    });
-                    console.log(
-                      `[CRON] Order book confirmation result: ${approved ? 'APPROVED' : 'REJECTED'} (checked at ${orderbookCheckLevel.toFixed(
-                        2
-                      )}, minNotional=$${orderbookMinNotional}, proximity=${orderbookProximityBps}bps)`
-                    );
+                    // Use sophisticated limit order analyzer instead of simple gate-keeper
+                    console.log(`[CRON] ═══ Sophisticated Limit Order Analysis ═══`);
+                    
+                    // Get order book snapshot (try WebSocket cache first, fallback to REST API)
+                    let snapshot = getOrderBookSnapshot(botConfig.symbol);
+                    
+                    // Check if snapshot is stale or missing
+                    const MAX_SNAPSHOT_AGE_MS = 10000; // 10 seconds
+                    const isSnapshotStale = snapshot && (Date.now() - snapshot.ts > MAX_SNAPSHOT_AGE_MS);
+                    
+                    if (!snapshot || isSnapshotStale || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+                      if (isSnapshotStale) {
+                        const ageSeconds = ((Date.now() - snapshot!.ts) / 1000).toFixed(1);
+                        console.log(`[CRON] Cached orderbook is ${ageSeconds}s old (stale), fetching fresh data via REST API...`);
+                      } else {
+                        console.log(`[CRON] No orderbook snapshot available, fetching via REST API...`);
+                      }
+                      
+                      snapshot = await fetchOrderBookSnapshot(botConfig.symbol, 50);
+                      
+                      if (!snapshot || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+                        console.log(`[CRON] ❌ Failed to fetch orderbook snapshot - REJECTING trade`);
+                        approved = false;
+                      }
+                    } else {
+                      const ageSeconds = ((Date.now() - snapshot.ts) / 1000).toFixed(1);
+                      console.log(`[CRON] Using cached orderbook snapshot (age: ${ageSeconds}s, ${snapshot.bids.length} bids, ${snapshot.asks.length} asks)`);
+                    }
+                    
+                    if (snapshot && snapshot.bids.length > 0 && snapshot.asks.length > 0) {
+                      // Instantiate limit order analyzer with appropriate thresholds
+                      const limitOrderAnalyzer = new LimitOrderAnalyzer({
+                        minClusterNotional: orderbookMinNotional,
+                        priceGroupingPct: orderbookProximityBps / 10000, // Convert bps to percentage
+                        maxDepth: 50,
+                        imbalanceThreshold: 1.5, // Require 1.5x bid/ask ratio for bias
+                      });
+                      
+                      // Run sophisticated analysis
+                      const limitOrderAnalysis = limitOrderAnalyzer.analyzeLimitOrders(snapshot, orderbookCheckLevel);
+                      
+                      // Log detailed analysis results
+                      console.log(`[CRON] 📊 Limit Order Analysis Results:`);
+                      console.log(`[CRON]   • Order Book Imbalance: ${limitOrderAnalysis.imbalance.bias.toUpperCase()} (ratio: ${limitOrderAnalysis.imbalance.ratio.toFixed(2)}, strength: ${limitOrderAnalysis.imbalance.strength.toFixed(2)})`);
+                      console.log(`[CRON]   • Bid notional: $${limitOrderAnalysis.imbalance.bidNotional.toFixed(0)}, Ask notional: $${limitOrderAnalysis.imbalance.askNotional.toFixed(0)}`);
+                      console.log(`[CRON]   • Bid clusters detected: ${limitOrderAnalysis.bidClusters.length} (strongest: ${limitOrderAnalysis.strongestSupport ? '$' + limitOrderAnalysis.strongestSupport.toFixed(2) : 'none'})`);
+                      console.log(`[CRON]   • Ask clusters detected: ${limitOrderAnalysis.askClusters.length} (strongest: ${limitOrderAnalysis.strongestResistance ? '$' + limitOrderAnalysis.strongestResistance.toFixed(2) : 'none'})`);
+                      
+                      // Log top 3 bid clusters
+                      if (limitOrderAnalysis.bidClusters.length > 0) {
+                        console.log(`[CRON]   • Top bid clusters (support):`);
+                        limitOrderAnalysis.bidClusters.slice(0, 3).forEach((cluster, i) => {
+                          console.log(`[CRON]     ${i + 1}. $${cluster.price.toFixed(2)} - $${cluster.notional.toFixed(0)} (strength: ${cluster.strength.toFixed(2)}, ${cluster.distanceFromPrice.toFixed(2)}% from price)`);
+                        });
+                      }
+                      
+                      // Log top 3 ask clusters
+                      if (limitOrderAnalysis.askClusters.length > 0) {
+                        console.log(`[CRON]   • Top ask clusters (resistance):`);
+                        limitOrderAnalysis.askClusters.slice(0, 3).forEach((cluster, i) => {
+                          console.log(`[CRON]     ${i + 1}. $${cluster.price.toFixed(2)} - $${cluster.notional.toFixed(0)} (strength: ${cluster.strength.toFixed(2)}, ${cluster.distanceFromPrice.toFixed(2)}% from price)`);
+                        });
+                      }
+                      
+                      // Log absorption detection
+                      if (limitOrderAnalysis.absorption.detected) {
+                        console.log(`[CRON]   ⚠️  ABSORPTION DETECTED: ${limitOrderAnalysis.absorption.side?.toUpperCase()} side at $${limitOrderAnalysis.absorption.level?.toFixed(2)} (large orders being filled)`);
+                      }
+                      
+                      // Use sophisticated confirmation logic
+                      approved = limitOrderAnalyzer.confirmsTrade(limitOrderAnalysis, signal.side, entryPrice);
+                      
+                      // Log detailed reasoning for decision
+                      if (signal.side === 'LONG') {
+                        const supportBelow = limitOrderAnalysis.bidClusters.filter(c => c.price < entryPrice);
+                        const hasStrongSupport = supportBelow.some(c => c.strength > 0.6);
+                        const favorableBias = limitOrderAnalysis.imbalance.bias === 'bid' || limitOrderAnalysis.imbalance.bias === 'neutral';
+                        const strongImbalance = limitOrderAnalysis.imbalance.strength > 0.5;
+                        
+                        console.log(`[CRON] 🔍 LONG Trade Decision Logic:`);
+                        console.log(`[CRON]   • Strong bid support below entry? ${hasStrongSupport ? '✓ YES' : '✗ NO'} (${supportBelow.length} clusters found)`);
+                        console.log(`[CRON]   • Favorable imbalance? ${favorableBias ? '✓ YES' : '✗ NO'} (bias: ${limitOrderAnalysis.imbalance.bias})`);
+                        console.log(`[CRON]   • Strong imbalance? ${strongImbalance ? '✓ YES' : '✗ NO'} (strength: ${limitOrderAnalysis.imbalance.strength.toFixed(2)})`);
+                        console.log(`[CRON]   • Decision: ${hasStrongSupport || (favorableBias && strongImbalance) ? '✓ APPROVED' : '✗ REJECTED'}`);
+                      } else {
+                        const resistanceAbove = limitOrderAnalysis.askClusters.filter(c => c.price > entryPrice);
+                        const hasStrongResistance = resistanceAbove.some(c => c.strength > 0.6);
+                        const favorableBias = limitOrderAnalysis.imbalance.bias === 'ask' || limitOrderAnalysis.imbalance.bias === 'neutral';
+                        const strongImbalance = limitOrderAnalysis.imbalance.strength > 0.5;
+                        
+                        console.log(`[CRON] 🔍 SHORT Trade Decision Logic:`);
+                        console.log(`[CRON]   • Strong ask resistance above entry? ${hasStrongResistance ? '✓ YES' : '✗ NO'} (${resistanceAbove.length} clusters found)`);
+                        console.log(`[CRON]   • Favorable imbalance? ${favorableBias ? '✓ YES' : '✗ NO'} (bias: ${limitOrderAnalysis.imbalance.bias})`);
+                        console.log(`[CRON]   • Strong imbalance? ${strongImbalance ? '✓ YES' : '✗ NO'} (strength: ${limitOrderAnalysis.imbalance.strength.toFixed(2)})`);
+                        console.log(`[CRON]   • Decision: ${hasStrongResistance || (favorableBias && strongImbalance) ? '✓ APPROVED' : '✗ REJECTED'}`);
+                      }
+                      
+                      console.log(
+                        `[CRON] ═══ Sophisticated Analysis Result: ${approved ? '✅ APPROVED' : '❌ REJECTED'} ═══`
+                      );
+                    }
                   } catch (err) {
-                    console.error('[CRON] Order book confirmation error:', err);
+                    console.error('[CRON] Sophisticated limit order analysis error:', err);
                     approved = false;
                   }
 
                   if (!approved) {
-                    console.log(`[CRON] Trade blocked - Order book confirmation failed (no $50k+ wall detected near ${orderbookCheckLevel.toFixed(2)})`);
+                    console.log(`[CRON] Trade blocked - Sophisticated limit order analysis rejected trade (insufficient cluster strength or unfavorable imbalance)`);
                     await addActivityLog(
                       botConfig.user_id,
                       'info',
-                      `Trade signal ignored - order book confirmation failed (no significant wall detected at ${orderbookCheckLevel.toFixed(2)}${isImbalanceSignal ? `, entry target: ${entryPrice.toFixed(2)}` : ''})`,
+                      `Trade signal ignored - limit order analysis rejected (no strong support/resistance clusters or unfavorable order book imbalance at ${orderbookCheckLevel.toFixed(2)}${isImbalanceSignal ? `, entry target: ${entryPrice.toFixed(2)}` : ''})`,
                       { signal: signal.side, level: orderbookCheckLevel, entryLevel: entryPrice, isImbalanceSignal },
                       botConfig.id
                     );
