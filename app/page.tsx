@@ -57,7 +57,10 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
   
   // WebSocket
   const { ticker: wsTicker, candles: wsCandles, isConnected: wsConnected, connectionStatus: wsConnectionStatus, lastUpdateTime } = useSharedWebSocket();
-  const connectionStatus = wsConnectionStatus || (candles.length > 0 ? 'connected' : 'connecting');
+  // Determine connection status: if we have data (candles or current price), consider it connected
+  const hasData = candles.length > 0 || currentPrice !== null;
+  const connectionStatus = hasData ? 'connected' : (wsConnectionStatus || 'connecting');
+  const isConnected = wsConnected || hasData; // Connected if WebSocket is up OR we have data
   const throttledTickerPrice = useThrottle(wsTicker?.lastPrice, 100);
   
   useEffect(() => {
@@ -530,9 +533,9 @@ function HomeContent({ onInitialCandlesLoaded, onSymbolChange, onIntervalChange 
                 
                 {/* Connection Status */}
                 <div className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                  wsConnected ? 'bg-green-500/20 text-green-300 border border-green-500/30' : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                  isConnected ? 'bg-green-500/20 text-green-300 border border-green-500/30' : 'bg-red-500/20 text-red-300 border border-red-500/30'
                 }`}>
-                  {wsConnected ? '🟢 Live' : '🔴 Offline'}
+                  {isConnected ? '🟢 Live' : '🔴 Offline'}
                 </div>
               </div>
             </div>
