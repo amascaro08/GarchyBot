@@ -12,6 +12,8 @@ import {
 } from '@/lib/db';
 import { placeOrder } from '@/lib/bybit';
 import { findClosestGridLevels } from '@/lib/strategy';
+import { getOrderBookSnapshot, fetchOrderBookSnapshot } from '@/lib/orderbook';
+import { LimitOrderAnalyzer } from '@/lib/garchy2/limit-order-analysis';
 
 const CreateTradeSchema = z.object({
   symbol: z.string(),
@@ -141,6 +143,82 @@ export async function POST(request: NextRequest) {
     } catch (levelError) {
       console.warn(`[TRADE] Error fetching stored levels for ${payload.symbol}:`, levelError);
       console.warn(`[TRADE] Using TP/SL from payload: TP=$${tpPrice.toFixed(2)}, SL=$${slPrice.toFixed(2)}`);
+    }
+    
+    // Check order book confirmation if enabled in bot config
+    if (botConfig.use_orderbook_confirm) {
+      console.log(`[MANUAL-TRADE] Order book confirmation enabled - running sophisticated limit order analysis...`);
+      
+      try {
+        // Get order book snapshot
+        let snapshot = getOrderBookSnapshot(payload.symbol);
+        
+        const MAX_SNAPSHOT_AGE_MS = 10000; // 10 seconds
+        const isSnapshotStale = snapshot && (Date.now() - snapshot.ts > MAX_SNAPSHOT_AGE_MS);
+        
+        if (!snapshot || isSnapshotStale || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+          console.log(`[MANUAL-TRADE] Fetching fresh orderbook via REST API...`);
+          snapshot = await fetchOrderBookSnapshot(payload.symbol, 50);
+        }
+        
+        if (snapshot && snapshot.bids.length > 0 && snapshot.asks.length > 0) {
+          // Run sophisticated analysis
+          const limitOrderAnalyzer = new LimitOrderAnalyzer({
+            minClusterNotional: 30000, // $30k for manual trades (moderate threshold)
+            priceGroupingPct: 0.0015, // 0.15% grouping
+            maxDepth: 50,
+            imbalanceThreshold: 1.5,
+          });
+          
+          const limitOrderAnalysis = limitOrderAnalyzer.analyzeLimitOrders(snapshot, entryPrice);
+          
+          console.log(`[MANUAL-TRADE] Limit Order Analysis:`);
+          console.log(`[MANUAL-TRADE]   • Imbalance: ${limitOrderAnalysis.imbalance.bias} (ratio: ${limitOrderAnalysis.imbalance.ratio.toFixed(2)}, strength: ${limitOrderAnalysis.imbalance.strength.toFixed(2)})`);
+          console.log(`[MANUAL-TRADE]   • Bid clusters: ${limitOrderAnalysis.bidClusters.length}, Ask clusters: ${limitOrderAnalysis.askClusters.length}`);
+          
+          const approved = limitOrderAnalyzer.confirmsTrade(limitOrderAnalysis, payload.side, entryPrice);
+          
+          if (!approved) {
+            console.log(`[MANUAL-TRADE] ❌ Order book analysis REJECTED trade - insufficient order book support`);
+            
+            await addActivityLog(
+              userId,
+              'warning',
+              `Manual trade rejected by order book analysis - insufficient support/resistance clusters or unfavorable imbalance at $${entryPrice.toFixed(2)}`,
+              { 
+                symbol: payload.symbol, 
+                side: payload.side, 
+                entryPrice,
+                imbalance: limitOrderAnalysis.imbalance,
+                bidClusters: limitOrderAnalysis.bidClusters.length,
+                askClusters: limitOrderAnalysis.askClusters.length
+              },
+              botConfig.id
+            );
+            
+            return NextResponse.json({
+              success: false,
+              error: 'Order book analysis rejected trade',
+              details: {
+                message: 'Insufficient order book support for this trade',
+                imbalance: limitOrderAnalysis.imbalance,
+                suggestion: payload.side === 'LONG' 
+                  ? 'Need stronger bid support below entry or favorable bid imbalance'
+                  : 'Need stronger ask resistance above entry or favorable ask imbalance'
+              }
+            }, { status: 400 });
+          }
+          
+          console.log(`[MANUAL-TRADE] ✅ Order book analysis APPROVED trade`);
+        } else {
+          console.warn(`[MANUAL-TRADE] Could not fetch orderbook - allowing trade (orderbook check failed)`);
+        }
+      } catch (obError) {
+        console.error(`[MANUAL-TRADE] Error during order book analysis:`, obError);
+        console.warn(`[MANUAL-TRADE] Allowing trade despite orderbook analysis error`);
+      }
+    } else {
+      console.log(`[MANUAL-TRADE] Order book confirmation disabled - skipping analysis`);
     }
     
     let tradeRecord = await createTrade({
