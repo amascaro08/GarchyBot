@@ -28,8 +28,6 @@ export default function Navigation({ botRunning = false, onQuickToggle, botToggl
     { href: '/analytics', label: 'Analytics', icon: '📈' },
     { href: '/settings', label: 'Settings', icon: '⚙️' },
   ];
-  
-  const [isNavigating, setIsNavigating] = useState(false);
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/';
@@ -58,11 +56,6 @@ export default function Navigation({ botRunning = false, onQuickToggle, botToggl
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => {
-                  setIsNavigating(true);
-                  // Reset after navigation
-                  setTimeout(() => setIsNavigating(false), 1000);
-                }}
                 className={`
                   px-4 py-2.5 rounded-xl font-semibold text-sm
                   transition-all duration-300 flex items-center gap-2
@@ -72,7 +65,6 @@ export default function Navigation({ botRunning = false, onQuickToggle, botToggl
                       ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/30'
                       : 'text-slate-400 hover:text-white hover:bg-slate-800/50 active:bg-slate-800'
                   }
-                  ${isNavigating ? 'opacity-70' : ''}
                 `}
               >
                 <span className="text-lg">{item.icon}</span>
@@ -145,10 +137,6 @@ export default function Navigation({ botRunning = false, onQuickToggle, botToggl
           <Link
             key={item.href}
             href={item.href}
-            onClick={() => {
-              setIsNavigating(true);
-              setTimeout(() => setIsNavigating(false), 1000);
-            }}
             className={`
               flex flex-col items-center justify-center gap-1 py-2 rounded-xl
               transition-all duration-300 cursor-pointer active:scale-95
@@ -157,7 +145,6 @@ export default function Navigation({ botRunning = false, onQuickToggle, botToggl
                   ? 'bg-gradient-to-br from-indigo-600 to-purple-600 text-white shadow-lg'
                   : 'text-slate-400 active:bg-slate-800/50'
               }
-              ${isNavigating ? 'opacity-70' : ''}
             `}
           >
             <span className="text-2xl">{item.icon}</span>

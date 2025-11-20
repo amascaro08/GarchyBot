@@ -28,10 +28,18 @@ export default function BybitBalanceCard({
   const fetchBalance = async () => {
     try {
       const res = await fetch('/api/bybit/balance');
-      const data = await res.json();
-
+      
       if (!res.ok) {
+        const data = await res.json();
         throw new Error(data.error || 'Failed to fetch balance');
+      }
+
+      const data = await res.json();
+      
+      // Validate response structure
+      if (!data || !data.balance) {
+        console.error('Invalid balance response:', data);
+        throw new Error('Invalid response from server');
       }
 
       setBalance(data.balance);
