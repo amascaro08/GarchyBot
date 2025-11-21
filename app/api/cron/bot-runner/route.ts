@@ -296,8 +296,8 @@ export async function POST(request: NextRequest) {
           }
           
           const intradayAsc = intradayCandles.slice().reverse(); // Ensure ascending order
-          const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hlc3', lookbackPeriod: 14 });
-          const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hlc3', lookbackPeriod: 14 });
+          const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+          const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
           console.log(`[CRON] VWAP calculated: ${vwap.toFixed(2)}`);
 
           // Combine stored levels with current VWAP
