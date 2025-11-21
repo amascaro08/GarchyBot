@@ -42,8 +42,9 @@ export async function POST(request: NextRequest) {
           intraday = await getKlines(validated.symbol, '5', 288, testnet);
         }
         const intradayAsc = intraday.slice().reverse();
-        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
-        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+        // Use session-anchored VWAP (from UTC midnight) to match TradingView
+        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
+        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
         
         return NextResponse.json({
           symbol: validated.symbol,
@@ -171,10 +172,10 @@ export async function POST(request: NextRequest) {
 
     // Calculate levels (this endpoint still calculates dynamically for frontend/API calls)
     const dOpen = dailyOpenUTC(intradayAsc);
-    // Use 14-period lookback for VWAP to match TradingView VWAP AA with Length=14
-    // This uses HL2 source ((H+L)/2) over the last 14 candles
-    const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
-    const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+    // Use session-anchored VWAP (from UTC midnight) to match TradingView
+    // TradingView's "Length: 14" parameter is for standard deviation bands, not VWAP lookback
+    const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
+    const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
     const { upper, lower, upLevels, dnLevels } = gridLevels(dOpen, kPct, validated.subdivisions);
 
     // Store calculated levels in database for today if they don't exist
@@ -203,8 +204,9 @@ export async function POST(request: NextRequest) {
         console.log(`[LEVELS]   Using stored levels instead of recalculating to maintain consistency.`);
         // Return stored levels instead of calculated ones
         const intradayAsc = intraday.slice().reverse();
-        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
-        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+        // Use session-anchored VWAP (from UTC midnight) to match TradingView
+        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
+        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
         
         return NextResponse.json({
           symbol: validated.symbol,
