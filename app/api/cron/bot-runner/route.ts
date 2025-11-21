@@ -285,9 +285,10 @@ export async function POST(request: NextRequest) {
           let intradayCandles: Candle[];
           try {
             try {
-              intradayCandles = await getKlines(botConfig.symbol, '5', 288, false);
+              // Use 1-minute candles for 24 hours (1440 candles) to match TradingView
+              intradayCandles = await getKlines(botConfig.symbol, '1', 1440, false);
             } catch (mainnetError) {
-              intradayCandles = await getKlines(botConfig.symbol, '5', 288, true);
+              intradayCandles = await getKlines(botConfig.symbol, '1', 1440, true);
             }
           } catch (error) {
             // Fallback to using the candles we already fetched
@@ -296,8 +297,10 @@ export async function POST(request: NextRequest) {
           }
           
           const intradayAsc = intradayCandles.slice().reverse(); // Ensure ascending order
-          const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
-          const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+          // Use session-anchored VWAP (from UTC midnight) to match TradingView
+          // TradingView's "Length: 14" is for standard deviation bands, not VWAP lookback
+          const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
+          const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
           console.log(`[CRON] VWAP calculated: ${vwap.toFixed(2)}`);
 
           // Combine stored levels with current VWAP

@@ -37,13 +37,15 @@ export async function POST(request: NextRequest) {
         // But use stored levels for entry/TP/SL (these NEVER change during the day)
         let intraday;
         try {
-          intraday = await getKlines(validated.symbol, '5', 288, false);
+          // Use 1-minute candles for 24 hours (1440 candles) to match TradingView
+          intraday = await getKlines(validated.symbol, '1', 1440, false);
         } catch (mainnetError) {
-          intraday = await getKlines(validated.symbol, '5', 288, testnet);
+          intraday = await getKlines(validated.symbol, '1', 1440, testnet);
         }
         const intradayAsc = intraday.slice().reverse();
-        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
-        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+        // Use session-anchored VWAP (from UTC midnight) to match TradingView
+        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
+        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
         
         return NextResponse.json({
           symbol: validated.symbol,
@@ -78,13 +80,14 @@ export async function POST(request: NextRequest) {
     try {
       // Try mainnet first for accurate prices
       daily = await getKlines(validated.symbol, 'D', 60, false);
-      intraday = await getKlines(validated.symbol, '5', 288, false);
+      // Use 1-minute candles for 24 hours (1440 candles) to match TradingView
+      intraday = await getKlines(validated.symbol, '1', 1440, false);
       usedMainnet = true;
     } catch (mainnetError) {
       // Fallback to testnet if mainnet fails
       console.warn(`Mainnet failed for ${validated.symbol}, using testnet:`, mainnetError);
       daily = await getKlines(validated.symbol, 'D', 60, testnet);
-      intraday = await getKlines(validated.symbol, '5', 288, testnet);
+      intraday = await getKlines(validated.symbol, '1', 1440, testnet);
     }
 
     // Use custom kPct if provided, otherwise calculate from Yahoo Finance (3 years of data)
@@ -171,10 +174,10 @@ export async function POST(request: NextRequest) {
 
     // Calculate levels (this endpoint still calculates dynamically for frontend/API calls)
     const dOpen = dailyOpenUTC(intradayAsc);
-    // Use 14-period lookback for VWAP to match TradingView VWAP AA with Length=14
-    // This uses HL2 source ((H+L)/2) over the last 14 candles
-    const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
-    const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+    // Use session-anchored VWAP (from UTC midnight) to match TradingView
+    // TradingView's "Length: 14" parameter is for standard deviation bands, not VWAP lookback
+    const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
+    const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
     const { upper, lower, upLevels, dnLevels } = gridLevels(dOpen, kPct, validated.subdivisions);
 
     // Store calculated levels in database for today if they don't exist
@@ -203,8 +206,9 @@ export async function POST(request: NextRequest) {
         console.log(`[LEVELS]   Using stored levels instead of recalculating to maintain consistency.`);
         // Return stored levels instead of calculated ones
         const intradayAsc = intraday.slice().reverse();
-        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
-        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', lookbackPeriod: 14 });
+        // Use session-anchored VWAP (from UTC midnight) to match TradingView
+        const vwap = computeSessionAnchoredVWAP(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
+        const vwapLine = computeSessionAnchoredVWAPLine(intradayAsc, { source: 'hl2', sessionAnchor: 'utc-midnight' });
         
         return NextResponse.json({
           symbol: validated.symbol,
