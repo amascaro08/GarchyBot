@@ -34,7 +34,8 @@ async function pollMarketData(symbol: string): Promise<MarketData | null> {
     // Fetch latest klines data
     const isProduction = process.env.NODE_ENV === 'production';
     const useTestnet = !isProduction;
-    const candles = await getKlines(symbol, '5', 200, useTestnet); // Use mainnet in production
+    // Use 1-minute candles to match TradingView (200 candles = 3.3 hours)
+    const candles = await getKlines(symbol, '1', 200, useTestnet); // Use mainnet in production
 
     // Get order book snapshot
     const orderBookSnapshot = getOrderBookSnapshot(symbol);

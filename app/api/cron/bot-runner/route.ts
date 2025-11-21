@@ -285,9 +285,10 @@ export async function POST(request: NextRequest) {
           let intradayCandles: Candle[];
           try {
             try {
-              intradayCandles = await getKlines(botConfig.symbol, '5', 288, false);
+              // Use 1-minute candles for 24 hours (1440 candles) to match TradingView
+              intradayCandles = await getKlines(botConfig.symbol, '1', 1440, false);
             } catch (mainnetError) {
-              intradayCandles = await getKlines(botConfig.symbol, '5', 288, true);
+              intradayCandles = await getKlines(botConfig.symbol, '1', 1440, true);
             }
           } catch (error) {
             // Fallback to using the candles we already fetched

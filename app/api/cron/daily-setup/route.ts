@@ -18,7 +18,7 @@ import type { Candle } from '@/lib/types';
  * 4. Store the calculated volatility in database
  *
  * PHASE 2: Intraday Trading Range Setup (runs after Phase 1)
- * 1. Fetch current intraday candles (5m interval, 288 candles = 24 hours)
+ * 1. Fetch current intraday candles (1m interval, 1440 candles = 24 hours)
  * 2. Calculate DailyOpenPrice at UTC 00:00 boundary
  * 3. Calculate UpperRange = DailyOpenPrice * (1 + CalculatedVolatility%)
  * 4. Calculate LowerRange = DailyOpenPrice * (1 - CalculatedVolatility%)
@@ -166,17 +166,18 @@ export async function POST(request: NextRequest) {
           // ================================
           console.log(`[DAILY-SETUP] Phase 2: Calculating levels for ${symbol}`);
 
-          // Fetch intraday candles for daily open calculation (5m interval, 288 candles = 24 hours)
+          // Fetch intraday candles for daily open calculation (1m interval, 1440 candles = 24 hours)
           // Call getKlines directly instead of HTTP request to avoid Vercel issues
           let intradayCandles: Candle[];
           try {
             // Try mainnet first for accurate data
             try {
-              intradayCandles = await getKlines(symbol, '5', 288, false);
+              // Use 1-minute candles for 24 hours (1440 candles) to match TradingView
+              intradayCandles = await getKlines(symbol, '1', 1440, false);
             } catch (mainnetError) {
               // Fallback to testnet if mainnet fails
               console.warn(`[DAILY-SETUP] Mainnet failed for ${symbol}, trying testnet:`, mainnetError);
-              intradayCandles = await getKlines(symbol, '5', 288, true);
+              intradayCandles = await getKlines(symbol, '1', 1440, true);
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);

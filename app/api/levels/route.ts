@@ -37,9 +37,10 @@ export async function POST(request: NextRequest) {
         // But use stored levels for entry/TP/SL (these NEVER change during the day)
         let intraday;
         try {
-          intraday = await getKlines(validated.symbol, '5', 288, false);
+          // Use 1-minute candles for 24 hours (1440 candles) to match TradingView
+          intraday = await getKlines(validated.symbol, '1', 1440, false);
         } catch (mainnetError) {
-          intraday = await getKlines(validated.symbol, '5', 288, testnet);
+          intraday = await getKlines(validated.symbol, '1', 1440, testnet);
         }
         const intradayAsc = intraday.slice().reverse();
         // Use session-anchored VWAP (from UTC midnight) to match TradingView
@@ -79,13 +80,14 @@ export async function POST(request: NextRequest) {
     try {
       // Try mainnet first for accurate prices
       daily = await getKlines(validated.symbol, 'D', 60, false);
-      intraday = await getKlines(validated.symbol, '5', 288, false);
+      // Use 1-minute candles for 24 hours (1440 candles) to match TradingView
+      intraday = await getKlines(validated.symbol, '1', 1440, false);
       usedMainnet = true;
     } catch (mainnetError) {
       // Fallback to testnet if mainnet fails
       console.warn(`Mainnet failed for ${validated.symbol}, using testnet:`, mainnetError);
       daily = await getKlines(validated.symbol, 'D', 60, testnet);
-      intraday = await getKlines(validated.symbol, '5', 288, testnet);
+      intraday = await getKlines(validated.symbol, '1', 1440, testnet);
     }
 
     // Use custom kPct if provided, otherwise calculate from Yahoo Finance (3 years of data)
