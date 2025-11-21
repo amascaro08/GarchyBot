@@ -3,18 +3,20 @@
  * 
  * Equivalent to Pine Script v5: ta.vwap(src)
  * - Resets each daily session (UTC midnight by default for crypto)
- * - Supports source selection: close | hlc3 | ohlc4
- *   - 'hlc3' uses (high + low) / 2 (midpoint)
+ * - Supports source selection: close | hl2 | hlc3 | ohlc4
+ *   - 'hl2' uses (high + low) / 2 (typical midpoint)
+ *   - 'hlc3' uses (high + low + close) / 3 (typical price)
+ *   - 'ohlc4' uses (open + high + low + close) / 4 (average price)
  */
 
 import type { Candle } from './types';
 
-export type VwapSource = 'close' | 'hlc3' | 'ohlc4';
+export type VwapSource = 'close' | 'hl2' | 'hlc3' | 'ohlc4';
 
 export interface VwapOptions {
   /** Session anchor: 'utc-midnight' or timezone string (e.g., 'America/New_York') */
   sessionAnchor?: 'utc-midnight' | { tz: string };
-  /** Price source: 'close', 'hlc3' (high+low)/2, or 'ohlc4' (open+high+low+close)/4 */
+  /** Price source: 'close', 'hl2' (high+low)/2, 'hlc3' (high+low+close)/3, or 'ohlc4' (open+high+low+close)/4 */
   source?: VwapSource;
   /** If provided, use fixed lookback period (number of candles) instead of session anchor. 
    * This matches TradingView VWAP AA with fixed anchor period. */
@@ -30,8 +32,10 @@ function getTypicalPrice(candle: Candle, source: VwapSource): number {
   switch (source) {
     case 'close':
       return candle.close;
-    case 'hlc3':
+    case 'hl2':
       return (candle.high + candle.low) / 2;
+    case 'hlc3':
+      return (candle.high + candle.low + candle.close) / 3;
     case 'ohlc4':
       return (candle.open + candle.high + candle.low + candle.close) / 4;
     default:
@@ -79,8 +83,9 @@ function getSessionStartTimestamp(timestamp: number, anchor: VwapOptions['sessio
  * 
  * Where typicalPrice depends on source:
  * - 'close': close price
- * - 'hlc3': (high + low) / 2
- * - 'ohlc4': (open + high + low + close) / 4
+ * - 'hl2': (high + low) / 2 (midpoint)
+ * - 'hlc3': (high + low + close) / 3 (typical price)
+ * - 'ohlc4': (open + high + low + close) / 4 (average price)
  * 
  * Only includes candles from the current session (resets at session anchor)
  */
@@ -92,7 +97,7 @@ export function computeSessionAnchoredVWAP(
     throw new Error('No candles provided');
   }
 
-  const { sessionAnchor = 'utc-midnight', source = 'hlc3', lookbackPeriod, useAllCandles = false } = opts;
+  const { sessionAnchor = 'utc-midnight', source = 'hl2', lookbackPeriod, useAllCandles = false } = opts;
 
   // If useAllCandles is true, use all available candles (matches TradingView VWAP AA with Auto anchor)
   if (useAllCandles) {
@@ -179,7 +184,7 @@ export function computeSessionAnchoredVWAPLine(
     return [];
   }
 
-  const { sessionAnchor = 'utc-midnight', source = 'hlc3', lookbackPeriod, useAllCandles = false } = opts;
+  const { sessionAnchor = 'utc-midnight', source = 'hl2', lookbackPeriod, useAllCandles = false } = opts;
 
   const vwapValues: (number | null)[] = [];
 
@@ -260,18 +265,18 @@ export function computeSessionAnchoredVWAPLine(
 
 /**
  * Legacy function for backward compatibility
- * Uses hlc3 source and UTC midnight anchor
+ * Uses hl2 source ((high+low)/2) and UTC midnight anchor
  * @deprecated Use computeSessionAnchoredVWAP directly
  */
 export function vwapFromOHLCV(candles: Candle[]): number {
-  return computeSessionAnchoredVWAP(candles, { source: 'hlc3', sessionAnchor: 'utc-midnight' });
+  return computeSessionAnchoredVWAP(candles, { source: 'hl2', sessionAnchor: 'utc-midnight' });
 }
 
 /**
  * Legacy function for backward compatibility
- * Uses hlc3 source and UTC midnight anchor
+ * Uses hl2 source ((high+low)/2) and UTC midnight anchor
  * @deprecated Use computeSessionAnchoredVWAPLine directly
  */
 export function vwapLineFromOHLCV(candles: Candle[]): (number | null)[] {
-  return computeSessionAnchoredVWAPLine(candles, { source: 'hlc3', sessionAnchor: 'utc-midnight' });
+  return computeSessionAnchoredVWAPLine(candles, { source: 'hl2', sessionAnchor: 'utc-midnight' });
 }
